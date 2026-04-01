@@ -1,0 +1,133 @@
+{
+  "toolbar": {
+    "batchTranslate": "Traducir lote",
+    "findReplace": "Buscar y reemplazar",
+    "findReplaceShortcut": "Atajo: Ctrl+F / Ctrl+H",
+    "export": "Exportar",
+    "progress": "Progreso",
+    "save": "Guardar",
+    "filter": "Filtrar",
+    "settings": "Configuracion",
+    "glossary": "Glosario",
+    "toggleTheme": "Cambiar tema"
+  },
+  "grid": {
+    "original": "Original",
+    "translation": "Traduccion",
+    "status": "Estado",
+    "file": "Archivo",
+    "context": "Contexto",
+    "notes": "Notas",
+    "notesPlaceholder": "Sin notas",
+    "noEntries": "No hay entradas para mostrar",
+    "selectFile": "Selecciona un archivo del panel lateral",
+    "totalEntries": "{{count}} entradas",
+    "editTranslation": "Editar traduccion"
+  },
+  "findReplace": {
+    "find": "Buscar",
+    "replace": "Reemplazar",
+    "findPlaceholder": "Texto a buscar...",
+    "replacePlaceholder": "Reemplazar con...",
+    "matchCase": "Coincidir mayusculas",
+    "useRegex": "Expresion regular",
+    "searchIn": "Buscar en",
+    "originalText": "Texto original",
+    "translationText": "Texto traduccion",
+    "bothTexts": "Ambos",
+    "replaceOne": "Reemplazar",
+    "replaceAll": "Reemplazar todo",
+    "previous": "Anterior (Shift+Enter)",
+    "next": "Siguiente (Enter)",
+    "matches": "{{count}} coincidencias",
+    "noMatches": "Sin coincidencias",
+    "replaced": "{{count}} reemplazos realizados",
+    "invalidRegex": "Expresion regular invalida",
+    "close": "Cerrar",
+    "currentMatch": "{{current}} de {{total}}"
+  },
+  "status": {
+    "untranslated": "Sin traducir",
+    "draft": "Borrador",
+    "reviewed": "Revisado",
+    "final": "Final",
+    "all": "Todos"
+  },
+  "sidebar": {
+    "files": "Archivos",
+    "allEntries": "Todas las entradas",
+    "filterByStatus": "Filtrar por estado",
+    "entries": "{{count}} entradas",
+    "noFiles": "No hay archivos",
+    "groups": {
+      "system": "Sistema",
+      "database": "Base de datos",
+      "events": "Eventos",
+      "maps": "Mapas"
+    }
+  },
+  "statusBar": {
+    "total": "Total: {{count}}",
+    "translated": "Traducidas: {{count}}",
+    "percentage": "{{percent}}% completado",
+    "noProject": "Sin proyecto",
+    "engine": "Motor: {{engine}}"
+  },
+  "batch": {
+    "title": "Traduccion por lotes",
+    "tabs": {
+      "providers": "Proveedores",
+      "externalAi": "IA externa"
+    },
+    "provider": "Proveedor",
+    "selectProvider": "Selecciona un proveedor",
+    "providers": {
+      "openai": "OpenAI",
+      "deepl": "DeepL",
+      "google": "Google Translate",
+      "codex": "Codex"
+    },
+    "selectFiles": "Archivos a traducir",
+    "allFiles": "Todos los archivos",
+    "selectedFiles": "{{count}} archivos seleccionados",
+    "untranslatedOnly": "Solo entradas sin traducir",
+    "start": "Iniciar traduccion",
+    "starting": "Iniciando...",
+    "translating": "Traduciendo...",
+    "progress": "{{completed}} de {{total}} entradas",
+    "currentFile": "Archivo actual: {{file}}",
+    "complete": "Traduccion completada",
+    "completeDetail": "{{completed}} de {{total}} entradas traducidas",
+    "completeWithErrors": "Traduccion completada con errores",
+    "completeWithErrorsDetail": "{{completed}} traducidas, {{failed}} fallidas, {{total}} totales",
+    "errors": "{{count}} errores",
+    "noProvider": "No hay proveedor configurado. Ve a Configuracion para configurar un proveedor.",
+    "noEntries": "No hay entradas sin traducir",
+    "cancel": "Cancelar",
+    "ai": {
+      "description": "Exporta entradas sin traducir como un prompt compatible con JSON, envialo a la IA que prefieras y pega una respuesta JSON que devuelva el mismo projectId y batchId.",
+      "maxEntries": "Maximo de entradas por lote IA",
+      "invalidMaxEntries": "El maximo de entradas debe ser un numero positivo.",
+      "export": "Exportar lote IA",
+      "exported": "Lote IA exportado",
+      "exportedDetail": "{{exported}} entradas exportadas de {{total}} entradas sin traducir seleccionadas",
+      "instructionCandidates": "{{count}} entradas marcadas como posibles instrucciones o ayuda",
+      "prompt": "Prompt para IA externa",
+      "promptPlaceholder": "Genera un lote IA para obtener un prompt listo para enviar.",
+      "copy": "Copiar prompt",
+      "copied": "Prompt copiado al portapapeles",
+      "copyFailed": "No se pudo copiar el prompt",
+      "response": "Pega la respuesta JSON de la IA",
+      "responsePlaceholder": "Pega aqui el JSON devuelto por la IA.",
+      "exportRequired": "Exporta un lote IA antes de aplicar una respuesta.",
+      "responseRequired": "Pega una respuesta JSON de la IA antes de aplicarla.",
+      "apply": "Aplicar respuesta IA",
+      "applied": "Respuesta IA aplicada",
+      "appliedDetail": "{{applied}} entradas aplicadas, {{skipped}} omitidas",
+      "partialApply": "Respuesta IA aplicada con incidencias",
+      "partialApplyDetail": "{{applied}} aplicadas, {{skipped}} omitidas, {{missing}} faltantes, {{duplicates}} IDs duplicados",
+      "exportFailed": "No se pudo exportar el lote IA",
+      "applyFailed": "No se pudo aplicar la respuesta IA"
+    }
+  }
+}

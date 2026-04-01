@@ -1,0 +1,320 @@
+/// Google Cloud Translation provider using the v2 (Basic) REST API.
+///
+/// Uses API key authentication (no OAuth/service account needed).
+/// Endpoint: `https://translation.googleapis.com/language/translate/v2`
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+
+use crate::error::AppError;
+use crate::models::GlossaryTerm;
+use crate::services::provider::{TranslationProvider, TranslationRequest, TranslationResponse};
+
+/// Maximum texts per API call. Google recommends ≤128 per request.
+const MAX_BATCH_SIZE: usize = 100;
+
+/// Default Google Translate API endpoint
+const DEFAULT_ENDPOINT: &str = "https://translation.googleapis.com/language/translate/v2";
+
+pub struct GoogleProvider {
+    client: Client,
+    api_key: String,
+    endpoint: String,
+}
+
+#[derive(Debug, Clone)]
+struct GlossaryReplacement {
+    token: String,
+    target: String,
+}
+
+impl GoogleProvider {
+    pub fn new(api_key: String, endpoint: Option<String>) -> Self {
+        Self {
+            client: Client::new(),
+            api_key,
+            endpoint: endpoint.unwrap_or_else(|| DEFAULT_ENDPOINT.to_string()),
+        }
+    }
+
+    /// Google Translate uses ISO 639-1 codes directly for most languages.
+    fn normalize_lang(lang: &str) -> String {
+        lang.to_lowercase()
+    }
+
+    /// Replace known glossary terms with stable placeholders before translation.
+    fn protect_glossary_terms(
+        text: &str,
+        glossary: &[GlossaryTerm],
+    ) -> (String, Vec<GlossaryReplacement>) {
+        if glossary.is_empty() {
+            return (text.to_string(), Vec::new());
+        }
+
+        let mut protected = text.to_string();
+        let mut replacements = Vec::new();
+
+        for (index, term) in glossary.iter().enumerate() {
+            if term.source.is_empty() || term.target.is_empty() {
+                continue;
+            }
+
+            let token = format!("__FT_TERM_{}__", index);
+            let mut changed = false;
+
+            if term.case_sensitive {
+                if protected.contains(&term.source) {
+                    protected = protected.replace(&term.source, &token);
+                    changed = true;
+                }
+            } else {
+                let variants = [
+                    term.source.clone(),
+                    term.source.to_lowercase(),
+                    term.source.to_uppercase(),
+                ];
+
+                for variant in variants {
+                    if !variant.is_empty() && protected.contains(&variant) {
+                        protected = protected.replace(&variant, &token);
+                        changed = true;
+                    }
+                }
+            }
+
+            if changed {
+                replacements.push(GlossaryReplacement {
+                    token,
+                    target: term.target.clone(),
+                });
+            }
+        }
+
+        (protected, replacements)
+    }
+
+    fn restore_glossary_terms(
+        translated_text: String,
+        replacements: &[GlossaryReplacement],
+    ) -> String {
+        let mut restored = translated_text;
+        for replacement in replacements {
+            restored = restored.replace(&replacement.token, &replacement.target);
+        }
+        restored
+    }
+}
+
+/// Google Translate API request body
+#[derive(Serialize)]
+struct GoogleRequest {
+    q: Vec<String>,
+    target: String,
+    source: String,
+    format: String,
+}
+
+/// Google Translate API response
+#[derive(Deserialize)]
+struct GoogleResponse {
+    data: GoogleData,
+}
+
+#[derive(Deserialize)]
+struct GoogleData {
+    translations: Vec<GoogleTranslation>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GoogleTranslation {
+    translated_text: String,
+}
+
+/// Google Translate detect response (used for validation)
+#[derive(Deserialize)]
+struct GoogleDetectResponse {
+    data: GoogleDetectData,
+}
+
+#[derive(Deserialize)]
+struct GoogleDetectData {
+    detections: Vec<Vec<GoogleDetection>>,
+}
+
+#[derive(Deserialize)]
+struct GoogleDetection {
+    language: String,
+}
+
+#[async_trait::async_trait]
+impl TranslationProvider for GoogleProvider {
+    fn name(&self) -> &'static str {
+        "Google Translate"
+    }
+
+    async fn validate(&self) -> Result<(), AppError> {
+        // Use the detect endpoint with a simple text to validate the API key
+        let detect_url = self.endpoint.replace("/v2", "/v2/detect");
+
+        let response = self
+            .client
+            .post(&detect_url)
+            .query(&[("key", &self.api_key)])
+            .json(&serde_json::json!({ "q": "hello" }))
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(AppError::Api(format!(
+                "Google Translate API validation failed ({}): {}",
+                status, body
+            )));
+        }
+
+        let detect: GoogleDetectResponse = response.json().await.map_err(|e| {
+            AppError::Api(format!(
+                "Google Translate validation response parse error: {}",
+                e
+            ))
+        })?;
+
+        let has_detection = detect
+            .data
+            .detections
+            .iter()
+            .flatten()
+            .any(|entry| !entry.language.trim().is_empty());
+        if !has_detection {
+            return Err(AppError::Api(
+                "Google Translate validation returned no detections".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    async fn translate_batch(
+        &self,
+        requests: &[TranslationRequest],
+        source_lang: &str,
+        target_lang: &str,
+        glossary: &[GlossaryTerm],
+    ) -> Result<Vec<TranslationResponse>, AppError> {
+        let mut all_responses = Vec::with_capacity(requests.len());
+        let target = Self::normalize_lang(target_lang);
+        let source = Self::normalize_lang(source_lang);
+
+        for chunk in requests.chunks(MAX_BATCH_SIZE) {
+            let prepared: Vec<(String, Vec<GlossaryReplacement>)> = chunk
+                .iter()
+                .map(|request| Self::protect_glossary_terms(&request.text, glossary))
+                .collect();
+
+            let texts: Vec<String> = prepared.iter().map(|(text, _)| text.clone()).collect();
+
+            let google_request = GoogleRequest {
+                q: texts,
+                target: target.clone(),
+                source: source.clone(),
+                format: "text".to_string(),
+            };
+
+            let response = self
+                .client
+                .post(&self.endpoint)
+                .query(&[("key", &self.api_key)])
+                .json(&google_request)
+                .send()
+                .await?;
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                return Err(AppError::Api(format!(
+                    "Google Translate API error ({}): {}",
+                    status, body
+                )));
+            }
+
+            let google_response: GoogleResponse = response.json().await?;
+
+            if google_response.data.translations.len() != chunk.len() {
+                return Err(AppError::Api(format!(
+                    "Google Translate returned {} translations but expected {}",
+                    google_response.data.translations.len(),
+                    chunk.len()
+                )));
+            }
+
+            for ((req, translation), (_, replacements)) in chunk
+                .iter()
+                .zip(google_response.data.translations.into_iter())
+                .zip(prepared.iter())
+            {
+                all_responses.push(TranslationResponse {
+                    entry_id: req.entry_id.clone(),
+                    translated_text: Self::restore_glossary_terms(
+                        translation.translated_text,
+                        replacements,
+                    ),
+                });
+            }
+        }
+
+        Ok(all_responses)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_endpoint() {
+        let provider = GoogleProvider::new("test-key".to_string(), None);
+        assert_eq!(provider.endpoint, DEFAULT_ENDPOINT);
+    }
+
+    #[test]
+    fn test_custom_endpoint() {
+        let provider = GoogleProvider::new(
+            "test-key".to_string(),
+            Some("https://custom.google.com/v2".to_string()),
+        );
+        assert_eq!(provider.endpoint, "https://custom.google.com/v2");
+    }
+
+    #[test]
+    fn test_normalize_lang() {
+        assert_eq!(GoogleProvider::normalize_lang("EN"), "en");
+        assert_eq!(GoogleProvider::normalize_lang("ja"), "ja");
+        assert_eq!(GoogleProvider::normalize_lang("ES"), "es");
+    }
+
+    #[test]
+    fn test_provider_name() {
+        let provider = GoogleProvider::new("test-key".to_string(), None);
+        assert_eq!(provider.name(), "Google Translate");
+    }
+
+    #[test]
+    fn test_glossary_token_roundtrip() {
+        let glossary = vec![GlossaryTerm {
+            source: "勇者".to_string(),
+            target: "Heroe".to_string(),
+            case_sensitive: true,
+        }];
+
+        let (protected, replacements) =
+            GoogleProvider::protect_glossary_terms("El 勇者 ataca", &glossary);
+        assert!(protected.contains("__FT_TERM_0__"));
+
+        let restored = GoogleProvider::restore_glossary_terms(
+            "The __FT_TERM_0__ attacks".to_string(),
+            &replacements,
+        );
+        assert_eq!(restored, "The Heroe attacks");
+    }
+}

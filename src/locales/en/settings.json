@@ -1,0 +1,71 @@
+{
+  "title": "Settings",
+  "apiKeys": {
+    "title": "Providers",
+    "openai": {
+      "label": "OpenAI",
+      "placeholder": "sk-...",
+      "organizationPlaceholder": "OpenAI organization ID (optional)",
+      "projectPlaceholder": "OpenAI project ID (optional)",
+      "authNote": "Supported OpenAI auth here is API-key based. ChatGPT/session cookies are not used; optional organization/project fields add official request scoping."
+    },
+    "deepl": {
+      "label": "DeepL",
+      "placeholder": "Your DeepL API key"
+    },
+    "google": {
+      "label": "Google Translate",
+      "placeholder": "Your Google API key"
+    },
+    "codex": {
+      "label": "Codex",
+      "commandPathPlaceholder": "codex executable path (optional)",
+      "profilePlaceholder": "Codex profile name (optional)",
+      "authNote": "Codex auth is managed by the installed Codex CLI. Leave the command path empty to use `codex` from PATH; the status below shows whether the binary and ChatGPT session are ready.",
+      "statusReady": "Installed and authenticated",
+      "statusLoginRequired": "Installed, login required",
+      "statusNotInstalled": "CLI not found",
+      "statusError": "CLI detected, but status check failed",
+      "checkStatus": "Check CLI",
+      "sourceSidecar": "Using the Codex runtime bundled with the app",
+      "sourcePath": "Using `codex` from PATH",
+      "sourceConfigured": "Using a custom executable path",
+      "resolvedPathLabel": "Executable",
+      "versionLabel": "Version"
+    },
+    "save": "Save settings",
+    "saved": "Settings saved",
+    "remove": "Clear settings",
+    "removed": "Settings cleared",
+    "validate": "Validate",
+    "validating": "Validating...",
+    "valid": "Provider is ready",
+    "invalid": "Provider validation failed",
+    "model": "Model",
+    "modelPlaceholder": "gpt-4o-mini / gpt-5.4",
+    "endpoint": "Custom endpoint",
+    "endpointPlaceholder": "Endpoint URL (optional)",
+    "noKey": "No key configured",
+    "configured": "Configured"
+  },
+  "appearance": {
+    "title": "Appearance",
+    "theme": "Theme",
+    "light": "Light",
+    "dark": "Dark",
+    "system": "System"
+  },
+  "language": {
+    "title": "Language",
+    "select": "Select language",
+    "es": "Spanish",
+    "en": "English"
+  },
+  "wordWrap": {
+    "title": "Word wrap",
+    "label": "Wrap column",
+    "description": "Number of characters before wrapping (0 = disabled)",
+    "disabled": "Disabled",
+    "chars": "{{count}} characters"
+  }
+}

@@ -1,0 +1,133 @@
+{
+  "toolbar": {
+    "batchTranslate": "Batch translate",
+    "findReplace": "Find & Replace",
+    "findReplaceShortcut": "Shortcut: Ctrl+F / Ctrl+H",
+    "export": "Export",
+    "progress": "Progress",
+    "save": "Save",
+    "filter": "Filter",
+    "settings": "Settings",
+    "glossary": "Glossary",
+    "toggleTheme": "Toggle theme"
+  },
+  "grid": {
+    "original": "Original",
+    "translation": "Translation",
+    "status": "Status",
+    "file": "File",
+    "context": "Context",
+    "notes": "Notes",
+    "notesPlaceholder": "No notes",
+    "noEntries": "No entries to display",
+    "selectFile": "Select a file from the sidebar",
+    "totalEntries": "{{count}} entries",
+    "editTranslation": "Edit translation"
+  },
+  "findReplace": {
+    "find": "Find",
+    "replace": "Replace",
+    "findPlaceholder": "Search text...",
+    "replacePlaceholder": "Replace with...",
+    "matchCase": "Match case",
+    "useRegex": "Regular expression",
+    "searchIn": "Search in",
+    "originalText": "Original text",
+    "translationText": "Translation text",
+    "bothTexts": "Both",
+    "replaceOne": "Replace",
+    "replaceAll": "Replace all",
+    "previous": "Previous (Shift+Enter)",
+    "next": "Next (Enter)",
+    "matches": "{{count}} matches",
+    "noMatches": "No matches",
+    "replaced": "{{count}} replacements made",
+    "invalidRegex": "Invalid regular expression",
+    "close": "Close",
+    "currentMatch": "{{current}} of {{total}}"
+  },
+  "status": {
+    "untranslated": "Untranslated",
+    "draft": "Draft",
+    "reviewed": "Reviewed",
+    "final": "Final",
+    "all": "All"
+  },
+  "sidebar": {
+    "files": "Files",
+    "allEntries": "All entries",
+    "filterByStatus": "Filter by status",
+    "entries": "{{count}} entries",
+    "noFiles": "No files",
+    "groups": {
+      "system": "System",
+      "database": "Database",
+      "events": "Events",
+      "maps": "Maps"
+    }
+  },
+  "statusBar": {
+    "total": "Total: {{count}}",
+    "translated": "Translated: {{count}}",
+    "percentage": "{{percent}}% complete",
+    "noProject": "No project",
+    "engine": "Engine: {{engine}}"
+  },
+  "batch": {
+    "title": "Batch translation",
+    "tabs": {
+      "providers": "Providers",
+      "externalAi": "External AI"
+    },
+    "provider": "Provider",
+    "selectProvider": "Select a provider",
+    "providers": {
+      "openai": "OpenAI",
+      "deepl": "DeepL",
+      "google": "Google Translate",
+      "codex": "Codex"
+    },
+    "selectFiles": "Files to translate",
+    "allFiles": "All files",
+    "selectedFiles": "{{count}} files selected",
+    "untranslatedOnly": "Untranslated entries only",
+    "start": "Start translation",
+    "starting": "Starting...",
+    "translating": "Translating...",
+    "progress": "{{completed}} of {{total}} entries",
+    "currentFile": "Current file: {{file}}",
+    "complete": "Translation complete",
+    "completeDetail": "{{completed}} of {{total}} entries translated",
+    "completeWithErrors": "Translation completed with errors",
+    "completeWithErrorsDetail": "{{completed}} translated, {{failed}} failed, {{total}} total",
+    "errors": "{{count}} errors",
+    "noProvider": "No provider configured. Go to Settings to configure a provider.",
+    "noEntries": "No untranslated entries",
+    "cancel": "Cancel",
+    "ai": {
+      "description": "Export untranslated entries as a JSON-compatible prompt, send it to your AI of choice, and paste back a JSON response that echoes the same projectId and batchId.",
+      "maxEntries": "Max entries per AI batch",
+      "invalidMaxEntries": "Max entries must be a positive number.",
+      "export": "Export AI batch",
+      "exported": "AI batch exported",
+      "exportedDetail": "{{exported}} entries exported from {{total}} selected untranslated entries",
+      "instructionCandidates": "{{count}} entries flagged as likely instructions/help text",
+      "prompt": "Prompt for external AI",
+      "promptPlaceholder": "Generate an AI batch to get a ready-to-send prompt.",
+      "copy": "Copy prompt",
+      "copied": "Prompt copied to clipboard",
+      "copyFailed": "Could not copy prompt",
+      "response": "Paste AI JSON response",
+      "responsePlaceholder": "Paste the JSON returned by the AI here.",
+      "exportRequired": "Export an AI batch before applying a response.",
+      "responseRequired": "Paste an AI JSON response before applying it.",
+      "apply": "Apply AI response",
+      "applied": "AI response applied",
+      "appliedDetail": "{{applied}} entries applied, {{skipped}} skipped",
+      "partialApply": "AI response applied with issues",
+      "partialApplyDetail": "{{applied}} applied, {{skipped}} skipped, {{missing}} missing, {{duplicates}} duplicate IDs",
+      "exportFailed": "Could not export AI batch",
+      "applyFailed": "Could not apply AI response"
+    }
+  }
+}

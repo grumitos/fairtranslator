@@ -1,0 +1,71 @@
+{
+  "title": "Configuracion",
+  "apiKeys": {
+    "title": "Proveedores",
+    "openai": {
+      "label": "OpenAI",
+      "placeholder": "sk-...",
+      "organizationPlaceholder": "ID de organizacion de OpenAI (opcional)",
+      "projectPlaceholder": "ID de proyecto de OpenAI (opcional)",
+      "authNote": "La autenticacion soportada aqui para OpenAI es por API key. No se usan cookies ni sesion de ChatGPT; los campos organizacion/proyecto agregan scoping oficial a la request."
+    },
+    "deepl": {
+      "label": "DeepL",
+      "placeholder": "Tu clave de API de DeepL"
+    },
+    "google": {
+      "label": "Google Translate",
+      "placeholder": "Tu clave de API de Google"
+    },
+    "codex": {
+      "label": "Codex",
+      "commandPathPlaceholder": "Ruta al ejecutable de codex (opcional)",
+      "profilePlaceholder": "Nombre de perfil de Codex (opcional)",
+      "authNote": "La autenticacion de Codex la gestiona el CLI instalado. Deja la ruta vacia para usar `codex` desde PATH; el estado inferior muestra si el binario y la sesion de ChatGPT ya estan listos.",
+      "statusReady": "Instalado y autenticado",
+      "statusLoginRequired": "Instalado, falta iniciar sesion",
+      "statusNotInstalled": "No se encontro el CLI",
+      "statusError": "Se detecto el CLI, pero fallo la comprobacion",
+      "checkStatus": "Comprobar CLI",
+      "sourceSidecar": "Usando el runtime Codex empaquetado con la app",
+      "sourcePath": "Usando `codex` desde PATH",
+      "sourceConfigured": "Usando una ruta personalizada del ejecutable",
+      "resolvedPathLabel": "Ejecutable",
+      "versionLabel": "Version"
+    },
+    "save": "Guardar configuracion",
+    "saved": "Configuracion guardada",
+    "remove": "Limpiar configuracion",
+    "removed": "Configuracion eliminada",
+    "validate": "Validar",
+    "validating": "Validando...",
+    "valid": "Proveedor listo",
+    "invalid": "La validacion del proveedor fallo",
+    "model": "Modelo",
+    "modelPlaceholder": "gpt-4o-mini / gpt-5.4",
+    "endpoint": "Endpoint personalizado",
+    "endpointPlaceholder": "URL del endpoint (opcional)",
+    "noKey": "Sin clave configurada",
+    "configured": "Configurada"
+  },
+  "appearance": {
+    "title": "Apariencia",
+    "theme": "Tema",
+    "light": "Claro",
+    "dark": "Oscuro",
+    "system": "Sistema"
+  },
+  "language": {
+    "title": "Idioma",
+    "select": "Seleccionar idioma",
+    "es": "Espanol",
+    "en": "Ingles"
+  },
+  "wordWrap": {
+    "title": "Ajuste de linea",
+    "label": "Columna de ajuste",
+    "description": "Numero de caracteres antes de ajustar la linea (0 = desactivado)",
+    "disabled": "Desactivado",
+    "chars": "{{count}} caracteres"
+  }
+}

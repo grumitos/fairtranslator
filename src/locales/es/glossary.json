@@ -1,0 +1,23 @@
+{
+  "title": "Glosario",
+  "source": "Termino original",
+  "target": "Traduccion",
+  "caseSensitive": "Distinguir mayusculas",
+  "add": "Agregar termino",
+  "edit": "Editar termino",
+  "remove": "Eliminar termino",
+  "update": "Actualizar",
+  "empty": "El glosario esta vacio. Agrega terminos para mantener consistencia en la traduccion.",
+  "import": "Importar",
+  "export": "Exportar",
+  "actions": "Acciones",
+  "confirmDelete": "Estas seguro de eliminar el termino \"{{term}}\"?",
+  "addSuccess": "Termino agregado",
+  "updateSuccess": "Termino actualizado",
+  "removeSuccess": "Termino eliminado",
+  "duplicate": "Este termino ya existe en el glosario",
+  "sourcePlaceholder": "Texto original (ej. 勇者)",
+  "targetPlaceholder": "Traduccion (ej. Heroe)",
+  "totalTerms": "{{count}} terminos",
+  "caseSensitiveBadge": "Aa"
+}

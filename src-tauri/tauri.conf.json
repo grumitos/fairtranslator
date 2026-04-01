@@ -1,0 +1,58 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "FairTranslator",
+  "version": "0.1.0",
+  "identifier": "com.fairtranslator.desktop",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "FairTranslator",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "msi"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "publisher": "FairTranslator",
+    "copyright": "Copyright 2026 FairTranslator contributors",
+    "category": "DeveloperTool",
+    "shortDescription": "Modern translation tool for RPG Maker MV/MZ games",
+    "longDescription": "FairTranslator is a free, open-source desktop application for translating RPG Maker MV/MZ games. Connect your own API keys (OpenAI, DeepL, Google Translate) to translate game text with no paywalled features or subscriptions.",
+    "fileAssociations": [
+      {
+        "ext": ["fairtl"],
+        "mimeType": "application/x-fairtranslator-project",
+        "description": "FairTranslator Project"
+      }
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "both",
+        "displayLanguageSelector": true,
+        "languages": ["Spanish", "English"]
+      }
+    }
+  }
+}

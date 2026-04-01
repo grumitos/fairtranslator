@@ -1,0 +1,32 @@
+[package]
+name = "fairtranslator"
+version = "0.1.0"
+description = "A modern translation tool for RPG Maker MV/MZ games"
+authors = ["FairTranslator contributors"]
+license = "MIT"
+repository = "https://github.com/fairtranslator/fairtranslator"
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "=2.5.4", features = [] }
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2"
+log = "0.4"
+uuid = { version = "1", features = ["v4", "serde"] }
+tokio = { version = "1", features = ["fs", "sync", "time"] }
+reqwest = { version = "0.12", features = ["json"] }
+tauri = { version = "=2.10.0", features = [] }
+tauri-plugin-log = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-store = "2"
+chrono = { version = "0.4", features = ["serde"] }
+async-trait = "0.1"
+rpgtool-common = "0.2.0"

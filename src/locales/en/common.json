@@ -1,0 +1,67 @@
+{
+  "appName": "FairTranslator",
+  "loading": "Loading...",
+  "error": "Error",
+  "save": "Save",
+  "saveAs": "Save As",
+  "open": "Open",
+  "cancel": "Cancel",
+  "confirm": "Confirm",
+  "delete": "Delete",
+  "close": "Close",
+  "search": "Search",
+  "noResults": "No results",
+  "actions": "Actions",
+  "new": "New",
+  "newProject": "New Project",
+  "openProject": "Open Project",
+  "project": "Project",
+  "errorBoundary": {
+    "title": "Something went wrong",
+    "unexpected": "An unexpected error occurred.",
+    "retry": "Try again"
+  },
+  "languages": {
+    "ja": "Japanese",
+    "en": "English",
+    "es": "Spanish",
+    "zh": "Chinese",
+    "ko": "Korean",
+    "fr": "French",
+    "de": "German",
+    "pt": "Portuguese",
+    "ru": "Russian",
+    "it": "Italian"
+  },
+  "welcome": {
+    "title": "Welcome to FairTranslator",
+    "subtitle": "Modern translator for RPG Maker MV/MZ games",
+    "newProject": "Create new project",
+    "openProject": "Open existing project",
+    "newProjectDesc": "Select an RPG Maker game folder to start translating",
+    "openProjectDesc": "Open a previously saved .fairtl project"
+  },
+  "newProjectDialog": {
+    "title": "New Project",
+    "name": "Project name",
+    "namePlaceholder": "My translation",
+    "gameDir": "Game folder",
+    "gameDirPlaceholder": "Select game folder...",
+    "browse": "Browse",
+    "sourceLang": "Source language",
+    "targetLang": "Target language",
+    "create": "Create project",
+    "creating": "Creating project...",
+    "selectFolder": "Select folder"
+  },
+  "export": {
+    "title": "Export translations",
+    "button": "Export",
+    "selectFolder": "Select empty output folder",
+    "exporting": "Exporting...",
+    "success": "Export completed",
+    "successDetail": "{{files}} files exported, {{applied}} of {{total}} translations applied",
+    "noTranslations": "No translations to export",
+    "errorNoProject": "No project open"
+  }
+}

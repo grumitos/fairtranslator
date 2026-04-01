@@ -1,0 +1,44 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-ssr/
+*.tsbuildinfo
+
+# Tauri build output
+src-tauri/target/
+
+# Local planning / audit docs
+PLAN.md
+PROGRESS.md
+QA_TRACKER.md
+audit.md
+app_lib_imports.txt
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Testing
+coverage/
+
+# Tauri
+src-tauri/WixTools/
+src-tauri/gen/

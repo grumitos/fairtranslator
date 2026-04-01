@@ -1,0 +1,61 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-windows:
+    name: Build Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: TypeScript check
+        run: npx tsc --noEmit
+
+      - name: Rust tests
+        run: cargo test --lib
+        working-directory: src-tauri
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'FairTranslator ${{ github.ref_name }}'
+          releaseBody: |
+            See the [CHANGELOG](https://github.com/fairtranslator/fairtranslator/blob/main/CHANGELOG.md) for details.
+
+            ## Installation
+            - **Windows (NSIS installer):** Download `FairTranslator_X.X.X_x64-setup.exe`
+            - **Windows (MSI):** Download `FairTranslator_X.X.X_x64_en-US.msi`
+          releaseDraft: true
+          prerelease: false
+          includeDebug: false
+          includeRelease: true

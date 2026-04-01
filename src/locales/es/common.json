@@ -1,0 +1,67 @@
+{
+  "appName": "FairTranslator",
+  "loading": "Cargando...",
+  "error": "Error",
+  "save": "Guardar",
+  "saveAs": "Guardar como",
+  "open": "Abrir",
+  "cancel": "Cancelar",
+  "confirm": "Confirmar",
+  "delete": "Eliminar",
+  "close": "Cerrar",
+  "search": "Buscar",
+  "noResults": "Sin resultados",
+  "actions": "Acciones",
+  "new": "Nuevo",
+  "newProject": "Nuevo proyecto",
+  "openProject": "Abrir proyecto",
+  "project": "Proyecto",
+  "errorBoundary": {
+    "title": "Algo salio mal",
+    "unexpected": "Ocurrio un error inesperado.",
+    "retry": "Intentar de nuevo"
+  },
+  "languages": {
+    "ja": "Japones",
+    "en": "Ingles",
+    "es": "Espanol",
+    "zh": "Chino",
+    "ko": "Coreano",
+    "fr": "Frances",
+    "de": "Aleman",
+    "pt": "Portugues",
+    "ru": "Ruso",
+    "it": "Italiano"
+  },
+  "welcome": {
+    "title": "Bienvenido a FairTranslator",
+    "subtitle": "Traductor moderno para juegos RPG Maker MV/MZ",
+    "newProject": "Crear nuevo proyecto",
+    "openProject": "Abrir proyecto existente",
+    "newProjectDesc": "Selecciona la carpeta de un juego RPG Maker para empezar a traducir",
+    "openProjectDesc": "Abre un proyecto .fairtl guardado anteriormente"
+  },
+  "newProjectDialog": {
+    "title": "Nuevo proyecto",
+    "name": "Nombre del proyecto",
+    "namePlaceholder": "Mi traducción",
+    "gameDir": "Carpeta del juego",
+    "gameDirPlaceholder": "Selecciona la carpeta del juego...",
+    "browse": "Examinar",
+    "sourceLang": "Idioma original",
+    "targetLang": "Idioma destino",
+    "create": "Crear proyecto",
+    "creating": "Creando proyecto...",
+    "selectFolder": "Seleccionar carpeta"
+  },
+  "export": {
+    "title": "Exportar traducciones",
+    "button": "Exportar",
+    "selectFolder": "Seleccionar carpeta de salida vacia",
+    "exporting": "Exportando...",
+    "success": "Exportación completada",
+    "successDetail": "{{files}} archivos exportados, {{applied}} de {{total}} traducciones aplicadas",
+    "noTranslations": "No hay traducciones para exportar",
+    "errorNoProject": "No hay proyecto abierto"
+  }
+}
