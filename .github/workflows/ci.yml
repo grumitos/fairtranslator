@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [master, main]
   pull_request:
-    branches: [main]
+    branches: [master, main]
 
 env:
   CARGO_TERM_COLOR: always
@@ -53,6 +53,6 @@ jobs:
         run: cargo check
         working-directory: src-tauri
 
-      - name: Cargo test (lib)
-        run: cargo test --lib
+      - name: Cargo test
+        run: cargo test
         working-directory: src-tauri

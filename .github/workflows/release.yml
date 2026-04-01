@@ -38,8 +38,11 @@ jobs:
       - name: TypeScript check
         run: npx tsc --noEmit
 
+      - name: Frontend tests
+        run: npm run test:run
+
       - name: Rust tests
-        run: cargo test --lib
+        run: cargo test
         working-directory: src-tauri
 
       - name: Build Tauri app
@@ -50,11 +53,18 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: 'FairTranslator ${{ github.ref_name }}'
           releaseBody: |
-            See the [CHANGELOG](https://github.com/fairtranslator/fairtranslator/blob/main/CHANGELOG.md) for details.
+            See the [CHANGELOG](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/CHANGELOG.md) for details.
+            See the [release notes](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/releases/${{ github.ref_name }}.md) for the initial release scope and known limits.
+
+            ## Supported engines
+            - RPG Maker MZ
+            - RPG Maker MV
+            - RPG Maker VX Ace
+            - RPG Maker VX
+            - RPG Maker XP
 
             ## Installation
-            - **Windows (NSIS installer):** Download `FairTranslator_X.X.X_x64-setup.exe`
-            - **Windows (MSI):** Download `FairTranslator_X.X.X_x64_en-US.msi`
+            - Download the attached Windows NSIS installer or MSI package.
           releaseDraft: true
           prerelease: false
           includeDebug: false

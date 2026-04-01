@@ -35,7 +35,7 @@
   },
   "welcome": {
     "title": "Bienvenido a FairTranslator",
-    "subtitle": "Traductor moderno para juegos RPG Maker MV/MZ",
+    "subtitle": "Traductor moderno para juegos RPG Maker",
     "newProject": "Crear nuevo proyecto",
     "openProject": "Abrir proyecto existente",
     "newProjectDesc": "Selecciona la carpeta de un juego RPG Maker para empezar a traducir",

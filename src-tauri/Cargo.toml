@@ -1,10 +1,10 @@
 [package]
 name = "fairtranslator"
-version = "0.1.0"
-description = "A modern translation tool for RPG Maker MV/MZ games"
+version = "0.9.0"
+description = "A desktop translation tool for RPG Maker games"
 authors = ["FairTranslator contributors"]
 license = "MIT"
-repository = "https://github.com/fairtranslator/fairtranslator"
+repository = "https://github.com/nesquikgrumitos/fairtranslator"
 edition = "2021"
 rust-version = "1.77.2"
 

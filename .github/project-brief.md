@@ -1,5 +1,9 @@
 # project-brief: FairTranslator
 
+## Current Repo Status
+
+La implementación actual ya superó el MVP original de MV/MZ. El repo ahora soporta RPG Maker MZ, MV, VX Ace, VX y XP, con exportación, glosario, traducción batch, flujo externo de IA y soporte de Codex mediante runtime local.
+
 ## Translator++
 
 Translator++ es el programa de referencia actual para traducir juegos creados con motores como RPG Maker y Wolf RPG Editor. Fue creado por Dreamsavior originalmente para traducir juegos *doujin* japoneses, combinando traducción automática con edición manual.
@@ -31,7 +35,7 @@ Principles:
 - El usuario conecta **sus propias API keys** (OpenAI, DeepL, Google). Sin créditos intermediarios. El costo real de traducir un juego completo con modelos como GPT-4o-mini ronda los $0.50–$2 USD.
 - Interfaz moderna y limpia desde el primer día.
 - Open source o licencia única simple — sin suscripciones.
-- Comenzar por RPG Maker MV/MZ, donde los archivos son JSON estándar sin encriptación, con estructuras predecibles. El parsing es trivial.
+- El punto de entrada fue RPG Maker MV/MZ, y el alcance implementado ya se extendió a VX Ace, VX y XP.
 
 ---
 
@@ -47,16 +51,18 @@ Principles:
 
 ---
 
-## MVP Scope
+## Current Implemented Scope
 
 ### core
-- Parser para RPG Maker MV/MZ (lectura y escritura de JSON)
+- Parser y exportador para RPG Maker MZ, MV, VX Ace, VX y XP
 - UI de tabla/grid editable
 - Sistema de proyectos (guardar estado de traducción)
 - Exportar / parchear archivos originales con las traducciones
 
 ### ai integration
 - Conexión directa a OpenAI, DeepL, Google Translate con API key del usuario
+- Integración con Codex mediante runtime local
+- Flujo externo de export/apply para IA estructurada
 - Cola de traducción en batch
 - Glosario de términos para consistencia de nombres propios
 
@@ -88,7 +94,7 @@ Principles:
 
 ---
 
-## Timeline Estimate (MV/MZ MVP)
+## Original MV/MZ MVP Estimate
 
 | Fase | Estimado |
 |---|---|

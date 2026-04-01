@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "FairTranslator",
-  "version": "0.1.0",
+  "version": "0.9.0",
   "identifier": "com.fairtranslator.desktop",
   "build": {
     "frontendDist": "../dist",
@@ -38,8 +38,8 @@
     "publisher": "FairTranslator",
     "copyright": "Copyright 2026 FairTranslator contributors",
     "category": "DeveloperTool",
-    "shortDescription": "Modern translation tool for RPG Maker MV/MZ games",
-    "longDescription": "FairTranslator is a free, open-source desktop application for translating RPG Maker MV/MZ games. Connect your own API keys (OpenAI, DeepL, Google Translate) to translate game text with no paywalled features or subscriptions.",
+    "shortDescription": "Desktop translation tool for RPG Maker games",
+    "longDescription": "FairTranslator is a free, open-source desktop application for translating RPG Maker MZ, MV, VX Ace, VX, and XP games. It supports manual editing, glossary-based workflows, built-in providers such as OpenAI, DeepL, Google Translate, and Codex, plus structured external AI batch flows.",
     "fileAssociations": [
       {
         "ext": ["fairtl"],
