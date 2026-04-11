@@ -1001,6 +1001,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "log",
+ "regex",
  "reqwest 0.12.28",
  "rpgtool-common",
  "serde",

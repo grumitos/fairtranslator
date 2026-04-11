@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/select";
 import { useTranslation as useTranslationHook } from "@/hooks/useTranslation";
 import * as ipc from "@/lib/ipc";
+import { isPendingTranslationEntry } from "@/lib/translationMetrics";
 import { useProjectStore } from "@/stores/projectStore";
 import type { AiBatchExport, ProviderType } from "@/types/domain";
 
@@ -55,18 +56,19 @@ export function BatchTranslatePanel({
   const [aiPrompt, setAiPrompt] = useState("");
   const [aiResponse, setAiResponse] = useState("");
   const [aiError, setAiError] = useState<string | null>(null);
+  const [aiWarnings, setAiWarnings] = useState<string[]>([]);
   const wasTranslatingRef = useRef(false);
 
   const files = project?.files ?? [];
   const fileSelection = allFiles ? [] : selectedFiles;
   const untranslatedCount = files
     .filter((f) => allFiles || selectedFiles.includes(f.relativePath))
-    .reduce(
-      (sum, f) => sum + f.entries.filter((e) => e.status === "untranslated").length,
-      0,
-    );
+    .reduce((sum, f) => sum + f.entries.filter(isPendingTranslationEntry).length, 0);
   const instructionCandidates =
     aiBatch?.entries.filter((entry) => entry.instructionCandidate).length ?? 0;
+  const providerCapabilityKey = provider
+    ? (`editor:batch.providers.capabilities.${provider}` as const)
+    : null;
 
   const handleToggleFile = useCallback((path: string) => {
     setSelectedFiles((prev) =>
@@ -97,6 +99,7 @@ export function BatchTranslatePanel({
 
     setIsAiBusy(true);
     setAiError(null);
+    setAiWarnings([]);
     try {
       const batch = await ipc.translateAiBatchExport(fileSelection, parsedMaxEntries);
       setAiBatch(batch);
@@ -147,21 +150,29 @@ export function BatchTranslatePanel({
 
     setIsAiBusy(true);
     setAiError(null);
+    setAiWarnings([]);
     try {
       const result = await ipc.translateAiBatchApply(
         aiResponse,
         "draft",
         aiBatch.projectId,
         aiBatch.batchId,
+        aiBatch.responseMap,
       );
       const refreshed = await ipc.projectGet();
       if (refreshed) {
-        replaceProject(refreshed);
+        replaceProject(refreshed, { markDirty: true });
       }
-      if (result.missingEntries.length > 0 || result.duplicateEntries.length > 0) {
+      setAiWarnings(result.warnings);
+      if (
+        result.missingEntries.length > 0 ||
+        result.duplicateEntries.length > 0 ||
+        result.invalidEntries.length > 0
+      ) {
         const description = t("editor:batch.ai.partialApplyDetail", {
           applied: result.appliedEntries,
           skipped: result.skippedEntries,
+          invalid: result.invalidEntries.length,
           missing: result.missingEntries.length,
           duplicates: result.duplicateEntries.length,
         });
@@ -177,6 +188,13 @@ export function BatchTranslatePanel({
             skipped: result.skippedEntries,
           }),
         });
+        if (result.warnings.length > 0) {
+          toast.warning(t("editor:batch.ai.integrityWarnings"), {
+            description: t("editor:batch.ai.integrityWarningsDetail", {
+              count: result.warnings.length,
+            }),
+          });
+        }
       }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
@@ -194,6 +212,7 @@ export function BatchTranslatePanel({
     setAiPrompt("");
     setAiResponse("");
     setAiError(null);
+    setAiWarnings([]);
   }, [project?.id]);
 
   useEffect(() => {
@@ -283,6 +302,12 @@ export function BatchTranslatePanel({
             </TabsList>
 
             <TabsContent value="providers" className="space-y-4 pt-2">
+              <div className="rounded-md border border-blue-500/20 bg-blue-500/10 p-3 text-[11px] text-muted-foreground">
+                <p className="font-medium text-foreground">{t("editor:batch.providers.modeTitle")}</p>
+                <p className="mt-1">{t("editor:batch.providers.modeDescription")}</p>
+                <p className="mt-1">{t("editor:batch.providers.modeFeatures")}</p>
+              </div>
+
               <div className="space-y-2">
                 <Label>{t("editor:batch.provider")}</Label>
                 <Select value={provider} onValueChange={(v) => setProvider(v as ProviderType)}>
@@ -298,6 +323,15 @@ export function BatchTranslatePanel({
                   </SelectContent>
                 </Select>
               </div>
+
+              {providerCapabilityKey && (
+                <div className="rounded-md border border-border/70 bg-muted/40 p-3 text-[11px] text-muted-foreground">
+                  <p className="font-medium text-foreground">
+                    {t("editor:batch.providers.capabilityTitle")}
+                  </p>
+                  <p className="mt-1">{t(providerCapabilityKey)}</p>
+                </div>
+              )}
 
               <Button
                 onClick={handleStart}
@@ -404,6 +438,13 @@ export function BatchTranslatePanel({
               </Button>
 
               {aiError && <p className="text-xs text-destructive">{aiError}</p>}
+              {aiWarnings.length > 0 && (
+                <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-amber-900 dark:text-amber-100">
+                  {aiWarnings.map((warning) => (
+                    <p key={warning}>{warning}</p>
+                  ))}
+                </div>
+              )}
             </TabsContent>
           </Tabs>
 
@@ -416,17 +457,37 @@ export function BatchTranslatePanel({
                   total: progress.totalEntries,
                 })}
               </p>
+              <p className="text-xs text-muted-foreground">
+                {t("editor:batch.progressFiles", {
+                  completed: progress.filesProcessed,
+                  total: progress.totalFiles,
+                })}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {t("editor:batch.progressChunks", {
+                  completed: progress.chunksProcessed,
+                  total: progress.totalChunks,
+                })}
+              </p>
               {progress.failedEntries > 0 && (
                 <p className="text-xs text-destructive">
                   {t("editor:batch.errors", { count: progress.failedEntries })}
                 </p>
               )}
               {progress.currentFile && (
-                <p className="truncate text-xs text-muted-foreground">
-                  {t("editor:batch.currentFile", { file: progress.currentFile })}
-                </p>
+                <div className="space-y-1">
+                  <p className="truncate text-xs text-muted-foreground">
+                    {t("editor:batch.currentFile", { file: progress.currentFile })}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {t("editor:batch.currentChunk", {
+                      current: progress.currentFileChunksProcessed,
+                      total: progress.currentFileTotalChunks,
+                    })}
+                  </p>
+                </div>
               )}
-              {!isTranslating && progress.filesProcessed === progress.totalFiles && (
+              {!isTranslating && progress.chunksProcessed === progress.totalChunks && (
                 <div className="space-y-2">
                   <div className="flex items-center gap-2 text-xs">
                     <CheckCircle

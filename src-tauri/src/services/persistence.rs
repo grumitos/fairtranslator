@@ -9,7 +9,7 @@ use crate::models::{Engine, GlossaryTerm, Project, TranslationEntry, Translation
 // Schema version — bump when the .fairtl format changes
 // ---------------------------------------------------------------------------
 
-const SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = 2;
 
 // ---------------------------------------------------------------------------
 // On-disk structures (project.json inside .fairtl directory)
@@ -30,6 +30,8 @@ struct ProjectMeta {
     /// Relative paths of files that have entries (matches entries/<name>.json)
     file_list: Vec<String>,
     glossary: Vec<GlossaryTerm>,
+    #[serde(default)]
+    style_guide: Vec<String>,
     created_at: String,
     updated_at: String,
 }
@@ -78,6 +80,7 @@ pub fn save_project(project: &Project, project_path: &Path) -> Result<(), AppErr
         game_dir: project.game_dir.clone(),
         file_list,
         glossary: project.glossary.clone(),
+        style_guide: project.style_guide.clone(),
         created_at: project.created_at.clone(),
         updated_at: project.updated_at.clone(),
     };
@@ -196,6 +199,7 @@ pub fn load_project(project_path: &Path) -> Result<Project, AppError> {
         game_dir: meta.game_dir,
         files,
         glossary: meta.glossary,
+        style_guide: meta.style_guide,
         created_at: meta.created_at,
         updated_at: meta.updated_at,
     })
@@ -290,6 +294,7 @@ mod tests {
                 target: "Héroe".to_string(),
                 case_sensitive: false,
             }],
+            style_guide: vec!["Keep menu text concise.".to_string()],
             created_at: "2026-01-01T00:00:00Z".to_string(),
             updated_at: "2026-01-02T12:00:00Z".to_string(),
         }
@@ -330,6 +335,7 @@ mod tests {
         assert_eq!(loaded.glossary.len(), 1);
         assert_eq!(loaded.glossary[0].source, "勇者");
         assert_eq!(loaded.glossary[0].target, "Héroe");
+        assert_eq!(loaded.style_guide, project.style_guide);
 
         // Clean up
         fs::remove_dir_all(&temp).unwrap();
@@ -453,6 +459,69 @@ mod tests {
             err_msg.contains("Missing entry files"),
             "Expected missing entry file error, got: {err_msg}"
         );
+
+        let _ = fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn test_save_writes_current_schema_version() {
+        let project = make_test_project();
+        let temp = std::env::temp_dir().join(format!(
+            "fairtl_test_schema_write_{}.fairtl",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        if temp.exists() {
+            fs::remove_dir_all(&temp).unwrap();
+        }
+
+        save_project(&project, &temp).unwrap();
+
+        let project_json = fs::read_to_string(temp.join("project.json")).unwrap();
+        let meta: serde_json::Value = serde_json::from_str(&project_json).unwrap();
+        assert_eq!(
+            meta.get("schemaVersion").and_then(|value| value.as_u64()),
+            Some(SCHEMA_VERSION as u64)
+        );
+        assert_eq!(
+            meta.get("styleGuide")
+                .and_then(|value| value.as_array())
+                .map(|values| values.len()),
+            Some(project.style_guide.len())
+        );
+
+        let _ = fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn test_loads_schema_v1_project_without_style_guide() {
+        let temp = std::env::temp_dir().join(format!(
+            "fairtl_test_schema_v1_{}.fairtl",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        if temp.exists() {
+            fs::remove_dir_all(&temp).unwrap();
+        }
+        fs::create_dir_all(temp.join("entries")).unwrap();
+
+        let meta_json = serde_json::json!({
+            "schemaVersion": 1,
+            "id": "legacy-project",
+            "name": "Legacy",
+            "sourceLang": "ja",
+            "targetLang": "es",
+            "engine": "mv",
+            "gameDir": "C:\\Games\\Legacy",
+            "fileList": ["data/System.json"],
+            "glossary": [],
+            "createdAt": "2026-01-01T00:00:00Z",
+            "updatedAt": "2026-01-01T00:00:00Z"
+        });
+        fs::write(temp.join("project.json"), meta_json.to_string()).unwrap();
+        fs::write(temp.join("entries").join("System.json"), "[]").unwrap();
+
+        let loaded = load_project(&temp).unwrap();
+        assert!(loaded.style_guide.is_empty());
+        assert_eq!(loaded.name, "Legacy");
 
         let _ = fs::remove_dir_all(&temp);
     }

@@ -9,7 +9,8 @@
     "filter": "Filter",
     "settings": "Settings",
     "glossary": "Glossary",
-    "toggleTheme": "Toggle theme"
+    "toggleTheme": "Toggle theme",
+    "styleGuide": "Style guide"
   },
   "grid": {
     "original": "Original",
@@ -82,6 +83,16 @@
     "provider": "Provider",
     "selectProvider": "Select a provider",
     "providers": {
+      "modeTitle": "In-app provider flow",
+      "modeDescription": "FairTranslator can run provider translation inside the app and apply results directly to the current project without switching tools.",
+      "modeFeatures": "Context support is provider-specific. Check the selected provider note below before starting a batch.",
+      "capabilityTitle": "Selected provider note",
+      "capabilities": {
+        "openai": "OpenAI uses the app's full contextual orchestration: prompt budgeting, style guide, glossary, protected terms, translation memory, and chunk context.",
+        "codex": "Codex uses the same full contextual orchestration as OpenAI, but executes through the local Codex runtime/CLI.",
+        "deepl": "DeepL runs inside the app and applies results directly, but only receives best-effort glossary and style-guide context. It does not use the full chunk-memory pipeline.",
+        "google": "Google runs inside the app and applies results directly, with glossary plus control-code placeholder protection. It still does not use internal project-memory context."
+      },
       "openai": "OpenAI",
       "deepl": "DeepL",
       "google": "Google Translate",
@@ -95,7 +106,10 @@
     "starting": "Starting...",
     "translating": "Translating...",
     "progress": "{{completed}} of {{total}} entries",
+    "progressFiles": "Files completed: {{completed}} of {{total}}",
+    "progressChunks": "Chunks completed: {{completed}} of {{total}}",
     "currentFile": "Current file: {{file}}",
+    "currentChunk": "Current file chunks: {{current}} of {{total}}",
     "complete": "Translation complete",
     "completeDetail": "{{completed}} of {{total}} entries translated",
     "completeWithErrors": "Translation completed with errors",
@@ -124,10 +138,25 @@
       "apply": "Apply AI response",
       "applied": "AI response applied",
       "appliedDetail": "{{applied}} entries applied, {{skipped}} skipped",
+      "integrityWarnings": "AI response applied with warnings",
+      "integrityWarningsDetail": "{{count}} translated entries need manual review.",
       "partialApply": "AI response applied with issues",
-      "partialApplyDetail": "{{applied}} applied, {{skipped}} skipped, {{missing}} missing, {{duplicates}} duplicate IDs",
+      "partialApplyDetail": "{{applied}} applied, {{skipped}} skipped, {{invalid}} blocked by integrity checks, {{missing}} missing, {{duplicates}} duplicate IDs",
       "exportFailed": "Could not export AI batch",
       "applyFailed": "Could not apply AI response"
     }
+  },
+  "styleGuide": {
+    "title": "Project style guide",
+    "description": "Store short translation rules and notes that will be used by the in-app AI flow.",
+    "addTitle": "Add a rule or note",
+    "addPlaceholder": "e.g. Keep battle names short and natural",
+    "add": "Add",
+    "rulesLabel": "Rules and notes ({{count}})",
+    "remove": "Remove",
+    "save": "Save rules",
+    "saved": "Style guide saved",
+    "saveFailed": "Could not save style guide",
+    "empty": "No style rules yet"
   }
 }

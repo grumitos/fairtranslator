@@ -1,4 +1,6 @@
+import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
+import { isTranslatableEntry, isTranslatedEntry } from "@/lib/translationMetrics";
 import { useProjectStore } from "@/stores/projectStore";
 import { cn } from "@/lib/utils";
 import type { Engine } from "@/types/domain";
@@ -36,21 +38,26 @@ export function StatusBar() {
     );
   }
 
-  // Calculate global stats
-  const allEntries = project.files.flatMap((f) => f.entries);
-  const totalEntries = allEntries.length;
-  const translatedEntries = allEntries.filter(
-    (e) => e.status !== "untranslated",
-  ).length;
-  const percent =
-    totalEntries > 0 ? Math.round((translatedEntries / totalEntries) * 100) : 0;
+  const { totalEntries, translatedEntries, percent, activeTotal, activeTranslated } = useMemo(() => {
+    let total = 0;
+    let translated = 0;
+    for (const file of project.files) {
+      total += file.entries.filter(isTranslatableEntry).length;
+      translated += file.entries.filter(isTranslatedEntry).length;
+    }
 
-  // Active file stats
-  const activeEntries = activeFile?.entries ?? [];
-  const activeTotal = activeEntries.length;
-  const activeTranslated = activeEntries.filter(
-    (e) => e.status !== "untranslated",
-  ).length;
+    const activeEntries = activeFile?.entries ?? [];
+    const activeTotalCount = activeEntries.filter(isTranslatableEntry).length;
+    const activeTranslatedCount = activeEntries.filter(isTranslatedEntry).length;
+
+    return {
+      totalEntries: total,
+      translatedEntries: translated,
+      percent: total > 0 ? Math.round((translated / total) * 100) : 0,
+      activeTotal: activeTotalCount,
+      activeTranslated: activeTranslatedCount,
+    };
+  }, [project.files, activeFile]);
 
   return (
     <footer className="flex h-6 items-center justify-between border-t bg-muted/50 px-3 text-xs text-muted-foreground">

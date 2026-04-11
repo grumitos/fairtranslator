@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { isTranslatableEntry, isTranslatedEntry } from "@/lib/translationMetrics";
 import { useProjectStore } from "@/stores/projectStore";
 import { cn } from "@/lib/utils";
 import { FileText, FolderOpen } from "lucide-react";
@@ -33,24 +34,42 @@ export function Sidebar() {
     setActiveFile(file);
   };
 
-  // Group files by category based on filename
-  const grouped = groupFiles(files, {
-    system: t("sidebar.groups.system"),
-    database: t("sidebar.groups.database"),
-    events: t("sidebar.groups.events"),
-    maps: t("sidebar.groups.maps"),
-  });
+  const { grouped, globalStats } = useMemo(() => {
+    const labels = {
+      system: t("sidebar.groups.system"),
+      database: t("sidebar.groups.database"),
+      events: t("sidebar.groups.events"),
+      maps: t("sidebar.groups.maps"),
+    };
+    const groups = groupFiles(files, labels);
+    let total = 0;
+    let translated = 0;
 
-  // Global progress
-  const globalStats = useMemo(() => {
-    const total = files.reduce((sum, f) => sum + f.entries.length, 0);
-    const translated = files.reduce(
-      (sum, f) => sum + f.entries.filter((e) => e.status !== "untranslated").length,
-      0,
-    );
-    const percent = total > 0 ? Math.round((translated / total) * 100) : 0;
-    return { total, translated, percent };
-  }, [files]);
+    const groupedWithStats = groups.map((group) => ({
+      ...group,
+      files: group.files.map((file) => {
+        const entryCount = file.entries.filter(isTranslatableEntry).length;
+        const translatedCount = file.entries.filter(isTranslatedEntry).length;
+        total += entryCount;
+        translated += translatedCount;
+        return {
+          file,
+          entryCount,
+          translatedCount,
+          percent: entryCount > 0 ? Math.round((translatedCount / entryCount) * 100) : 0,
+        };
+      }),
+    }));
+
+    return {
+      grouped: groupedWithStats,
+      globalStats: {
+        total,
+        translated,
+        percent: total > 0 ? Math.round((translated / total) * 100) : 0,
+      },
+    };
+  }, [files, t]);
 
   return (
     <aside className="flex h-full w-full flex-col bg-sidebar text-sidebar-foreground">
@@ -96,15 +115,8 @@ export function Sidebar() {
               <div className="px-2 py-1 text-xs font-semibold uppercase text-muted-foreground tracking-wider">
                 {group.label}
               </div>
-              {group.files.map((file) => {
+              {group.files.map(({ file, entryCount, translatedCount, percent }) => {
                 const isActive = activeFile?.relativePath === file.relativePath;
-                const entryCount = file.entries.length;
-                const translatedCount = file.entries.filter(
-                  (e) => e.status !== "untranslated",
-                ).length;
-                const percent = entryCount > 0
-                  ? Math.round((translatedCount / entryCount) * 100)
-                  : 0;
 
                 return (
                   <button

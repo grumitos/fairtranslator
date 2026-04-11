@@ -9,9 +9,11 @@ use serde_json::{Map, Value};
 use crate::error::AppError;
 use crate::models::{Engine, EntryStatus, Project};
 use crate::parser::rpgmaker::{
-    classify_file, FileKind, CODE_CHANGE_NAME, CODE_CHANGE_NICKNAME, CODE_CHANGE_PROFILE,
-    CODE_SCROLL_TEXT, CODE_SHOW_CHOICES, CODE_SHOW_TEXT, DB_TEXT_FIELDS,
+    classify_file, classify_relative_path, parse_plugins_js, render_plugins_js, FileKind,
+    CODE_CHANGE_NAME, CODE_CHANGE_NICKNAME, CODE_CHANGE_PROFILE, CODE_SCROLL_TEXT,
+    CODE_SHOW_CHOICES, CODE_SHOW_TEXT, DB_TEXT_FIELDS,
 };
+use crate::services::translation_integrity;
 
 const LEGACY_DB_TEXT_FIELDS: &[(&str, &str)] = &[
     ("name", "@name"),
@@ -21,6 +23,16 @@ const LEGACY_DB_TEXT_FIELDS: &[(&str, &str)] = &[
     ("message2", "@message2"),
     ("message3", "@message3"),
     ("message4", "@message4"),
+];
+
+const SAFE_WEB_FONT_FALLBACKS: &[&str] = &[
+    "\"Segoe UI\"",
+    "Meiryo",
+    "\"Hiragino Sans\"",
+    "\"Noto Sans\"",
+    "Verdana",
+    "Arial",
+    "sans-serif",
 ];
 
 // ---------------------------------------------------------------------------
@@ -37,6 +49,8 @@ pub struct ExportResult {
     pub entries_applied: usize,
     /// Total number of entries in the project (for context).
     pub total_entries: usize,
+    /// Non-blocking integrity warnings discovered during export preflight.
+    pub warnings: Vec<String>,
 }
 
 trait EngineExporter {
@@ -126,6 +140,12 @@ fn export_mv_mz_project(project: &Project, output_dir: &Path) -> Result<ExportRe
     let game_dir = validate_game_dir(project)?;
     prepare_export_destination(&game_dir, output_dir)?;
     validate_project_source_files(project, &game_dir)?;
+    let validation = translation_integrity::validate_project_for_export(project);
+    if validation.has_errors() {
+        return Err(AppError::Project(
+            translation_integrity::summarize_export_errors(&validation.errors),
+        ));
+    }
     if let Err(error) = copy_dir_recursive(&game_dir, output_dir) {
         let _ = std::fs::remove_dir_all(output_dir);
         return Err(error);
@@ -133,35 +153,59 @@ fn export_mv_mz_project(project: &Project, output_dir: &Path) -> Result<ExportRe
 
     let (translations, total_entries) = collect_translations(project);
 
+    let prefer_system_fonts = project_requires_safe_web_fonts(project);
+    let mut export_warnings = validation.warnings.clone();
+
     let export_result = (|| {
         let mut files_exported: usize = 0;
         let mut entries_applied: usize = 0;
+        let mut font_fallback_applied = false;
 
         for file in &project.files {
             let copied_path = output_dir.join(&file.relative_path);
             let content = std::fs::read_to_string(&copied_path)?;
-            let mut json: Value = serde_json::from_str(&content)?;
-
             let stem = Path::new(&file.relative_path)
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or("")
                 .to_string();
-            let kind = classify_file(&stem);
+            let kind = classify_relative_path(&file.relative_path);
+            let mut json = match kind {
+                FileKind::Plugins => parse_plugins_js(&content)?,
+                _ => serde_json::from_str(&content)?,
+            };
 
             let applied = apply_translations(&stem, &kind, &mut json, &translations)?;
             entries_applied += applied;
 
-            let output_content = serde_json::to_string_pretty(&json)?;
+            if prefer_system_fonts && stem == "System" {
+                font_fallback_applied |= patch_mv_mz_system_font_preferences(&mut json);
+            }
+
+            let output_content = match kind {
+                FileKind::Plugins => render_plugins_js(&json)?,
+                _ => serde_json::to_string_pretty(&json)?,
+            };
             std::fs::write(&copied_path, output_content)?;
 
             files_exported += 1;
+        }
+
+        if prefer_system_fonts {
+            font_fallback_applied |= patch_exported_mv_mz_system_font_file(output_dir)?;
+        }
+
+        if font_fallback_applied {
+            export_warnings.push(
+                "Export forced safe system fonts for translated Latin text; the original webfont stayed in the copy, but dialogue/menu rendering now prefers a glyph-complete fallback stack.".into(),
+            );
         }
 
         Ok(ExportResult {
             files_exported,
             entries_applied,
             total_entries,
+            warnings: export_warnings.clone(),
         })
     })();
 
@@ -188,6 +232,12 @@ fn export_legacy_project(project: &Project, output_dir: &Path) -> Result<ExportR
     let game_dir = validate_game_dir(project)?;
     prepare_export_destination(&game_dir, output_dir)?;
     validate_project_source_files(project, &game_dir)?;
+    let validation = translation_integrity::validate_project_for_export(project);
+    if validation.has_errors() {
+        return Err(AppError::Project(
+            translation_integrity::summarize_export_errors(&validation.errors),
+        ));
+    }
     if let Err(error) = copy_dir_recursive(&game_dir, output_dir) {
         let _ = std::fs::remove_dir_all(output_dir);
         return Err(error);
@@ -218,6 +268,7 @@ fn export_legacy_project(project: &Project, output_dir: &Path) -> Result<ExportR
             files_exported,
             entries_applied,
             total_entries,
+            warnings: validation.warnings.clone(),
         })
     })();
 
@@ -358,13 +409,110 @@ fn collect_translations(project: &Project) -> (HashMap<String, String>, usize) {
     for file in &project.files {
         for entry in &file.entries {
             total_entries += 1;
-            if entry.status != EntryStatus::Untranslated && !entry.translation.is_empty() {
+            if entry.status != EntryStatus::Untranslated && !entry.translation.trim().is_empty() {
                 translations.insert(entry.id.clone(), entry.translation.clone());
             }
         }
     }
 
     (translations, total_entries)
+}
+
+fn project_requires_safe_web_fonts(project: &Project) -> bool {
+    project
+        .files
+        .iter()
+        .flat_map(|file| file.entries.iter())
+        .any(|entry| {
+            entry.status != EntryStatus::Untranslated
+                && !entry.translation.trim().is_empty()
+                && contains_extended_latin_chars(&entry.translation)
+        })
+}
+
+fn contains_extended_latin_chars(text: &str) -> bool {
+    text.chars()
+        .any(|ch| ch == '¡' || ch == '¿' || matches!(ch, '\u{00C0}'..='\u{024F}'))
+}
+
+fn build_safe_web_font_stack(existing: &str) -> String {
+    let mut fonts: Vec<String> = Vec::new();
+
+    for font in SAFE_WEB_FONT_FALLBACKS {
+        if !fonts
+            .iter()
+            .any(|candidate| candidate.eq_ignore_ascii_case(font))
+        {
+            fonts.push((*font).to_string());
+        }
+    }
+
+    for font in existing
+        .split(',')
+        .map(str::trim)
+        .filter(|font| !font.is_empty())
+    {
+        if !fonts
+            .iter()
+            .any(|candidate| candidate.eq_ignore_ascii_case(font))
+        {
+            fonts.push(font.to_string());
+        }
+    }
+
+    fonts.join(", ")
+}
+
+fn patch_mv_mz_system_font_preferences(system_json: &mut Value) -> bool {
+    let Some(advanced) = system_json
+        .get_mut("advanced")
+        .and_then(Value::as_object_mut)
+    else {
+        return false;
+    };
+
+    let current_fallbacks = advanced
+        .get("fallbackFonts")
+        .and_then(Value::as_str)
+        .unwrap_or("sans-serif")
+        .to_string();
+    let desired_fallbacks = build_safe_web_font_stack(&current_fallbacks);
+    let current_main_font = advanced
+        .get("mainFontFilename")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+
+    let mut changed = false;
+
+    if !current_main_font.is_empty() {
+        advanced.insert("mainFontFilename".into(), Value::String(String::new()));
+        changed = true;
+    }
+
+    if current_fallbacks != desired_fallbacks {
+        advanced.insert("fallbackFonts".into(), Value::String(desired_fallbacks));
+        changed = true;
+    }
+
+    changed
+}
+
+fn patch_exported_mv_mz_system_font_file(output_dir: &Path) -> Result<bool, AppError> {
+    let system_path = output_dir.join("data").join("System.json");
+    if !system_path.is_file() {
+        return Ok(false);
+    }
+
+    let content = std::fs::read_to_string(&system_path)?;
+    let mut json: Value = serde_json::from_str(&content)?;
+    let changed = patch_mv_mz_system_font_preferences(&mut json);
+    if changed {
+        let output_content = serde_json::to_string_pretty(&json)?;
+        std::fs::write(&system_path, output_content)?;
+    }
+
+    Ok(changed)
 }
 
 fn read_marshal_value(path: &Path) -> Result<Value, AppError> {
@@ -417,6 +565,7 @@ fn apply_legacy_translations(
         FileKind::CommonEvents => apply_vxace_common_events(json, translations),
         FileKind::Troops => apply_vxace_troops(json, translations),
         FileKind::System => apply_vxace_system(json, translations),
+        FileKind::Plugins => Ok(0),
         FileKind::Ignored => Ok(0),
     }
 }
@@ -867,8 +1016,96 @@ fn apply_translations(
         FileKind::CommonEvents => apply_common_events(json, translations),
         FileKind::Troops => apply_troops(json, translations),
         FileKind::System => apply_system(json, translations),
+        FileKind::Plugins => apply_plugins(json, translations),
         FileKind::Ignored => Ok(0),
     }
+}
+
+fn apply_plugins(json: &mut Value, translations: &HashMap<String, String>) -> Result<usize, AppError> {
+    let plugins = json
+        .as_array_mut()
+        .ok_or_else(|| AppError::Parse("Plugins: expected JSON array".into()))?;
+
+    let mut applied = 0;
+
+    for (plugin_index, plugin) in plugins.iter_mut().enumerate() {
+        let Some(plugin_obj) = plugin.as_object_mut() else {
+            continue;
+        };
+
+        if let Some(description) = plugin_obj.get_mut("description") {
+            applied += apply_plugin_value(
+                description,
+                &format!("Plugins:{plugin_index}:description"),
+                translations,
+            )?;
+        }
+
+        if let Some(parameters) = plugin_obj.get_mut("parameters").and_then(Value::as_object_mut) {
+            for (key, value) in parameters.iter_mut() {
+                applied += apply_plugin_value(
+                    value,
+                    &format!("Plugins:{plugin_index}:parameters:{key}"),
+                    translations,
+                )?;
+            }
+        }
+    }
+
+    Ok(applied)
+}
+
+fn apply_plugin_value(
+    value: &mut Value,
+    id_prefix: &str,
+    translations: &HashMap<String, String>,
+) -> Result<usize, AppError> {
+    match value {
+        Value::String(text) => {
+            if let Some(mut parsed) = parse_embedded_plugin_json(text) {
+                let applied =
+                    apply_plugin_value(&mut parsed, &format!("{id_prefix}:json"), translations)?;
+                if applied > 0 {
+                    *text = serde_json::to_string(&parsed)?;
+                }
+                return Ok(applied);
+            }
+
+            if let Some(translation) = translations.get(id_prefix) {
+                if text != translation {
+                    *text = translation.clone();
+                    return Ok(1);
+                }
+            }
+
+            Ok(0)
+        }
+        Value::Object(map) => {
+            let mut applied = 0;
+            for (key, child) in map.iter_mut() {
+                applied +=
+                    apply_plugin_value(child, &format!("{id_prefix}:{key}"), translations)?;
+            }
+            Ok(applied)
+        }
+        Value::Array(items) => {
+            let mut applied = 0;
+            for (index, child) in items.iter_mut().enumerate() {
+                applied +=
+                    apply_plugin_value(child, &format!("{id_prefix}:{index}"), translations)?;
+            }
+            Ok(applied)
+        }
+        _ => Ok(0),
+    }
+}
+
+fn parse_embedded_plugin_json(text: &str) -> Option<Value> {
+    let trimmed = text.trim();
+    if !(trimmed.starts_with('{') || trimmed.starts_with('[')) {
+        return None;
+    }
+    serde_json::from_str(trimmed).ok()
 }
 
 // ---------------------------------------------------------------------------
@@ -1316,6 +1553,222 @@ mod tests {
     }
 
     #[test]
+    fn test_collect_translations_skips_whitespace_only_entries() {
+        let project = Project {
+            id: "test".into(),
+            name: "Whitespace".into(),
+            source_lang: "en".into(),
+            target_lang: "es".into(),
+            engine: Engine::Mv,
+            game_dir: "D:\\Games\\Whitespace".into(),
+            files: vec![TranslationFile {
+                relative_path: "data/System.json".into(),
+                entries: vec![
+                    make_entry("System:gameTitle", "Test", "   ", EntryStatus::Draft),
+                    make_entry("System:terms.basic.0", "Level", "Nivel", EntryStatus::Draft),
+                ],
+            }],
+            glossary: vec![],
+            style_guide: vec![],
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+
+        let (translations, total_entries) = collect_translations(&project);
+        assert_eq!(total_entries, 2);
+        assert_eq!(translations.len(), 1);
+        assert_eq!(translations.get("System:terms.basic.0").unwrap(), "Nivel");
+    }
+
+    #[test]
+    fn test_export_project_blocks_multiline_drift() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "fairtl_export_block_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        let data_dir = temp_dir.join("data");
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::write(
+            data_dir.join("Map001.json"),
+            r#"{"displayName":"","events":[null,{"id":1,"name":"EV001","pages":[{"list":[{"code":401,"parameters":["Line 1"]},{"code":401,"parameters":["Line 2"]},{"code":0,"parameters":[]}]}]}]}"#,
+        )
+        .unwrap();
+        let js_dir = temp_dir.join("js");
+        fs::create_dir_all(&js_dir).unwrap();
+        fs::write(js_dir.join("rpg_core.js"), "").unwrap();
+
+        let project = Project {
+            id: "test".into(),
+            name: "Block Drift".into(),
+            source_lang: "en".into(),
+            target_lang: "es".into(),
+            engine: Engine::Mv,
+            game_dir: temp_dir.to_string_lossy().into(),
+            files: vec![TranslationFile {
+                relative_path: "data/Map001.json".into(),
+                entries: vec![make_entry(
+                    "Map001:1:0:text:0",
+                    "Line 1\nLine 2",
+                    "Linea 1",
+                    EntryStatus::Draft,
+                )],
+            }],
+            glossary: vec![],
+            style_guide: vec![],
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+
+        let output_dir = std::env::temp_dir().join(format!(
+            "fairtl_export_block_out_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        let error = export_project(&project, &output_dir).unwrap_err();
+        let message = error.to_string();
+
+        assert!(message.contains("Export blocked by translation integrity checks"));
+        assert!(message.contains("changed line count"));
+
+        let _ = fs::remove_dir_all(&temp_dir);
+        let _ = fs::remove_dir_all(&output_dir);
+    }
+
+    fn write_minimal_mz_game(temp_dir: &Path) {
+        let data_dir = temp_dir.join("data");
+        let js_dir = temp_dir.join("js");
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::create_dir_all(&js_dir).unwrap();
+        fs::write(js_dir.join("rmmz_core.js"), "").unwrap();
+        fs::write(
+            data_dir.join("System.json"),
+            r#"{"advanced":{"mainFontFilename":"mplus-1m-regular.woff","numberFontFilename":"mplus-2p-bold-sub.woff","fallbackFonts":"Verdana, sans-serif"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            data_dir.join("Map001.json"),
+            r#"{"displayName":"","events":[null,{"id":1,"name":"EV001","pages":[{"list":[{"code":401,"parameters":["Original line."]},{"code":0,"parameters":[]}]}]}]}"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_export_project_prefers_safe_system_fonts_for_extended_latin_text() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("fairtl_export_font_{}", uuid::Uuid::new_v4()));
+        write_minimal_mz_game(&temp_dir);
+
+        let project = Project {
+            id: "test".into(),
+            name: "Font Safe".into(),
+            source_lang: "en".into(),
+            target_lang: "es".into(),
+            engine: Engine::Mz,
+            game_dir: temp_dir.to_string_lossy().into(),
+            files: vec![
+                TranslationFile {
+                    relative_path: "data/System.json".into(),
+                    entries: vec![],
+                },
+                TranslationFile {
+                    relative_path: "data/Map001.json".into(),
+                    entries: vec![make_entry(
+                        "Map001:1:0:text:0",
+                        "Original line.",
+                        "Las demás estarán aquí.",
+                        EntryStatus::Draft,
+                    )],
+                },
+            ],
+            glossary: vec![],
+            style_guide: vec![],
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+
+        let output_dir = std::env::temp_dir().join(format!(
+            "fairtl_export_font_out_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        let result = export_project(&project, &output_dir).unwrap();
+        let system_json: Value =
+            serde_json::from_str(&fs::read_to_string(output_dir.join("data/System.json")).unwrap())
+                .unwrap();
+
+        assert_eq!(system_json["advanced"]["mainFontFilename"], "");
+        assert!(system_json["advanced"]["fallbackFonts"]
+            .as_str()
+            .unwrap()
+            .contains("Meiryo"));
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("safe system fonts")));
+
+        let _ = fs::remove_dir_all(&temp_dir);
+        let _ = fs::remove_dir_all(&output_dir);
+    }
+
+    #[test]
+    fn test_export_project_keeps_webfont_for_ascii_only_translations() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("fairtl_export_font_ascii_{}", uuid::Uuid::new_v4()));
+        write_minimal_mz_game(&temp_dir);
+
+        let project = Project {
+            id: "test".into(),
+            name: "Font Keep".into(),
+            source_lang: "en".into(),
+            target_lang: "es".into(),
+            engine: Engine::Mz,
+            game_dir: temp_dir.to_string_lossy().into(),
+            files: vec![
+                TranslationFile {
+                    relative_path: "data/System.json".into(),
+                    entries: vec![],
+                },
+                TranslationFile {
+                    relative_path: "data/Map001.json".into(),
+                    entries: vec![make_entry(
+                        "Map001:1:0:text:0",
+                        "Original line.",
+                        "Llegamos a casa.",
+                        EntryStatus::Draft,
+                    )],
+                },
+            ],
+            glossary: vec![],
+            style_guide: vec![],
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+
+        let output_dir = std::env::temp_dir().join(format!(
+            "fairtl_export_font_ascii_out_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        let result = export_project(&project, &output_dir).unwrap();
+        let system_json: Value =
+            serde_json::from_str(&fs::read_to_string(output_dir.join("data/System.json")).unwrap())
+                .unwrap();
+
+        assert_eq!(
+            system_json["advanced"]["mainFontFilename"],
+            "mplus-1m-regular.woff"
+        );
+        assert_eq!(
+            system_json["advanced"]["fallbackFonts"],
+            "Verdana, sans-serif"
+        );
+        assert!(!result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("safe system fonts")));
+
+        let _ = fs::remove_dir_all(&temp_dir);
+        let _ = fs::remove_dir_all(&output_dir);
+    }
+
+    #[test]
     fn test_apply_database() {
         let mut json: Value = serde_json::from_str(
             r#"[
@@ -1539,6 +1992,41 @@ mod tests {
     }
 
     #[test]
+    fn test_apply_plugins_rewrites_stringified_menu_subcommands() {
+        let mut json = parse_plugins_js(
+            r#"var $plugins =
+[
+  {
+    "name": "MenuSubCommand",
+    "status": true,
+    "description": "Menu plugin",
+    "parameters": {
+      "subCommands": "[\"{\\\"Name\\\":\\\"Character Introduction\\\",\\\"ParentName\\\":\\\"Character Introduction\\\"}\"]"
+    }
+  }
+];"#,
+        )
+        .unwrap();
+
+        let mut translations = HashMap::new();
+        translations.insert(
+            "Plugins:0:parameters:subCommands:json:0:json:Name".into(),
+            "Introducción de personajes".into(),
+        );
+        translations.insert(
+            "Plugins:0:parameters:subCommands:json:0:json:ParentName".into(),
+            "Introducción de personajes".into(),
+        );
+
+        let applied = apply_plugins(&mut json, &translations).unwrap();
+        assert_eq!(applied, 2);
+
+        let subcommands = json[0]["parameters"]["subCommands"].as_str().unwrap();
+        assert!(subcommands.contains("Introducción de personajes"));
+        assert!(!subcommands.contains("Character Introduction"));
+    }
+
+    #[test]
     fn test_apply_scroll_text() {
         let mut json: Value = serde_json::from_str(
             r#"[
@@ -1575,6 +2063,7 @@ mod tests {
             game_dir: "C:\\missing".into(),
             files: vec![],
             glossary: vec![],
+            style_guide: vec![],
             created_at: String::new(),
             updated_at: String::new(),
         };
@@ -1606,6 +2095,7 @@ mod tests {
             game_dir: temp_dir.to_string_lossy().into(),
             files: vec![],
             glossary: vec![],
+            style_guide: vec![],
             created_at: String::new(),
             updated_at: String::new(),
         };
@@ -1698,6 +2188,7 @@ mod tests {
                 },
             ],
             glossary: vec![],
+            style_guide: vec![],
             created_at: String::new(),
             updated_at: String::new(),
         };
@@ -1804,6 +2295,7 @@ mod tests {
                 },
             ],
             glossary: vec![],
+            style_guide: vec![],
             created_at: String::new(),
             updated_at: String::new(),
         };
@@ -1899,6 +2391,7 @@ mod tests {
                 },
             ],
             glossary: vec![],
+            style_guide: vec![],
             created_at: String::new(),
             updated_at: String::new(),
         };
@@ -1969,6 +2462,7 @@ mod tests {
                 ],
             }],
             glossary: vec![],
+            style_guide: vec![],
             created_at: String::new(),
             updated_at: String::new(),
         };

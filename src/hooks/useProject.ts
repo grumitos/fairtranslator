@@ -1,7 +1,52 @@
 import { useCallback } from "react";
 import { useProjectStore } from "@/stores/projectStore";
 import * as ipc from "@/lib/ipc";
-import type { Project, EntryStatus, ExportResult } from "@/types/domain";
+import type {
+  Project,
+  EntryStatus,
+  ExportResult,
+  ProjectEntryUpdate,
+} from "@/types/domain";
+
+function applyEntryUpdates(project: Project, updates: ProjectEntryUpdate[]): Project {
+  const updatesByFile = new Map<string, Map<string, ProjectEntryUpdate>>();
+
+  for (const update of updates) {
+    let fileUpdates = updatesByFile.get(update.filePath);
+    if (!fileUpdates) {
+      fileUpdates = new Map<string, ProjectEntryUpdate>();
+      updatesByFile.set(update.filePath, fileUpdates);
+    }
+    fileUpdates.set(update.entryId, update);
+  }
+
+  return {
+    ...project,
+    files: project.files.map((file) => {
+      const fileUpdates = updatesByFile.get(file.relativePath);
+      if (!fileUpdates) {
+        return file;
+      }
+
+      return {
+        ...file,
+        entries: file.entries.map((entry) => {
+          const update = fileUpdates.get(entry.id);
+          if (!update) {
+            return entry;
+          }
+          return {
+            ...entry,
+            translation: update.translation,
+            status: update.status,
+            notes: update.notes ?? entry.notes,
+          };
+        }),
+      };
+    }),
+    updatedAt: new Date().toISOString(),
+  };
+}
 
 /**
  * Hook that combines project store state with IPC operations.
@@ -10,6 +55,7 @@ import type { Project, EntryStatus, ExportResult } from "@/types/domain";
 export function useProject() {
   const project = useProjectStore((s) => s.project);
   const activeFile = useProjectStore((s) => s.activeFile);
+  const isDirty = useProjectStore((s) => s.isDirty);
   const isLoading = useProjectStore((s) => s.isLoading);
   const error = useProjectStore((s) => s.error);
   const setProject = useProjectStore((s) => s.setProject);
@@ -24,7 +70,7 @@ export function useProject() {
       setError(null);
       try {
         const proj = await ipc.projectCreate(gameDir, name, sourceLang, targetLang);
-        setProject(proj);
+        setProject(proj, { markDirty: true });
         return proj;
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -43,7 +89,7 @@ export function useProject() {
       setError(null);
       try {
         const proj = await ipc.projectOpen(path);
-        setProject(proj);
+        setProject(proj, { markDirty: false });
         return proj;
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -63,7 +109,7 @@ export function useProject() {
       try {
         await ipc.projectSave(path);
         const refreshedProject = await ipc.projectGet();
-        replaceProject(refreshedProject);
+        replaceProject(refreshedProject, { markDirty: false });
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         setError(msg);
@@ -83,31 +129,53 @@ export function useProject() {
       status: EntryStatus,
       notes?: string,
     ) => {
+      const store = useProjectStore.getState();
+      const currentProject = store.project;
+      const previousDirty = store.isDirty;
+      const update: ProjectEntryUpdate = {
+        filePath,
+        entryId,
+        translation,
+        status,
+        notes,
+      };
+      if (currentProject) {
+        replaceProject(applyEntryUpdates(currentProject, [update]), { markDirty: true });
+      }
+
       try {
         await ipc.projectUpdateEntry(filePath, entryId, translation, status, notes);
-        // Update local store to reflect change without re-fetching
-        const store = useProjectStore.getState();
-        const proj = store.project;
-        if (!proj) return;
-
-        const updatedFiles = proj.files.map((f) => {
-          if (f.relativePath !== filePath) return f;
-          return {
-            ...f,
-            entries: f.entries.map((e) => {
-              if (e.id !== entryId) return e;
-              return { ...e, translation, status, notes: notes ?? e.notes };
-            }),
-          };
-        });
-
-        const updatedProject: Project = {
-          ...proj,
-          files: updatedFiles,
-          updatedAt: new Date().toISOString(),
-        };
-        replaceProject(updatedProject);
       } catch (e) {
+        if (currentProject) {
+          replaceProject(currentProject, { markDirty: previousDirty });
+        }
+        const msg = e instanceof Error ? e.message : String(e);
+        setError(msg);
+        throw e;
+      }
+    },
+    [replaceProject, setError],
+  );
+
+  const updateEntriesBatch = useCallback(
+    async (updates: ProjectEntryUpdate[]) => {
+      if (updates.length === 0) {
+        return;
+      }
+
+      const store = useProjectStore.getState();
+      const currentProject = store.project;
+      const previousDirty = store.isDirty;
+      if (currentProject) {
+        replaceProject(applyEntryUpdates(currentProject, updates), { markDirty: true });
+      }
+
+      try {
+        await ipc.projectUpdateEntries(updates);
+      } catch (e) {
+        if (currentProject) {
+          replaceProject(currentProject, { markDirty: previousDirty });
+        }
         const msg = e instanceof Error ? e.message : String(e);
         setError(msg);
         throw e;
@@ -137,6 +205,7 @@ export function useProject() {
   return {
     project,
     activeFile,
+    isDirty,
     isLoading,
     error,
     setActiveFile,
@@ -144,6 +213,7 @@ export function useProject() {
     open,
     save,
     updateEntry,
+    updateEntriesBatch,
     exportProject,
   };
 }

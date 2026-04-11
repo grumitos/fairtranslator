@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
 use crate::models::GlossaryTerm;
-use crate::services::provider::{TranslationProvider, TranslationRequest, TranslationResponse};
+use crate::services::provider::{
+    TranslationBatchContext, TranslationProvider, TranslationRequest, TranslationResponse,
+};
 
 /// Maximum texts per API call. DeepL supports up to 50 texts per request.
 const MAX_BATCH_SIZE: usize = 50;
@@ -150,15 +152,25 @@ impl TranslationProvider for DeepLProvider {
         source_lang: &str,
         target_lang: &str,
         glossary: &[GlossaryTerm],
+        context: &TranslationBatchContext,
     ) -> Result<Vec<TranslationResponse>, AppError> {
         let mut all_responses = Vec::with_capacity(requests.len());
         let target = Self::normalize_lang(target_lang);
         let source = Self::normalize_lang(source_lang);
-        let context = Self::build_glossary_context(glossary);
-        let context = if context.is_empty() {
+        let mut context_hint = Self::build_glossary_context(glossary);
+        if !context.style_guide.is_empty() {
+            if !context_hint.is_empty() {
+                context_hint.push_str("\n\n");
+            }
+            context_hint.push_str("Style guidance:\n");
+            for note in &context.style_guide {
+                context_hint.push_str(&format!("- {}\n", note));
+            }
+        }
+        let context = if context_hint.trim().is_empty() {
             None
         } else {
-            Some(context)
+            Some(context_hint)
         };
 
         for chunk in requests.chunks(MAX_BATCH_SIZE) {

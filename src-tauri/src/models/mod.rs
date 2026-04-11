@@ -43,6 +43,8 @@ pub struct Project {
     pub game_dir: String,
     pub files: Vec<TranslationFile>,
     pub glossary: Vec<GlossaryTerm>,
+    #[serde(default)]
+    pub style_guide: Vec<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -82,9 +84,13 @@ pub struct GlossaryTerm {
 pub struct BatchProgress {
     pub files_processed: usize,
     pub total_files: usize,
+    pub chunks_processed: usize,
+    pub total_chunks: usize,
     pub entries_translated: usize,
     pub total_entries: usize,
     pub current_file: String,
+    pub current_file_chunks_processed: usize,
+    pub current_file_total_chunks: usize,
     pub failed_entries: usize,
     pub failed_batches: usize,
     pub warnings: Vec<String>,
@@ -116,7 +122,18 @@ pub struct AiBatchExport {
     pub total_selected_entries: usize,
     pub exported_entries: usize,
     pub entries: Vec<AiBatchEntry>,
+    #[serde(default)]
+    pub response_map: Vec<AiBatchResponseRef>,
     pub prompt: String,
+}
+
+/// Mapping used by compact external-AI prompts to recover real project IDs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiBatchResponseRef {
+    pub local_id: u16,
+    pub file_path: String,
+    pub entry_id: String,
 }
 
 /// A single translated entry returned by an external AI workflow.
@@ -138,4 +155,6 @@ pub struct AiBatchApplyResult {
     pub skipped_entries: usize,
     pub missing_entries: Vec<String>,
     pub duplicate_entries: Vec<String>,
+    pub invalid_entries: Vec<String>,
+    pub warnings: Vec<String>,
 }

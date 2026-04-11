@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Sidebar } from "./Sidebar";
 import { Toolbar } from "./Toolbar";
 import { StatusBar } from "./StatusBar";
@@ -17,17 +17,29 @@ export function AppShell() {
   const sidebarWidth = useSettingsStore((s) => s.sidebarWidth);
   const setSidebarWidth = useSettingsStore((s) => s.setSidebarWidth);
   const [isResizingSidebar, setIsResizingSidebar] = useState(false);
+  const [draftSidebarWidth, setDraftSidebarWidth] = useState(sidebarWidth);
+  const draftSidebarWidthRef = useRef(sidebarWidth);
+  draftSidebarWidthRef.current = draftSidebarWidth;
 
   useKeyboardShortcuts();
+
+  useEffect(() => {
+    if (!isResizingSidebar) {
+      setDraftSidebarWidth(sidebarWidth);
+    }
+  }, [sidebarWidth, isResizingSidebar]);
 
   useEffect(() => {
     if (!isResizingSidebar) return;
 
     const handleMouseMove = (e: MouseEvent) => {
       const newWidth = Math.min(400, Math.max(150, e.clientX));
-      setSidebarWidth(newWidth);
+      setDraftSidebarWidth(newWidth);
     };
-    const handleMouseUp = () => setIsResizingSidebar(false);
+    const handleMouseUp = () => {
+      setIsResizingSidebar(false);
+      setSidebarWidth(draftSidebarWidthRef.current);
+    };
 
     document.addEventListener("mousemove", handleMouseMove);
     document.addEventListener("mouseup", handleMouseUp);
@@ -57,7 +69,7 @@ export function AppShell() {
       {/* Main area: sidebar + resize handle + content */}
       <div className="flex flex-1 overflow-hidden">
         {/* Sidebar */}
-        <div className="flex-shrink-0" style={{ width: sidebarWidth }}>
+        <div className="flex-shrink-0" style={{ width: draftSidebarWidth }}>
           <Sidebar />
         </div>
 

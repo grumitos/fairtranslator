@@ -1,4 +1,4 @@
-import { useRef, type RefObject } from "react";
+import type { RefObject } from "react";
 import { flexRender, type Row, type Table } from "@tanstack/react-table";
 import { cn } from "@/lib/utils";
 import type { EntryWithPath, TranslationGridMeta } from "@/components/editor/translation-grid/types";
@@ -36,7 +36,6 @@ export function TranslationGridTableView({
   totalEntriesText,
 }: TranslationGridTableViewProps) {
   const meta = table.options.meta as TranslationGridMeta | undefined;
-  const clickTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   return (
     <>
@@ -118,14 +117,10 @@ export function TranslationGridTableView({
                         style={{ width: cell.column.getSize(), minWidth: cell.column.getSize() }}
                         onClick={isTranslationCol && !isEditing ? (e) => {
                           e.stopPropagation();
-                          clearTimeout(clickTimerRef.current);
-                          clickTimerRef.current = setTimeout(() => {
-                            meta?.onStartInlineEdit?.(row.original.id);
-                          }, 200);
+                          meta?.onStartInlineEdit?.(row.original.id);
                         } : undefined}
                         onDoubleClick={isTranslationCol ? (e) => {
                           e.stopPropagation();
-                          clearTimeout(clickTimerRef.current);
                           meta?.onOpenDialog?.(row.original);
                         } : undefined}
                       >

@@ -25,7 +25,7 @@ export function useGlossary() {
             ...project,
             glossary: updated,
             updatedAt: new Date().toISOString(),
-          });
+          }, { markDirty: true });
         }
         return updated;
       } catch (e) {
@@ -50,7 +50,7 @@ export function useGlossary() {
             ...project,
             glossary: updated,
             updatedAt: new Date().toISOString(),
-          });
+          }, { markDirty: true });
         }
         return updated;
       } catch (e) {
@@ -75,7 +75,7 @@ export function useGlossary() {
             ...project,
             glossary: updated,
             updatedAt: new Date().toISOString(),
-          });
+          }, { markDirty: true });
         }
         return updated;
       } catch (e) {
@@ -96,8 +96,7 @@ export function useGlossary() {
         replaceProject({
           ...project,
           glossary: terms,
-          updatedAt: new Date().toISOString(),
-        });
+        }, { markDirty: "preserve" });
       }
       return terms;
     } catch (e) {

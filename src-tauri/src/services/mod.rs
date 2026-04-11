@@ -1,8 +1,12 @@
 pub mod ai_batch;
 pub mod codex;
+pub mod compact_prompt;
 pub mod deepl;
 pub mod exporter;
 pub mod google;
 pub mod openai;
 pub mod persistence;
 pub mod provider;
+pub mod translation_apply;
+pub mod translation_integrity;
+pub mod translation_orchestrator;

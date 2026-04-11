@@ -11,6 +11,7 @@ import {
   Download,
   Settings,
   BookOpen,
+  FileText,
   Languages,
   Replace,
   Sun,
@@ -25,13 +26,14 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { NewProjectDialog } from "@/components/layout/NewProjectDialog";
 import { SettingsPanel } from "@/components/layout/SettingsPanel";
 import { GlossaryPanel } from "@/components/layout/GlossaryPanel";
+import { StyleGuidePanel } from "@/components/layout/StyleGuidePanel";
 import { BatchTranslatePanel } from "@/components/layout/BatchTranslatePanel";
 import { IconAction } from "@/components/layout/toolbar/IconAction";
 import type { EntryStatus } from "@/types/domain";
 
 export function Toolbar() {
   const { t } = useTranslation(["common", "editor"]);
-  const { project, save, isLoading, open, exportProject } = useProject();
+  const { project, save, isDirty, isLoading, open, exportProject } = useProject();
   const searchQuery = useEditorStore((s) => s.searchQuery);
   const setSearchQuery = useEditorStore((s) => s.setSearchQuery);
   const statusFilter = useEditorStore((s) => s.statusFilter);
@@ -43,6 +45,7 @@ export function Toolbar() {
   const [showNewDialog, setShowNewDialog] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showGlossary, setShowGlossary] = useState(false);
+  const [showStyleGuide, setShowStyleGuide] = useState(false);
   const [showBatchTranslate, setShowBatchTranslate] = useState(false);
 
   const handleSave = useCallback(async () => {
@@ -56,6 +59,10 @@ export function Toolbar() {
   }, [save, t]);
 
   const handleOpen = useCallback(async () => {
+    if (isDirty && !window.confirm(t("common:unsavedChanges.openProject"))) {
+      return;
+    }
+
     const selected = await dialogOpen({ directory: true, title: t("common:openProject"), filters: [] });
     if (selected && typeof selected === "string") {
       try {
@@ -66,7 +73,7 @@ export function Toolbar() {
         });
       }
     }
-  }, [open, t]);
+  }, [isDirty, open, t]);
 
   const handleExport = useCallback(async () => {
     const selected = await dialogOpen({ directory: true, title: t("common:export.selectFolder") });
@@ -80,6 +87,13 @@ export function Toolbar() {
             total: result.totalEntries,
           }),
         });
+        if (result.warnings.length > 0) {
+          toast.warning(t("common:export.warning"), {
+            description: `${t("common:export.warningDetail", {
+              count: result.warnings.length,
+            })} ${result.warnings.slice(0, 2).join(" ")}`.trim(),
+          });
+        }
       } catch (error) {
         toast.error(t("common:error"), {
           description: error instanceof Error ? error.message : String(error),
@@ -129,6 +143,13 @@ export function Toolbar() {
           disabled={!project}
         >
           <BookOpen className="size-4" />
+        </IconAction>
+        <IconAction
+          label={t("editor:toolbar.styleGuide")}
+          onClick={() => setShowStyleGuide(true)}
+          disabled={!project}
+        >
+          <FileText className="size-4" />
         </IconAction>
         <IconAction
           label={`${t("editor:toolbar.findReplace")} - ${t("editor:toolbar.findReplaceShortcut")}`}
@@ -184,6 +205,7 @@ export function Toolbar() {
       <NewProjectDialog open={showNewDialog} onOpenChange={setShowNewDialog} />
       <SettingsPanel open={showSettings} onOpenChange={setShowSettings} />
       <GlossaryPanel open={showGlossary} onOpenChange={setShowGlossary} />
+      <StyleGuidePanel open={showStyleGuide} onOpenChange={setShowStyleGuide} />
       <BatchTranslatePanel open={showBatchTranslate} onOpenChange={setShowBatchTranslate} />
     </>
   );

@@ -43,6 +43,7 @@ struct ApplyReport {
     applied_entries: usize,
     skipped_entries: usize,
     batches_applied: usize,
+    validation_warnings: Vec<String>,
     export_dir: String,
     export_files: usize,
     export_entries_applied: usize,
@@ -227,6 +228,7 @@ fn main() -> ExitCode {
     let expected_entries = total_entries(&project.files);
     let mut applied_entries = 0usize;
     let mut skipped_entries = 0usize;
+    let mut validation_warnings = Vec::new();
 
     for batch in &manifest.batches {
         let entries_path = PathBuf::from(&batch.entries_path);
@@ -266,14 +268,33 @@ fn main() -> ExitCode {
             Some(&batch.batch_id),
         ) {
             Ok(translations) => translations,
-            Err(error) => {
-                eprintln!(
-                    "Respuesta invalida para batch {} ({}): {}",
-                    batch.index,
-                    response_path.display(),
-                    error
-                );
-                return ExitCode::from(1);
+            Err(_error) => {
+                let response_map = expected_entries_batch
+                    .iter()
+                    .enumerate()
+                    .map(|(index, entry)| app_lib::models::AiBatchResponseRef {
+                        local_id: u16::try_from(index + 1).unwrap_or(u16::MAX),
+                        file_path: entry.file_path.clone(),
+                        entry_id: entry.entry_id.clone(),
+                    })
+                    .collect::<Vec<_>>();
+                match ai_batch::parse_ai_batch_response_with_refs(
+                    &raw_response,
+                    Some(&project.id),
+                    Some(&batch.batch_id),
+                    Some(&response_map),
+                ) {
+                    Ok(translations) => translations,
+                    Err(compact_error) => {
+                        eprintln!(
+                            "Respuesta invalida para batch {} ({}): {}",
+                            batch.index,
+                            response_path.display(),
+                            compact_error
+                        );
+                        return ExitCode::from(1);
+                    }
+                }
             }
         };
 
@@ -289,18 +310,23 @@ fn main() -> ExitCode {
 
         let result =
             ai_batch::apply_ai_batch_updates(&mut project, &translations, options.status.clone());
-        if !result.missing_entries.is_empty() || !result.duplicate_entries.is_empty() {
+        if !result.missing_entries.is_empty()
+            || !result.duplicate_entries.is_empty()
+            || !result.invalid_entries.is_empty()
+        {
             eprintln!(
-                "Batch {} no pudo aplicarse limpio: missing={}, duplicates={}",
+                "Batch {} no pudo aplicarse limpio: missing={}, duplicates={}, invalid={}",
                 batch.index,
                 result.missing_entries.len(),
-                result.duplicate_entries.len()
+                result.duplicate_entries.len(),
+                result.invalid_entries.len()
             );
             return ExitCode::from(1);
         }
 
         applied_entries += result.applied_entries;
         skipped_entries += result.skipped_entries;
+        validation_warnings.extend(result.warnings);
     }
 
     if let Err(error) = persistence::save_project(&project, &project_path) {
@@ -325,6 +351,7 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    validation_warnings.extend(export_result.warnings.clone());
 
     let reopened = match parse_game(&export_dir) {
         Ok(parsed) => parsed,
@@ -362,6 +389,7 @@ fn main() -> ExitCode {
         applied_entries,
         skipped_entries,
         batches_applied: manifest.batches.len(),
+        validation_warnings,
         export_dir: export_dir.display().to_string(),
         export_files: export_result.files_exported,
         export_entries_applied: export_result.entries_applied,
@@ -387,10 +415,11 @@ fn main() -> ExitCode {
     }
 
     println!(
-        "[OK] {} => applied={} skipped={} exportFiles={} exportEntries={} reopenedEntries={}",
+        "[OK] {} => applied={} skipped={} warnings={} exportFiles={} exportEntries={} reopenedEntries={}",
         manifest.sample_name,
         applied_entries,
         skipped_entries,
+        report.validation_warnings.len(),
         export_result.files_exported,
         export_result.entries_applied,
         report.reopened_entries

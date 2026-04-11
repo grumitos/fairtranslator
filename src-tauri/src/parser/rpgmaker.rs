@@ -49,6 +49,7 @@ pub enum FileKind {
     CommonEvents,
     Troops,
     System,
+    Plugins,
     Ignored,
 }
 
@@ -72,6 +73,19 @@ pub fn classify_file(stem: &str) -> FileKind {
         FileKind::Map
     } else {
         FileKind::Ignored
+    }
+}
+
+pub fn classify_relative_path(path: &str) -> FileKind {
+    let normalized = path.replace('\\', "/");
+    if normalized.eq_ignore_ascii_case("js/plugins.js") {
+        FileKind::Plugins
+    } else {
+        let stem = Path::new(&normalized)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        classify_file(stem)
     }
 }
 
@@ -255,18 +269,42 @@ pub fn resolve_game_dir(selected_dir: &Path) -> Result<PathBuf, AppError> {
 /// that contain translatable content (ignoring MapInfos, Tilesets, Animations, etc.).
 pub fn scan_game_dir(game_dir: &Path) -> Result<Vec<PathBuf>, AppError> {
     let data_dir = game_dir.join("data");
-    if !data_dir.is_dir() {
+    let mut files = if !data_dir.is_dir() {
         // MV sometimes uses "Data" (capital D)
         let alt = game_dir.join("Data");
         if alt.is_dir() {
-            return scan_data_dir(&alt);
+            scan_data_dir(&alt)?
+        } else {
+            return Err(AppError::NotFound(format!(
+                "No 'data' directory found in {}",
+                game_dir.display()
+            )));
         }
-        return Err(AppError::NotFound(format!(
-            "No 'data' directory found in {}",
-            game_dir.display()
-        )));
+    } else {
+        scan_data_dir(&data_dir)?
+    };
+
+    if let Some(plugins_path) = mv_mz_plugins_path(game_dir) {
+        files.push(plugins_path);
     }
-    scan_data_dir(&data_dir)
+
+    files.sort_by(|a, b| {
+        let rel_a = a
+            .strip_prefix(game_dir)
+            .unwrap_or(a)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let rel_b = b
+            .strip_prefix(game_dir)
+            .unwrap_or(b)
+            .to_string_lossy()
+            .replace('\\', "/");
+        file_kind_sort_order(&classify_relative_path(&rel_a))
+            .cmp(&file_kind_sort_order(&classify_relative_path(&rel_b)))
+            .then(rel_a.cmp(&rel_b))
+    });
+
+    Ok(files)
 }
 
 fn scan_data_dir(data_dir: &Path) -> Result<Vec<PathBuf>, AppError> {
@@ -290,11 +328,12 @@ fn scan_data_dir(data_dir: &Path) -> Result<Vec<PathBuf>, AppError> {
         let order = |s: &str| -> u8 {
             match classify_file(s) {
                 FileKind::System => 0,
-                FileKind::Database => 1,
-                FileKind::CommonEvents => 2,
-                FileKind::Troops => 3,
-                FileKind::Map => 4,
-                FileKind::Ignored => 5,
+                FileKind::Plugins => 1,
+                FileKind::Database => 2,
+                FileKind::CommonEvents => 3,
+                FileKind::Troops => 4,
+                FileKind::Map => 5,
+                FileKind::Ignored => 6,
             }
         };
         order(sa).cmp(&order(sb)).then(sa.cmp(sb))
@@ -314,25 +353,23 @@ pub fn parse_mv_mz_game(game_dir: &Path) -> Result<Vec<TranslationFile>, AppErro
     let mut translation_files = Vec::new();
 
     for path in &json_files {
-        let stem = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_string();
-        let kind = classify_file(&stem);
+        let rel_path = path
+            .strip_prefix(game_dir)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+        let kind = classify_relative_path(&rel_path);
 
         let content = std::fs::read_to_string(path)?;
-        let json: Value = serde_json::from_str(&content)?;
+        let json = match kind {
+            FileKind::Plugins => parse_plugins_js(&content)?,
+            _ => serde_json::from_str(&content)?,
+        };
 
         let entries = extract_entries(&stem, &kind, &json)?;
 
         if !entries.is_empty() {
-            // Relative path from game_dir
-            let rel_path = path
-                .strip_prefix(game_dir)
-                .unwrap_or(path)
-                .to_string_lossy()
-                .replace('\\', "/");
             translation_files.push(TranslationFile {
                 relative_path: rel_path,
                 entries,
@@ -358,8 +395,25 @@ fn extract_entries(
         FileKind::CommonEvents => extract_common_events_entries(json),
         FileKind::Troops => extract_troops_entries(json),
         FileKind::System => extract_system_entries(json),
+        FileKind::Plugins => extract_plugins_entries(json),
         FileKind::Ignored => Ok(Vec::new()),
     }
+}
+
+pub fn parse_plugins_js(content: &str) -> Result<Value, AppError> {
+    let start = content.find('[').ok_or_else(|| {
+        AppError::Parse("plugins.js did not contain a plugin array start".into())
+    })?;
+    let end = content.rfind(']').ok_or_else(|| {
+        AppError::Parse("plugins.js did not contain a plugin array end".into())
+    })?;
+    let payload = &content[start..=end];
+    serde_json::from_str(payload)
+        .map_err(|error| AppError::Parse(format!("plugins.js payload was not valid JSON: {error}")))
+}
+
+pub fn render_plugins_js(json: &Value) -> Result<String, AppError> {
+    Ok(format!("var $plugins =\n{};\n", serde_json::to_string_pretty(json)?))
 }
 
 // ---------------------------------------------------------------------------
@@ -581,6 +635,155 @@ fn extract_system_entries(json: &Value) -> Result<Vec<TranslationEntry>, AppErro
     }
 
     Ok(entries)
+}
+
+fn extract_plugins_entries(json: &Value) -> Result<Vec<TranslationEntry>, AppError> {
+    let plugins = json
+        .as_array()
+        .ok_or_else(|| AppError::Parse("Plugins: expected JSON array".into()))?;
+
+    let mut entries = Vec::new();
+
+    for (plugin_index, plugin) in plugins.iter().enumerate() {
+        let Some(plugin_obj) = plugin.as_object() else {
+            continue;
+        };
+        let plugin_name = plugin_obj
+            .get("name")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("Plugin");
+
+        if let Some(Value::String(description)) = plugin_obj.get("description") {
+            if !description.trim().is_empty() {
+                entries.push(make_entry(
+                    &format!("Plugins:{plugin_index}:description"),
+                    &format!("Plugins > #{plugin_index} ({plugin_name}) > description"),
+                    description.clone(),
+                ));
+            }
+        }
+
+        if let Some(Value::Object(parameters)) = plugin_obj.get("parameters") {
+            for (key, value) in parameters {
+                extract_plugin_value(
+                    value,
+                    &format!("Plugins:{plugin_index}:parameters:{key}"),
+                    &format!("Plugins > #{plugin_index} ({plugin_name}) > parameters > {key}"),
+                    Some(key.as_str()),
+                    &mut entries,
+                );
+            }
+        }
+    }
+
+    Ok(entries)
+}
+
+fn extract_plugin_value(
+    value: &Value,
+    id_prefix: &str,
+    context_prefix: &str,
+    key_hint: Option<&str>,
+    entries: &mut Vec<TranslationEntry>,
+) {
+    match value {
+        Value::String(text) => {
+            if let Some(parsed) = parse_embedded_plugin_json(text) {
+                let before = entries.len();
+                extract_plugin_value(
+                    &parsed,
+                    &format!("{id_prefix}:json"),
+                    &format!("{context_prefix} > json"),
+                    key_hint,
+                    entries,
+                );
+                if entries.len() > before {
+                    return;
+                }
+            }
+
+            if should_extract_plugin_string(key_hint, text) {
+                entries.push(make_entry(id_prefix, context_prefix, text.clone()));
+            }
+        }
+        Value::Object(map) => {
+            for (key, child) in map {
+                extract_plugin_value(
+                    child,
+                    &format!("{id_prefix}:{key}"),
+                    &format!("{context_prefix} > {key}"),
+                    Some(key.as_str()),
+                    entries,
+                );
+            }
+        }
+        Value::Array(items) => {
+            for (index, child) in items.iter().enumerate() {
+                extract_plugin_value(
+                    child,
+                    &format!("{id_prefix}:{index}"),
+                    &format!("{context_prefix}[{index}]"),
+                    key_hint,
+                    entries,
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
+fn parse_embedded_plugin_json(text: &str) -> Option<Value> {
+    let trimmed = text.trim();
+    if !(trimmed.starts_with('{') || trimmed.starts_with('[')) {
+        return None;
+    }
+    serde_json::from_str(trimmed).ok()
+}
+
+fn should_extract_plugin_string(key_hint: Option<&str>, text: &str) -> bool {
+    if text.trim().is_empty() {
+        return false;
+    }
+
+    key_hint
+        .map(plugin_key_is_translatable)
+        .unwrap_or(false)
+}
+
+fn plugin_key_is_translatable(key: &str) -> bool {
+    matches!(
+        key.trim().to_ascii_lowercase().as_str(),
+        "description"
+            | "name"
+            | "parentname"
+            | "text"
+            | "helptext"
+            | "commonhelptext"
+            | "title"
+            | "label"
+            | "optiontext"
+            | "optionname"
+    )
+}
+
+fn mv_mz_plugins_path(game_dir: &Path) -> Option<PathBuf> {
+    ["plugins.js", "Plugins.js"]
+        .into_iter()
+        .map(|file_name| game_dir.join("js").join(file_name))
+        .find(|path| path.is_file())
+}
+
+fn file_kind_sort_order(kind: &FileKind) -> u8 {
+    match kind {
+        FileKind::System => 0,
+        FileKind::Plugins => 1,
+        FileKind::Database => 2,
+        FileKind::CommonEvents => 3,
+        FileKind::Troops => 4,
+        FileKind::Map => 5,
+        FileKind::Ignored => 6,
+    }
 }
 
 /// Recursively extract string values from the terms object.
@@ -832,6 +1035,7 @@ mod tests {
         assert_eq!(classify_file("Tilesets"), FileKind::Ignored);
         assert_eq!(classify_file("Animations"), FileKind::Ignored);
         assert_eq!(classify_file("MapInfos"), FileKind::Ignored);
+        assert_eq!(classify_relative_path("js/plugins.js"), FileKind::Plugins);
     }
 
     #[test]
@@ -1003,6 +1207,52 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].id, "Map001:1:0:changeProfile:0");
         assert_eq!(entries[0].original, "A warrior from the north.");
+    }
+
+    #[test]
+    fn test_extract_plugins_entries_from_stringified_json_parameters() {
+        let json = parse_plugins_js(
+            r#"var $plugins =
+[
+  {
+    "name": "MenuSubCommand",
+    "status": true,
+    "description": "Menu plugin",
+    "parameters": {
+      "subCommands": "[\"{\\\"Name\\\":\\\"Character Introduction\\\",\\\"ParentName\\\":\\\"Character Introduction\\\"}\",\"{\\\"Name\\\":\\\"時間変更\\\",\\\"ParentName\\\":\\\"時間変更\\\"}\"]",
+      "help": "{\"CommonHelpText\":\"Are you sure?\",\"CommandList\":\"[\\\"{\\\\\\\"Text\\\\\\\":\\\\\\\"Yes.\\\\\\\"}\\\",\\\"{\\\\\\\"Text\\\\\\\":\\\\\\\"No.\\\\\\\"}\\\"]\"}"
+    }
+  }
+];"#,
+        )
+        .unwrap();
+
+        let entries = extract_plugins_entries(&json).unwrap();
+        let ids = entries
+            .iter()
+            .map(|entry| (entry.id.clone(), entry.original.clone()))
+            .collect::<Vec<_>>();
+
+        assert!(ids.contains(&(
+            "Plugins:0:description".to_string(),
+            "Menu plugin".to_string()
+        )));
+        assert!(ids.contains(&(
+            "Plugins:0:parameters:subCommands:json:0:json:Name".to_string(),
+            "Character Introduction".to_string()
+        )));
+        assert!(ids.contains(&(
+            "Plugins:0:parameters:subCommands:json:0:json:ParentName".to_string(),
+            "Character Introduction".to_string()
+        )));
+        assert!(ids.contains(&(
+            "Plugins:0:parameters:help:json:CommonHelpText".to_string(),
+            "Are you sure?".to_string()
+        )));
+        assert!(ids.contains(&(
+            "Plugins:0:parameters:help:json:CommandList:json:0:json:Text".to_string(),
+            "Yes.".to_string()
+        )));
     }
 
     #[test]

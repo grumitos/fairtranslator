@@ -237,6 +237,7 @@ fn build_project(
         game_dir: resolved_path.display().to_string(),
         files: parsed.files,
         glossary: Vec::new(),
+        style_guide: Vec::new(),
         created_at: now.clone(),
         updated_at: now,
     }
@@ -244,15 +245,14 @@ fn build_project(
 
 fn response_template_for(batch: &AiBatchExport) -> serde_json::Value {
     json!({
-        "projectId": batch.project_id,
-        "batchId": batch.batch_id,
-        "translations": batch.entries.iter().map(|entry| {
+        "p": batch.project_id,
+        "b": batch.batch_id,
+        "translations": batch.response_map.iter().map(|entry| {
             json!({
-                "filePath": entry.file_path,
-                "entryId": entry.entry_id,
-                "translation": "",
-                "notes": "",
-                "skip": false
+                "k": entry.local_id,
+                "t": "",
+                "n": "",
+                "s": false
             })
         }).collect::<Vec<_>>()
     })

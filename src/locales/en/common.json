@@ -15,6 +15,10 @@
   "new": "New",
   "newProject": "New Project",
   "openProject": "Open Project",
+  "unsavedChanges": {
+    "openProject": "You have unsaved project changes. Open another project and discard them?",
+    "createProject": "You have unsaved project changes. Create a new project and discard them?"
+  },
   "project": "Project",
   "errorBoundary": {
     "title": "Something went wrong",
@@ -61,6 +65,8 @@
     "exporting": "Exporting...",
     "success": "Export completed",
     "successDetail": "{{files}} files exported, {{applied}} of {{total}} translations applied",
+    "warning": "Export completed with warnings",
+    "warningDetail": "{{count}} translation checks still need review.",
     "noTranslations": "No translations to export",
     "errorNoProject": "No project open"
   }

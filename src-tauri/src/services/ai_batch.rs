@@ -1,23 +1,22 @@
-use serde_json::Value;
 use std::collections::HashSet;
 
 use crate::error::AppError;
 use crate::models::{
-    AiBatchApplyResult, AiBatchEntry, AiBatchExport, AiBatchTranslation, EntryStatus, Project,
-    TranslationEntry,
+    AiBatchApplyResult, AiBatchEntry, AiBatchExport, AiBatchResponseRef, AiBatchTranslation,
+    EntryStatus, Project, TranslationEntry,
 };
+use crate::services::compact_prompt;
 use crate::services::persistence;
+use crate::services::provider::{
+    approximate_token_count, TranslationBatchContext, TranslationRequest,
+};
+use crate::services::translation_integrity::{self, IntegrityMode};
+use crate::services::translation_orchestrator;
 
 /// Default batch size when exporting entries for manual or AI-assisted translation.
 pub const DEFAULT_AI_BATCH_MAX_ENTRIES: usize = 200;
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AiBatchResponseEnvelope {
-    project_id: Option<String>,
-    batch_id: Option<String>,
-    translations: Vec<AiBatchTranslation>,
-}
+const EXTERNAL_AI_PROMPT_WRAPPER_TOKEN_OVERHEAD: usize = 96;
+const EXTERNAL_AI_RESPONSE_HEADROOM_TOKENS: usize = 2048;
 
 const INSTRUCTION_PATTERNS: &[(&str, &str)] = &[
     ("press ", "mentions an input action"),
@@ -58,53 +57,6 @@ pub fn instruction_reason_for(entry: &TranslationEntry) -> Option<String> {
     None
 }
 
-fn selected_ai_batch_entries(
-    project: &Project,
-    file_paths: &[String],
-    offset: usize,
-    max_entries: Option<usize>,
-) -> Vec<AiBatchEntry> {
-    let limit = max_entries.unwrap_or(DEFAULT_AI_BATCH_MAX_ENTRIES).max(1);
-    let mut entries: Vec<AiBatchEntry> = Vec::new();
-    let mut skipped = 0usize;
-
-    for file in &project.files {
-        if !file_paths.is_empty() && !file_paths.contains(&file.relative_path) {
-            continue;
-        }
-
-        for entry in &file.entries {
-            let is_untranslated = entry.status == EntryStatus::Untranslated
-                || (entry.translation.trim().is_empty() && entry.status != EntryStatus::Final);
-            if !is_untranslated {
-                continue;
-            }
-
-            if skipped < offset {
-                skipped += 1;
-                continue;
-            }
-
-            let instruction_reason = instruction_reason_for(entry);
-            entries.push(AiBatchEntry {
-                file_path: file.relative_path.clone(),
-                entry_id: entry.id.clone(),
-                file_context: entry.file_context.clone(),
-                original: entry.original.clone(),
-                current_translation: entry.translation.clone(),
-                instruction_candidate: instruction_reason.is_some(),
-                instruction_reason,
-            });
-
-            if entries.len() >= limit {
-                return entries;
-            }
-        }
-    }
-
-    entries
-}
-
 fn total_selected_entries(project: &Project, file_paths: &[String]) -> usize {
     project
         .files
@@ -112,53 +64,111 @@ fn total_selected_entries(project: &Project, file_paths: &[String]) -> usize {
         .filter(|file| file_paths.is_empty() || file_paths.contains(&file.relative_path))
         .flat_map(|file| file.entries.iter())
         .filter(|entry| {
-            entry.status == EntryStatus::Untranslated
-                || (entry.translation.trim().is_empty() && entry.status != EntryStatus::Final)
+            !entry.original.trim().is_empty()
+                && (entry.status == EntryStatus::Untranslated
+                    || (entry.translation.trim().is_empty() && entry.status != EntryStatus::Final))
         })
         .count()
 }
 
-fn build_ai_batch_prompt(
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn build_ai_batch_prompt(
     project: &Project,
     batch_id: &str,
     entries: &[AiBatchEntry],
+    context: &TranslationBatchContext,
 ) -> Result<String, AppError> {
-    let entries_json = serde_json::to_string_pretty(entries)?;
-    Ok(format!(
-        concat!(
-            "Translate the following RPG Maker entries from {source_lang} to {target_lang}.\n",
-            "Return ONLY valid JSON.\n",
-            "Required output shape:\n",
-            "{{\"projectId\": \"{project_id}\", \"batchId\": \"{batch_id}\", \"translations\": [{{\"filePath\": \"...\", \"entryId\": \"...\", \"translation\": \"...\", \"notes\": \"...\", \"skip\": false}}]}}\n",
-            "Rules:\n",
-            "- Preserve entry order.\n",
-            "- Preserve control codes, placeholders, escape sequences and line breaks.\n",
-            "- Do not invent IDs or file paths.\n",
-            "- Echo the exact projectId and batchId shown above.\n",
-            "- If an entry looks like instructions/help text and should stay excluded, set \"skip\": true and leave \"translation\" empty.\n",
-            "- Keep \"notes\" short and optional.\n",
-            "- Project: {project_name}\n",
-            "- Engine: {engine:?}\n",
-            "- Entries:\n",
-            "{entries_json}\n"
-        ),
-        project_id = project.id,
-        batch_id = batch_id,
-        source_lang = project.source_lang,
-        target_lang = project.target_lang,
-        project_name = project.name,
-        engine = project.engine,
-        entries_json = entries_json
-    ))
+    Ok(
+        compact_prompt::build_external_ai_bundle(project, batch_id, entries, context)?
+            .render_single_prompt(),
+    )
+}
+
+pub(crate) fn estimate_ai_batch_prompt_tokens(
+    project: &Project,
+    requests: &[TranslationRequest],
+    context: &TranslationBatchContext,
+) -> usize {
+    let entries = requests
+        .iter()
+        .map(|request| AiBatchEntry {
+            file_path: context.file_path.clone(),
+            entry_id: request.entry_id.clone(),
+            file_context: request.file_context.clone(),
+            original: request.text.clone(),
+            current_translation: String::new(),
+            instruction_candidate: false,
+            instruction_reason: None,
+        })
+        .collect::<Vec<_>>();
+    let prompt =
+        compact_prompt::build_external_ai_bundle(project, "budget-estimate", &entries, context)
+            .expect("serializing compact external AI prompt should not fail")
+            .render_single_prompt();
+
+    approximate_token_count(&prompt)
+        + EXTERNAL_AI_PROMPT_WRAPPER_TOKEN_OVERHEAD
+        + EXTERNAL_AI_RESPONSE_HEADROOM_TOKENS
+}
+
+fn entries_for_chunk(
+    project: &Project,
+    chunk: &translation_orchestrator::PlannedTranslationChunk,
+) -> Vec<AiBatchEntry> {
+    let Some(file) = project
+        .files
+        .iter()
+        .find(|file| file.relative_path == chunk.relative_path)
+    else {
+        return Vec::new();
+    };
+
+    chunk
+        .entries
+        .iter()
+        .map(|request| {
+            let project_entry = file
+                .entries
+                .iter()
+                .find(|entry| entry.id == request.entry_id);
+            let instruction_reason = project_entry.and_then(instruction_reason_for);
+
+            AiBatchEntry {
+                file_path: chunk.relative_path.clone(),
+                entry_id: request.entry_id.clone(),
+                file_context: request.file_context.clone(),
+                original: request.text.clone(),
+                current_translation: project_entry
+                    .map(|entry| entry.translation.clone())
+                    .unwrap_or_default(),
+                instruction_candidate: instruction_reason.is_some(),
+                instruction_reason,
+            }
+        })
+        .collect()
 }
 
 fn make_ai_batch_export(
     project: &Project,
     total_selected_entries: usize,
-    entries: Vec<AiBatchEntry>,
+    chunk: Option<translation_orchestrator::PlannedTranslationChunk>,
 ) -> Result<AiBatchExport, AppError> {
     let batch_id = uuid::Uuid::new_v4().to_string();
-    let prompt = build_ai_batch_prompt(project, &batch_id, &entries)?;
+    let (entries, context) = if let Some(chunk) = chunk {
+        let entries = entries_for_chunk(project, &chunk);
+        (entries, chunk.context)
+    } else {
+        (
+            Vec::new(),
+            TranslationBatchContext {
+                project_name: project.name.clone(),
+                ..TranslationBatchContext::default()
+            },
+        )
+    };
+    let bundle = compact_prompt::build_external_ai_bundle(project, &batch_id, &entries, &context)?;
+    let prompt = bundle.render_single_prompt();
+    let response_map = bundle.response_map();
 
     Ok(AiBatchExport {
         project_id: project.id.clone(),
@@ -170,6 +180,7 @@ fn make_ai_batch_export(
         total_selected_entries,
         exported_entries: entries.len(),
         entries,
+        response_map,
         prompt,
     })
 }
@@ -180,8 +191,10 @@ pub fn export_ai_batch(
     max_entries: Option<usize>,
 ) -> Result<AiBatchExport, AppError> {
     let total = total_selected_entries(project, file_paths);
-    let entries = selected_ai_batch_entries(project, file_paths, 0, max_entries);
-    make_ai_batch_export(project, total, entries)
+    let chunks = translation_orchestrator::build_external_ai_plan(project, file_paths, max_entries);
+    translation_orchestrator::ensure_external_ai_plan_within_budget(project, &chunks)?;
+    let first_chunk = chunks.into_iter().next();
+    make_ai_batch_export(project, total, first_chunk)
 }
 
 pub fn export_ai_batches(
@@ -190,41 +203,16 @@ pub fn export_ai_batches(
     max_entries: Option<usize>,
 ) -> Result<Vec<AiBatchExport>, AppError> {
     let total = total_selected_entries(project, file_paths);
-    if total == 0 {
-        return Ok(vec![make_ai_batch_export(project, 0, Vec::new())?]);
+    let chunks = translation_orchestrator::build_external_ai_plan(project, file_paths, max_entries);
+    translation_orchestrator::ensure_external_ai_plan_within_budget(project, &chunks)?;
+    if chunks.is_empty() {
+        return Ok(vec![make_ai_batch_export(project, 0, None)?]);
     }
 
-    let chunk_size = max_entries.unwrap_or(DEFAULT_AI_BATCH_MAX_ENTRIES).max(1);
-    let mut offset = 0usize;
-    let mut batches = Vec::new();
-
-    while offset < total {
-        let entries = selected_ai_batch_entries(project, file_paths, offset, Some(chunk_size));
-        if entries.is_empty() {
-            break;
-        }
-        offset += entries.len();
-        batches.push(make_ai_batch_export(project, total, entries)?);
-    }
-
-    Ok(batches)
-}
-
-fn strip_markdown_fences(raw: &str) -> &str {
-    let trimmed = raw.trim();
-    if !trimmed.starts_with("```") {
-        return trimmed;
-    }
-
-    let without_open = trimmed
-        .split_once('\n')
-        .map(|(_, rest)| rest)
-        .unwrap_or(trimmed);
-
-    without_open
-        .rsplit_once("```")
-        .map(|(body, _)| body.trim())
-        .unwrap_or(without_open.trim())
+    chunks
+        .into_iter()
+        .map(|chunk| make_ai_batch_export(project, total, Some(chunk)))
+        .collect()
 }
 
 pub fn parse_ai_batch_response(
@@ -232,51 +220,21 @@ pub fn parse_ai_batch_response(
     expected_project_id: Option<&str>,
     expected_batch_id: Option<&str>,
 ) -> Result<Vec<AiBatchTranslation>, AppError> {
-    let normalized = strip_markdown_fences(raw_response);
-    let value: Value = serde_json::from_str(normalized)?;
+    parse_ai_batch_response_with_refs(raw_response, expected_project_id, expected_batch_id, None)
+}
 
-    let translations = match value {
-        Value::Array(items) => {
-            if expected_project_id.is_some() || expected_batch_id.is_some() {
-                return Err(AppError::Parse(
-                    "AI batch response must be an object with matching 'projectId' and 'batchId'"
-                        .to_string(),
-                ));
-            }
-            serde_json::from_value(Value::Array(items))
-                .map_err(|e| AppError::Parse(format!("Invalid AI batch response schema: {e}")))?
-        }
-        Value::Object(map) => {
-            let envelope: AiBatchResponseEnvelope = serde_json::from_value(Value::Object(map))
-                .map_err(|e| AppError::Parse(format!("Invalid AI batch response schema: {e}")))?;
-
-            if let Some(expected) = expected_project_id {
-                if envelope.project_id.as_deref() != Some(expected) {
-                    return Err(AppError::Parse(
-                        "AI batch response projectId does not match the current export batch"
-                            .to_string(),
-                    ));
-                }
-            }
-            if let Some(expected) = expected_batch_id {
-                if envelope.batch_id.as_deref() != Some(expected) {
-                    return Err(AppError::Parse(
-                        "AI batch response batchId does not match the current export batch"
-                            .to_string(),
-                    ));
-                }
-            }
-
-            envelope.translations
-        }
-        _ => {
-            return Err(AppError::Parse(
-                "AI batch response must be a JSON array or an object with 'translations'".into(),
-            ));
-        }
-    };
-
-    Ok(translations)
+pub fn parse_ai_batch_response_with_refs(
+    raw_response: &str,
+    expected_project_id: Option<&str>,
+    expected_batch_id: Option<&str>,
+    response_map: Option<&[AiBatchResponseRef]>,
+) -> Result<Vec<AiBatchTranslation>, AppError> {
+    compact_prompt::parse_external_ai_response(
+        raw_response,
+        expected_project_id,
+        expected_batch_id,
+        response_map,
+    )
 }
 
 fn merge_notes(existing: &str, incoming: Option<&str>) -> String {
@@ -292,6 +250,13 @@ fn merge_notes(existing: &str, incoming: Option<&str>) -> String {
     format!("{}\n{}", existing.trim_end(), incoming)
 }
 
+fn push_warning(warnings: &mut Vec<String>, message: &str) {
+    const MAX_WARNINGS: usize = 8;
+    if warnings.len() < MAX_WARNINGS && !warnings.iter().any(|existing| existing == message) {
+        warnings.push(message.to_string());
+    }
+}
+
 pub fn apply_ai_batch_updates(
     project: &mut Project,
     translations: &[AiBatchTranslation],
@@ -302,6 +267,8 @@ pub fn apply_ai_batch_updates(
         skipped_entries: 0,
         missing_entries: Vec::new(),
         duplicate_entries: Vec::new(),
+        invalid_entries: Vec::new(),
+        warnings: Vec::new(),
     };
     let mut seen: HashSet<(String, String)> = HashSet::new();
 
@@ -336,14 +303,37 @@ pub fn apply_ai_batch_updates(
             continue;
         };
 
-        entry.notes = merge_notes(&entry.notes, update.notes.as_deref());
+        let merged_notes = merge_notes(&entry.notes, update.notes.as_deref());
+        let normalized_translation =
+            translation_integrity::normalize_translation_for_apply(entry, &update.translation);
 
-        if update.skip || update.translation.trim().is_empty() {
+        if update.skip || normalized_translation.trim().is_empty() {
+            entry.notes = merged_notes;
             result.skipped_entries += 1;
             continue;
         }
 
-        entry.translation = update.translation.clone();
+        let validation = translation_integrity::validate_translation(
+            &update.file_path,
+            entry,
+            &normalized_translation,
+            IntegrityMode::AutomatedApply,
+        );
+        if validation.has_errors() {
+            result
+                .invalid_entries
+                .push(format!("{}::{}", update.file_path, update.entry_id));
+            for message in validation.errors.iter().chain(validation.warnings.iter()) {
+                push_warning(&mut result.warnings, message);
+            }
+            continue;
+        }
+
+        for message in &validation.warnings {
+            push_warning(&mut result.warnings, message);
+        }
+        entry.notes = merged_notes;
+        entry.translation = normalized_translation;
         entry.status = mark_status.clone();
         result.applied_entries += 1;
     }
@@ -403,27 +393,57 @@ mod tests {
                 },
             ],
             glossary: Vec::new(),
+            style_guide: Vec::new(),
             created_at: "2026-03-29T00:00:00Z".into(),
             updated_at: "2026-03-29T00:00:00Z".into(),
         }
     }
 
+    fn make_oversized_export_project() -> Project {
+        let mut project = make_test_project();
+        project.files[0].entries[0].original = "A".repeat(18_000);
+        project.glossary = (0..320)
+            .map(|index| crate::models::GlossaryTerm {
+                source: format!("VeryLongSourceTerm{index}_{}", "x".repeat(72)),
+                target: format!("VeryLongTargetTerm{index}_{}", "y".repeat(72)),
+                case_sensitive: true,
+            })
+            .collect();
+        project.style_guide = (0..24)
+            .map(|index| format!("Long export rule {index}: {}", "z".repeat(320)))
+            .collect();
+        project
+    }
+
     #[test]
     fn test_export_ai_batch_flags_instruction_candidates_and_builds_prompt() {
-        let project = make_test_project();
+        let mut project = make_test_project();
+        project.style_guide = vec!["Keep the sibling tone natural in Spanish.".into()];
+        project.glossary = vec![crate::models::GlossaryTerm {
+            source: "Onee-chan".into(),
+            target: "Onee-chan".into(),
+            case_sensitive: true,
+        }];
         let batch = export_ai_batch(&project, &[], Some(10)).unwrap();
 
         assert_eq!(batch.total_selected_entries, 2);
         assert_eq!(batch.exported_entries, 2);
         assert_eq!(batch.entries.len(), 2);
+        assert_eq!(batch.response_map.len(), 2);
         assert!(!batch.batch_id.is_empty());
-        assert!(batch.prompt.contains("\"projectId\": \"project-1\""));
+        assert!(batch.prompt.contains("\"pid\":\"project-1\""));
         assert!(batch
             .prompt
-            .contains(&format!("\"batchId\": \"{}\"", batch.batch_id)));
+            .contains(&format!("\"bid\":\"{}\"", batch.batch_id)));
+        assert!(batch.prompt.contains("\"k\":1"));
         assert!(batch
             .prompt
-            .contains("\"entryId\": \"Map001:event:1:page:1:list:0\""));
+            .contains("Keep the sibling tone natural in Spanish."));
+        assert!(batch
+            .prompt
+            .contains("\"gl\":[{\"s\":\"Onee-chan\",\"t\":\"Onee-chan\"}]"));
+        assert!(batch.prompt.contains("\"pn\":\"AI Batch Test\""));
+        assert!(batch.prompt.contains("\"fp\":\"data/Map001.json\""));
 
         let tutorial = batch
             .entries
@@ -449,6 +469,57 @@ mod tests {
         assert_eq!(batches[0].total_selected_entries, 2);
         assert_eq!(batches[1].total_selected_entries, 2);
         assert_ne!(batches[0].batch_id, batches[1].batch_id);
+    }
+
+    #[test]
+    fn test_export_ai_batches_trim_context_for_prompt_budget() {
+        let mut project = make_test_project();
+        project.style_guide = (1..=96)
+            .map(|index| format!("Long external AI rule {index}: {}", "x".repeat(720)))
+            .collect();
+
+        let batches = export_ai_batches(&project, &[], Some(10)).unwrap();
+
+        assert_eq!(batches.len(), 1);
+        assert!(
+            !batches[0].prompt.contains("Long external AI rule 96"),
+            "external AI export should trim oversized context instead of emitting an over-budget prompt"
+        );
+    }
+
+    #[test]
+    fn test_export_ai_batch_rejects_unshrinkable_oversized_prompt() {
+        let project = make_oversized_export_project();
+
+        let error = export_ai_batch(&project, &[], Some(10)).unwrap_err();
+
+        assert!(error.to_string().contains("External AI export chunk"));
+        assert!(error
+            .to_string()
+            .contains("exceeds the estimated prompt budget"));
+    }
+
+    #[test]
+    fn test_export_ai_batch_ignores_blank_source_entries() {
+        let mut project = make_test_project();
+        project.files[0].entries.push(TranslationEntry {
+            id: "Map001:event:1:page:1:list:blank".into(),
+            file_context: "Map001 > Event 1 > Show Text".into(),
+            original: String::new(),
+            translation: String::new(),
+            status: EntryStatus::Untranslated,
+            notes: String::new(),
+        });
+
+        let batch = export_ai_batch(&project, &[], Some(10)).unwrap();
+
+        assert_eq!(batch.total_selected_entries, 2);
+        assert_eq!(batch.exported_entries, 2);
+        assert_eq!(batch.entries.len(), 2);
+        assert!(!batch
+            .entries
+            .iter()
+            .any(|entry| entry.entry_id == "Map001:event:1:page:1:list:blank"));
     }
 
     #[test]
@@ -522,6 +593,8 @@ mod tests {
         assert_eq!(result.applied_entries, 1);
         assert_eq!(result.skipped_entries, 1);
         assert!(result.missing_entries.is_empty());
+        assert!(result.invalid_entries.is_empty());
+        assert!(result.warnings.is_empty());
 
         let file = project
             .files
@@ -544,5 +617,68 @@ mod tests {
             .unwrap();
         assert!(skipped.translation.is_empty());
         assert!(skipped.notes.contains("instruction text"));
+    }
+
+    #[test]
+    fn test_apply_ai_batch_updates_blocks_integrity_breaks() {
+        let mut project = make_test_project();
+        project.files[0].entries[0].original = "\\C[2]Welcome\nHome".into();
+
+        let result = apply_ai_batch_updates(
+            &mut project,
+            &[AiBatchTranslation {
+                file_path: "data/Map001.json".into(),
+                entry_id: "Map001:event:1:page:1:list:0".into(),
+                translation: "Bienvenido a casa".into(),
+                notes: None,
+                skip: false,
+            }],
+            EntryStatus::Draft,
+        );
+
+        assert_eq!(result.applied_entries, 0);
+        assert_eq!(result.invalid_entries.len(), 1);
+        assert!(!result.warnings.is_empty());
+        let translated = project
+            .files
+            .iter()
+            .find(|file| file.relative_path == "data/Map001.json")
+            .unwrap()
+            .entries
+            .iter()
+            .find(|entry| entry.id == "Map001:event:1:page:1:list:0")
+            .unwrap();
+        assert!(translated.translation.is_empty());
+    }
+
+    #[test]
+    fn test_apply_ai_batch_updates_normalizes_escaped_line_breaks() {
+        let mut project = make_test_project();
+        project.files[0].entries[0].original = "\\C[2]Welcome\nHome".into();
+
+        let result = apply_ai_batch_updates(
+            &mut project,
+            &[AiBatchTranslation {
+                file_path: "data/Map001.json".into(),
+                entry_id: "Map001:event:1:page:1:list:0".into(),
+                translation: "\\C[2]Bienvenida\\nA casa".into(),
+                notes: None,
+                skip: false,
+            }],
+            EntryStatus::Draft,
+        );
+
+        assert_eq!(result.applied_entries, 1);
+        assert!(result.invalid_entries.is_empty());
+        let translated = project
+            .files
+            .iter()
+            .find(|file| file.relative_path == "data/Map001.json")
+            .unwrap()
+            .entries
+            .iter()
+            .find(|entry| entry.id == "Map001:event:1:page:1:list:0")
+            .unwrap();
+        assert_eq!(translated.translation, "\\C[2]Bienvenida\nA casa");
     }
 }

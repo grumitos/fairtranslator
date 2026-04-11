@@ -30,3 +30,4 @@ tauri-plugin-store = "2"
 chrono = { version = "0.4", features = ["serde"] }
 async-trait = "0.1"
 rpgtool-common = "0.2.0"
+regex = "1"

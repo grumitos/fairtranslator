@@ -9,7 +9,8 @@
     "filter": "Filtrar",
     "settings": "Configuracion",
     "glossary": "Glosario",
-    "toggleTheme": "Cambiar tema"
+    "toggleTheme": "Cambiar tema",
+    "styleGuide": "Guia de estilo"
   },
   "grid": {
     "original": "Original",
@@ -82,6 +83,16 @@
     "provider": "Proveedor",
     "selectProvider": "Selecciona un proveedor",
     "providers": {
+      "modeTitle": "Flujo interno de IA",
+      "modeDescription": "FairTranslator puede ejecutar la traducción del proveedor dentro de la app y aplicar el resultado directo al proyecto actual sin cambiar de herramienta.",
+      "modeFeatures": "El soporte de contexto depende del proveedor. Revisa la nota del proveedor seleccionado antes de iniciar el lote.",
+      "capabilityTitle": "Nota del proveedor seleccionado",
+      "capabilities": {
+        "openai": "OpenAI usa la orquestación contextual completa de la app: presupuesto de prompt, guía de estilo, glosario, términos protegidos, memoria de traducción y contexto por chunk.",
+        "codex": "Codex usa la misma orquestación contextual completa que OpenAI, pero se ejecuta a través del runtime o CLI local de Codex.",
+        "deepl": "DeepL se ejecuta dentro de la app y aplica resultados directos, pero solo recibe contexto de glosario y guía de estilo como ayuda aproximada. No usa el pipeline completo de memoria por chunks.",
+        "google": "Google se ejecuta dentro de la app y aplica resultados directos, con protección por placeholders para glosario y control codes. Aun así no usa contexto interno de memoria de proyecto."
+      },
       "openai": "OpenAI",
       "deepl": "DeepL",
       "google": "Google Translate",
@@ -95,7 +106,10 @@
     "starting": "Iniciando...",
     "translating": "Traduciendo...",
     "progress": "{{completed}} de {{total}} entradas",
+    "progressFiles": "Archivos completados: {{completed}} de {{total}}",
+    "progressChunks": "Chunks completados: {{completed}} de {{total}}",
     "currentFile": "Archivo actual: {{file}}",
+    "currentChunk": "Chunks del archivo actual: {{current}} de {{total}}",
     "complete": "Traduccion completada",
     "completeDetail": "{{completed}} de {{total}} entradas traducidas",
     "completeWithErrors": "Traduccion completada con errores",
@@ -124,10 +138,25 @@
       "apply": "Aplicar respuesta IA",
       "applied": "Respuesta IA aplicada",
       "appliedDetail": "{{applied}} entradas aplicadas, {{skipped}} omitidas",
+      "integrityWarnings": "Respuesta IA aplicada con advertencias",
+      "integrityWarningsDetail": "{{count}} entradas traducidas requieren revisión manual.",
       "partialApply": "Respuesta IA aplicada con incidencias",
-      "partialApplyDetail": "{{applied}} aplicadas, {{skipped}} omitidas, {{missing}} faltantes, {{duplicates}} IDs duplicados",
+      "partialApplyDetail": "{{applied}} aplicadas, {{skipped}} omitidas, {{invalid}} bloqueadas por chequeos de integridad, {{missing}} faltantes, {{duplicates}} IDs duplicados",
       "exportFailed": "No se pudo exportar el lote IA",
       "applyFailed": "No se pudo aplicar la respuesta IA"
     }
+  },
+  "styleGuide": {
+    "title": "Guia de estilo del proyecto",
+    "description": "Guarda reglas y notas cortas para ayudar a que la traduccion sea consistente.",
+    "addTitle": "Agregar una regla o nota",
+    "addPlaceholder": "Ej: Mantener nombres de menu cortos y naturales",
+    "add": "Agregar",
+    "rulesLabel": "Reglas y notas ({{count}})",
+    "remove": "Eliminar",
+    "save": "Guardar reglas",
+    "saved": "Guia de estilo guardada",
+    "saveFailed": "No se pudo guardar la guia de estilo",
+    "empty": "Aun no hay reglas"
   }
 }

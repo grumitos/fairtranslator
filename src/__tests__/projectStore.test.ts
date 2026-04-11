@@ -17,6 +17,7 @@ function makeProject(name: string, filePath = "data/Actors.json"): Project {
       },
     ],
     glossary: [],
+    styleGuide: [],
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
   };
@@ -50,17 +51,41 @@ describe("projectStore", () => {
     };
 
     act(() => {
-      useProjectStore.getState().setProject(initialProject);
+      useProjectStore.getState().setProject(initialProject, { markDirty: true });
       useProjectStore.getState().setActiveFile(initialProject.files[0] ?? null);
     });
 
     act(() => {
-      useProjectStore.getState().replaceProject(refreshedProject);
+      useProjectStore.getState().replaceProject(refreshedProject, { markDirty: false });
     });
 
     const state = useProjectStore.getState();
     expect(state.project?.updatedAt).toBe("2026-01-02T00:00:00.000Z");
     expect(state.activeFile?.relativePath).toBe("data/Actors.json");
     expect(state.activeFile?.entries).toHaveLength(1);
+    expect(state.isDirty).toBe(false);
+  });
+
+  it("tracks dirty state across create-like, mutate-like, and save-like replacements", () => {
+    const project = makeProject("dirty");
+    const updatedProject = {
+      ...project,
+      updatedAt: "2026-01-03T00:00:00.000Z",
+    };
+
+    act(() => {
+      useProjectStore.getState().setProject(project, { markDirty: true });
+    });
+    expect(useProjectStore.getState().isDirty).toBe(true);
+
+    act(() => {
+      useProjectStore.getState().replaceProject(updatedProject, { markDirty: "preserve" });
+    });
+    expect(useProjectStore.getState().isDirty).toBe(true);
+
+    act(() => {
+      useProjectStore.getState().replaceProject(updatedProject, { markDirty: false });
+    });
+    expect(useProjectStore.getState().isDirty).toBe(false);
   });
 });

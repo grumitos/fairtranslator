@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use crate::error::AppError;
-use crate::models::Project;
+use crate::models::{EntryStatus, Project};
 use crate::parser;
 use crate::services::persistence;
 
@@ -57,6 +57,7 @@ pub async fn project_create(
         game_dir: game_path.to_string_lossy().to_string(),
         files,
         glossary: Vec::new(),
+        style_guide: Vec::new(),
         created_at: now.clone(),
         updated_at: now,
     };
@@ -184,7 +185,7 @@ pub async fn project_update_entry(
     file_path: String,
     entry_id: String,
     translation: String,
-    status: crate::models::EntryStatus,
+    status: EntryStatus,
     notes: Option<String>,
 ) -> Result<(), AppError> {
     let mut proj_guard = state
@@ -196,28 +197,80 @@ pub async fn project_update_entry(
         .as_mut()
         .ok_or_else(|| AppError::Project("No project is currently open".into()))?;
 
-    // Find the file
+    apply_entry_update(
+        project,
+        &ProjectEntryUpdate {
+            file_path,
+            entry_id,
+            translation,
+            status,
+            notes,
+        },
+    )?;
+
+    project.updated_at = persistence::now_iso8601();
+
+    Ok(())
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectEntryUpdate {
+    pub file_path: String,
+    pub entry_id: String,
+    pub translation: String,
+    pub status: EntryStatus,
+    pub notes: Option<String>,
+}
+
+#[tauri::command]
+pub async fn project_update_entries(
+    state: tauri::State<'_, AppState>,
+    updates: Vec<ProjectEntryUpdate>,
+) -> Result<(), AppError> {
+    if updates.is_empty() {
+        return Ok(());
+    }
+
+    let mut proj_guard = state
+        .project
+        .lock()
+        .map_err(|e| AppError::Project(format!("Lock error: {e}")))?;
+
+    let project = proj_guard
+        .as_mut()
+        .ok_or_else(|| AppError::Project("No project is currently open".into()))?;
+
+    let mut updated_project = project.clone();
+
+    for update in &updates {
+        apply_entry_update(&mut updated_project, update)?;
+    }
+
+    updated_project.updated_at = persistence::now_iso8601();
+    *project = updated_project;
+
+    Ok(())
+}
+
+fn apply_entry_update(project: &mut Project, update: &ProjectEntryUpdate) -> Result<(), AppError> {
     let file = project
         .files
         .iter_mut()
-        .find(|f| f.relative_path == file_path)
-        .ok_or_else(|| AppError::NotFound(format!("File not found: {file_path}")))?;
+        .find(|f| f.relative_path == update.file_path)
+        .ok_or_else(|| AppError::NotFound(format!("File not found: {}", update.file_path)))?;
 
-    // Find the entry
     let entry = file
         .entries
         .iter_mut()
-        .find(|e| e.id == entry_id)
-        .ok_or_else(|| AppError::NotFound(format!("Entry not found: {entry_id}")))?;
+        .find(|e| e.id == update.entry_id)
+        .ok_or_else(|| AppError::NotFound(format!("Entry not found: {}", update.entry_id)))?;
 
-    // Update
-    entry.translation = translation;
-    entry.status = status;
-    if let Some(n) = notes {
-        entry.notes = n;
+    entry.translation = update.translation.clone();
+    entry.status = update.status.clone();
+    if let Some(notes) = &update.notes {
+        entry.notes = notes.clone();
     }
-
-    project.updated_at = persistence::now_iso8601();
 
     Ok(())
 }

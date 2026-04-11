@@ -2,12 +2,17 @@
 ///
 /// Uses API key authentication (no OAuth/service account needed).
 /// Endpoint: `https://translation.googleapis.com/language/translate/v2`
+use regex::RegexBuilder;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::models::GlossaryTerm;
-use crate::services::provider::{TranslationProvider, TranslationRequest, TranslationResponse};
+use crate::services::provider::{
+    TranslationBatchContext, TranslationProvider, TranslationRequest, TranslationResponse,
+};
+use crate::services::translation_integrity::collect_special_token_spans;
 
 /// Maximum texts per API call. Google recommends ≤128 per request.
 const MAX_BATCH_SIZE: usize = 100;
@@ -22,9 +27,16 @@ pub struct GoogleProvider {
 }
 
 #[derive(Debug, Clone)]
-struct GlossaryReplacement {
+struct TextReplacement {
     token: String,
-    target: String,
+    value: String,
+}
+
+#[derive(Debug, Clone)]
+struct ReplacementSpan {
+    start: usize,
+    end: usize,
+    value: String,
 }
 
 impl GoogleProvider {
@@ -41,64 +53,136 @@ impl GoogleProvider {
         lang.to_lowercase()
     }
 
+    fn protect_special_literals(text: &str) -> (String, Vec<TextReplacement>) {
+        let mut spans = collect_special_token_spans(text)
+            .into_iter()
+            .map(|span| ReplacementSpan {
+                start: span.start,
+                end: span.end,
+                value: span.token,
+            })
+            .collect::<Vec<_>>();
+
+        spans.extend(
+            text.match_indices('\n')
+                .map(|(start, newline)| ReplacementSpan {
+                    start,
+                    end: start + newline.len(),
+                    value: newline.to_string(),
+                }),
+        );
+        spans.sort_by_key(|span| span.start);
+
+        Self::apply_spans(text, &spans, "LIT")
+    }
+
     /// Replace known glossary terms with stable placeholders before translation.
     fn protect_glossary_terms(
         text: &str,
         glossary: &[GlossaryTerm],
-    ) -> (String, Vec<GlossaryReplacement>) {
+    ) -> (String, Vec<TextReplacement>) {
         if glossary.is_empty() {
             return (text.to_string(), Vec::new());
         }
 
-        let mut protected = text.to_string();
-        let mut replacements = Vec::new();
+        let mut terms = glossary
+            .iter()
+            .filter(|term| !term.source.is_empty() && !term.target.is_empty())
+            .collect::<Vec<_>>();
+        terms.sort_by(|left, right| right.source.len().cmp(&left.source.len()));
 
-        for (index, term) in glossary.iter().enumerate() {
-            if term.source.is_empty() || term.target.is_empty() {
-                continue;
-            }
+        let mut spans = Vec::new();
+        for term in terms {
+            let regex = RegexBuilder::new(&regex::escape(&term.source))
+                .case_insensitive(!term.case_sensitive)
+                .build()
+                .expect("escaped glossary regex should compile");
 
-            let token = format!("__FT_TERM_{}__", index);
-            let mut changed = false;
-
-            if term.case_sensitive {
-                if protected.contains(&term.source) {
-                    protected = protected.replace(&term.source, &token);
-                    changed = true;
+            for matched in regex.find_iter(text) {
+                if !Self::has_term_boundaries(text, matched.start(), matched.end(), &term.source) {
+                    continue;
                 }
-            } else {
-                let variants = [
-                    term.source.clone(),
-                    term.source.to_lowercase(),
-                    term.source.to_uppercase(),
-                ];
-
-                for variant in variants {
-                    if !variant.is_empty() && protected.contains(&variant) {
-                        protected = protected.replace(&variant, &token);
-                        changed = true;
-                    }
+                if spans.iter().any(|span: &ReplacementSpan| {
+                    matched.start() < span.end && span.start < matched.end()
+                }) {
+                    continue;
                 }
-            }
-
-            if changed {
-                replacements.push(GlossaryReplacement {
-                    token,
-                    target: term.target.clone(),
+                spans.push(ReplacementSpan {
+                    start: matched.start(),
+                    end: matched.end(),
+                    value: term.target.clone(),
                 });
             }
         }
 
+        spans.sort_by_key(|span| span.start);
+        Self::apply_spans(text, &spans, "TERM")
+    }
+
+    fn has_term_boundaries(text: &str, start: usize, end: usize, term: &str) -> bool {
+        let first = term.chars().next();
+        let last = term.chars().last();
+        let before = text[..start].chars().next_back();
+        let after = text[end..].chars().next();
+
+        let start_ok = !first.is_some_and(Self::is_word_char)
+            || before.is_none_or(|ch| !Self::is_word_char(ch));
+        let end_ok =
+            !last.is_some_and(Self::is_word_char) || after.is_none_or(|ch| !Self::is_word_char(ch));
+
+        start_ok && end_ok
+    }
+
+    fn is_word_char(ch: char) -> bool {
+        ch.is_alphanumeric() || ch == '_'
+    }
+
+    fn apply_spans(
+        text: &str,
+        spans: &[ReplacementSpan],
+        label: &str,
+    ) -> (String, Vec<TextReplacement>) {
+        if spans.is_empty() {
+            return (text.to_string(), Vec::new());
+        }
+
+        let token_prefix = Self::unique_token_prefix(text, label);
+        let mut protected = String::with_capacity(text.len());
+        let mut replacements = Vec::with_capacity(spans.len());
+        let mut cursor = 0usize;
+
+        for (index, span) in spans.iter().enumerate() {
+            if span.start < cursor {
+                continue;
+            }
+
+            protected.push_str(&text[cursor..span.start]);
+            let token = format!("{token_prefix}_{index}__");
+            protected.push_str(&token);
+            replacements.push(TextReplacement {
+                token,
+                value: span.value.clone(),
+            });
+            cursor = span.end;
+        }
+
+        protected.push_str(&text[cursor..]);
         (protected, replacements)
     }
 
-    fn restore_glossary_terms(
-        translated_text: String,
-        replacements: &[GlossaryReplacement],
-    ) -> String {
+    fn unique_token_prefix(text: &str, label: &str) -> String {
+        loop {
+            let prefix = format!("__FT_{}_{}__", label, Uuid::new_v4().simple());
+            if !text.contains(&prefix) {
+                return prefix;
+            }
+        }
+    }
+
+    fn restore_replacements(translated_text: String, replacements: &[TextReplacement]) -> String {
         let mut restored = translated_text;
         for replacement in replacements {
-            restored = restored.replace(&replacement.token, &replacement.target);
+            restored = restored.replace(&replacement.token, &replacement.value);
         }
         restored
     }
@@ -201,18 +285,29 @@ impl TranslationProvider for GoogleProvider {
         source_lang: &str,
         target_lang: &str,
         glossary: &[GlossaryTerm],
+        _context: &TranslationBatchContext,
     ) -> Result<Vec<TranslationResponse>, AppError> {
         let mut all_responses = Vec::with_capacity(requests.len());
         let target = Self::normalize_lang(target_lang);
         let source = Self::normalize_lang(source_lang);
 
         for chunk in requests.chunks(MAX_BATCH_SIZE) {
-            let prepared: Vec<(String, Vec<GlossaryReplacement>)> = chunk
+            let prepared: Vec<(String, Vec<TextReplacement>, Vec<TextReplacement>)> = chunk
                 .iter()
-                .map(|request| Self::protect_glossary_terms(&request.text, glossary))
+                .map(|request| {
+                    let (literal_protected, literal_replacements) =
+                        Self::protect_special_literals(&request.text);
+                    let (glossary_protected, glossary_replacements) =
+                        Self::protect_glossary_terms(&literal_protected, glossary);
+                    (
+                        glossary_protected,
+                        literal_replacements,
+                        glossary_replacements,
+                    )
+                })
                 .collect();
 
-            let texts: Vec<String> = prepared.iter().map(|(text, _)| text.clone()).collect();
+            let texts: Vec<String> = prepared.iter().map(|(text, _, _)| text.clone()).collect();
 
             let google_request = GoogleRequest {
                 q: texts,
@@ -248,16 +343,19 @@ impl TranslationProvider for GoogleProvider {
                 )));
             }
 
-            for ((req, translation), (_, replacements)) in chunk
+            for ((req, translation), (_, literal_replacements, glossary_replacements)) in chunk
                 .iter()
                 .zip(google_response.data.translations.into_iter())
                 .zip(prepared.iter())
             {
                 all_responses.push(TranslationResponse {
                     entry_id: req.entry_id.clone(),
-                    translated_text: Self::restore_glossary_terms(
-                        translation.translated_text,
-                        replacements,
+                    translated_text: Self::restore_replacements(
+                        Self::restore_replacements(
+                            translation.translated_text,
+                            glossary_replacements,
+                        ),
+                        literal_replacements,
                     ),
                 });
             }
@@ -309,12 +407,41 @@ mod tests {
 
         let (protected, replacements) =
             GoogleProvider::protect_glossary_terms("El 勇者 ataca", &glossary);
-        assert!(protected.contains("__FT_TERM_0__"));
+        assert!(protected.contains("__FT_TERM_"));
 
-        let restored = GoogleProvider::restore_glossary_terms(
-            "The __FT_TERM_0__ attacks".to_string(),
+        let replacement_token = replacements[0].token.clone();
+        let restored = GoogleProvider::restore_replacements(
+            format!("The {replacement_token} attacks"),
             &replacements,
         );
         assert_eq!(restored, "The Heroe attacks");
+    }
+
+    #[test]
+    fn test_glossary_protection_respects_boundaries() {
+        let glossary = vec![GlossaryTerm {
+            source: "art".to_string(),
+            target: "arte".to_string(),
+            case_sensitive: false,
+        }];
+
+        let (protected, replacements) =
+            GoogleProvider::protect_glossary_terms("start art artful", &glossary);
+
+        assert_eq!(replacements.len(), 1);
+        assert!(protected.contains("start "));
+        assert!(protected.contains(" artful"));
+    }
+
+    #[test]
+    fn test_special_literal_roundtrip_preserves_control_codes_and_newlines() {
+        let (protected, replacements) =
+            GoogleProvider::protect_special_literals("\\C[2]Hello\n%1 <hero>");
+        assert_eq!(replacements.len(), 4);
+        assert!(!protected.contains("\\C[2]"));
+        assert!(!protected.contains('\n'));
+
+        let restored = GoogleProvider::restore_replacements(protected, &replacements);
+        assert_eq!(restored, "\\C[2]Hello\n%1 <hero>");
     }
 }

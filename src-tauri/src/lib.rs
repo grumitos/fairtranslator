@@ -21,6 +21,7 @@ pub fn run() {
             commands::project::project_save,
             commands::project::project_get,
             commands::project::project_update_entry,
+            commands::project::project_update_entries,
             commands::export::export_project,
             commands::translation::apikey_save,
             commands::translation::apikey_load,
@@ -34,6 +35,8 @@ pub fn run() {
             commands::glossary::glossary_update,
             commands::glossary::glossary_remove,
             commands::glossary::glossary_list,
+            commands::style_guide::style_guide_replace,
+            commands::style_guide::style_guide_list,
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {

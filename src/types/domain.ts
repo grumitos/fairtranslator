@@ -20,6 +20,7 @@ export interface Project {
   gameDir: string;
   files: TranslationFile[];
   glossary: GlossaryTerm[];
+  styleGuide: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -40,6 +41,14 @@ export interface TranslationEntry {
   notes: string;
 }
 
+export interface ProjectEntryUpdate {
+  filePath: string;
+  entryId: string;
+  translation: string;
+  status: EntryStatus;
+  notes?: string;
+}
+
 /** A glossary term for translation consistency */
 export interface GlossaryTerm {
   source: string;
@@ -52,6 +61,7 @@ export interface ExportResult {
   filesExported: number;
   entriesApplied: number;
   totalEntries: number;
+  warnings: string[];
 }
 
 /** API key info returned by apikey_load */
@@ -83,9 +93,13 @@ export interface CodexRuntimeStatus {
 export interface BatchProgress {
   filesProcessed: number;
   totalFiles: number;
+  chunksProcessed: number;
+  totalChunks: number;
   entriesTranslated: number;
   totalEntries: number;
   currentFile: string;
+  currentFileChunksProcessed: number;
+  currentFileTotalChunks: number;
   failedEntries: number;
   failedBatches: number;
   warnings: string[];
@@ -113,7 +127,14 @@ export interface AiBatchExport {
   totalSelectedEntries: number;
   exportedEntries: number;
   entries: AiBatchEntry[];
+  responseMap: AiBatchResponseRef[];
   prompt: string;
+}
+
+export interface AiBatchResponseRef {
+  localId: number;
+  filePath: string;
+  entryId: string;
 }
 
 /** A single translated entry produced by an external AI workflow */
@@ -131,4 +152,6 @@ export interface AiBatchApplyResult {
   skippedEntries: number;
   missingEntries: string[];
   duplicateEntries: string[];
+  invalidEntries: string[];
+  warnings: string[];
 }

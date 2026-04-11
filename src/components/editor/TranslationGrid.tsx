@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getCoreRowModel, getFilteredRowModel, useReactTable, type Row } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -32,6 +32,7 @@ export function TranslationGrid() {
   const setScrollToEntryId = useEditorStore((s) => s.setScrollToEntryId);
   const selectedRowIndex = useEditorStore((s) => s.selectedRowIndex);
   const setSelectedRowIndex = useEditorStore((s) => s.setSelectedRowIndex);
+  const deferredSearchQuery = useDeferredValue(searchQuery);
 
   const [dialogEntry, setDialogEntry] = useState<EntryWithPath | null>(null);
   const rowsRef = useRef<Row<EntryWithPath>[]>([]);
@@ -62,8 +63,8 @@ export function TranslationGrid() {
     if (statusFilter) {
       result = result.filter((entry) => entry.status === statusFilter);
     }
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
+    if (deferredSearchQuery.trim()) {
+      const q = deferredSearchQuery.toLowerCase();
       result = result.filter(
         (entry) =>
           entry.original.toLowerCase().includes(q) ||
@@ -73,7 +74,7 @@ export function TranslationGrid() {
       );
     }
     return result;
-  }, [data, statusFilter, searchQuery]);
+  }, [data, statusFilter, deferredSearchQuery]);
 
   filteredDataRef.current = filteredData;
 

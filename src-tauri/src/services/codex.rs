@@ -1,11 +1,9 @@
-use std::collections::{HashMap, HashSet};
 use std::env;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 #[cfg(not(test))]
 use tauri::path::BaseDirectory;
 #[cfg(not(test))]
@@ -14,10 +12,16 @@ use tokio::task;
 
 use crate::error::AppError;
 use crate::models::GlossaryTerm;
-use crate::services::provider::{TranslationProvider, TranslationRequest, TranslationResponse};
+use crate::services::compact_prompt::{self, CompactPromptBundle};
+use crate::services::provider::{
+    approximate_token_count, TranslationBatchContext, TranslationProvider, TranslationRequest,
+    TranslationResponse,
+};
 
 const DEFAULT_COMMAND_PATH: &str = "codex";
 const SIDECAR_BASENAME: &str = "codex";
+const CODEX_RUNTIME_WRAPPER_TOKEN_OVERHEAD: usize = 160;
+const CODEX_RESPONSE_HEADROOM_TOKENS: usize = 2048;
 
 #[cfg(not(test))]
 type RuntimeAppHandle = AppHandle;
@@ -86,6 +90,7 @@ pub struct CodexProvider {
     configured_command_path: Option<String>,
     model: Option<String>,
     profile: Option<String>,
+    reasoning_effort: Option<String>,
 }
 
 impl CodexProvider {
@@ -93,8 +98,9 @@ impl CodexProvider {
         command_path: Option<String>,
         model: Option<String>,
         profile: Option<String>,
+        reasoning_effort: Option<String>,
     ) -> Self {
-        Self::from_parts(None, command_path, model, profile)
+        Self::from_parts(None, command_path, model, profile, reasoning_effort)
     }
 
     pub fn with_app_handle(
@@ -102,8 +108,15 @@ impl CodexProvider {
         command_path: Option<String>,
         model: Option<String>,
         profile: Option<String>,
+        reasoning_effort: Option<String>,
     ) -> Self {
-        Self::from_parts(Some(app_handle), command_path, model, profile)
+        Self::from_parts(
+            Some(app_handle),
+            command_path,
+            model,
+            profile,
+            reasoning_effort,
+        )
     }
 
     fn from_parts(
@@ -111,79 +124,61 @@ impl CodexProvider {
         command_path: Option<String>,
         model: Option<String>,
         profile: Option<String>,
+        reasoning_effort: Option<String>,
     ) -> Self {
         Self {
             app_handle,
             configured_command_path: command_path.and_then(normalize_optional),
             model: model.and_then(normalize_optional),
             profile: profile.and_then(normalize_optional),
+            reasoning_effort: reasoning_effort.and_then(normalize_optional),
         }
     }
 
-    fn build_prompt(
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn build_prompt(
         source_lang: &str,
         target_lang: &str,
         requests: &[TranslationRequest],
         glossary: &[GlossaryTerm],
+        context: &TranslationBatchContext,
     ) -> Result<String, AppError> {
-        let entries = requests
-            .iter()
-            .map(|request| {
-                json!({
-                    "entryId": request.entry_id,
-                    "text": request.text,
-                })
-            })
-            .collect::<Vec<_>>();
-        let entries_json = serde_json::to_string_pretty(&entries)?;
+        Ok(compact_prompt::build_provider_bundle(
+            source_lang,
+            target_lang,
+            requests,
+            glossary,
+            context,
+        )?
+        .render_single_prompt())
+    }
 
-        let mut prompt = format!(
-            concat!(
-                "You are a professional translator for RPG Maker video games.\n",
-                "Translate every entry from {source_lang} to {target_lang}.\n",
-                "Preserve all RPG Maker control codes, placeholders, escape sequences and line breaks.\n",
-                "Return every requested entry exactly once.\n",
-                "Do not invent entry IDs.\n",
-                "Do not add explanations or markdown.\n",
-                "Required output shape:\n",
-                "{{\"translations\": [{{\"entryId\": \"...\", \"translatedText\": \"...\"}}]}}\n"
-            ),
-            source_lang = source_lang,
-            target_lang = target_lang,
-        );
+    pub(crate) fn estimate_total_tokens(
+        source_lang: &str,
+        target_lang: &str,
+        requests: &[TranslationRequest],
+        glossary: &[GlossaryTerm],
+        context: &TranslationBatchContext,
+    ) -> usize {
+        let bundle = compact_prompt::build_provider_bundle(
+            source_lang,
+            target_lang,
+            requests,
+            glossary,
+            context,
+        )
+        .expect("serializing compact Codex prompt should not fail");
+        let prompt = bundle.render_single_prompt();
+        let schema = compact_prompt::provider_response_schema().to_string();
 
-        if !glossary.is_empty() {
-            prompt.push_str("\nGlossary (use these translations consistently):\n");
-            for term in glossary {
-                prompt.push_str(&format!("- \"{}\" -> \"{}\"\n", term.source, term.target));
-            }
-        }
-
-        prompt.push_str("\nEntries:\n");
-        prompt.push_str(&entries_json);
-        Ok(prompt)
+        approximate_token_count(&prompt)
+            + approximate_token_count(&schema)
+            + CODEX_RUNTIME_WRAPPER_TOKEN_OVERHEAD
+            + CODEX_RESPONSE_HEADROOM_TOKENS
     }
 
     fn response_schema() -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "translations": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "entryId": { "type": "string" },
-                            "translatedText": { "type": "string" }
-                        },
-                        "required": ["entryId", "translatedText"],
-                        "additionalProperties": false
-                    }
-                }
-            },
-            "required": ["translations"],
-            "additionalProperties": false
-        })
+        compact_prompt::provider_response_schema()
     }
 
     pub async fn runtime_status(&self) -> Result<CodexRuntimeStatus, AppError> {
@@ -219,8 +214,7 @@ impl CodexProvider {
         } else if login_requires_auth(&combined_output) || login_output.status.success() {
             (
                 "loginRequired".to_string(),
-                "Codex CLI is installed but not authenticated. Run `codex login` first"
-                    .to_string(),
+                "Codex CLI is installed but not authenticated. Run `codex login` first".to_string(),
             )
         } else {
             (
@@ -304,12 +298,7 @@ impl CodexProvider {
         candidate: RuntimeCandidate,
     ) -> Result<ResolvedRuntime, RuntimeResolutionFailure> {
         let output = self
-            .run_command(
-                &candidate,
-                vec!["--version".to_string()],
-                None,
-                None,
-            )
+            .run_command(&candidate, vec!["--version".to_string()], None, None)
             .await
             .map_err(|error| RuntimeResolutionFailure {
                 candidate: candidate.clone(),
@@ -364,6 +353,13 @@ impl CodexProvider {
         if let Some(profile) = &self.profile {
             args.push("--profile".to_string());
             args.push(profile.clone());
+        }
+        if let Some(reasoning_effort) = &self.reasoning_effort {
+            args.push("-c".to_string());
+            args.push(format!(
+                "reasoning_effort={}",
+                serde_json::to_string(reasoning_effort).unwrap_or_else(|_| "\"low\"".to_string())
+            ));
         }
         args.push("--".to_string());
         args.push("-".to_string());
@@ -420,19 +416,6 @@ impl CodexProvider {
     }
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CodexExecResponse {
-    translations: Vec<CodexExecTranslation>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CodexExecTranslation {
-    entry_id: String,
-    translated_text: String,
-}
-
 fn normalize_optional(value: String) -> Option<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -478,23 +461,6 @@ fn command_output_detail(output: &std::process::Output) -> String {
 fn command_failure(output: &std::process::Output, context: &str) -> AppError {
     let detail = command_output_detail(output);
     AppError::Api(format!("{context}: {detail}"))
-}
-
-fn strip_markdown_fences(raw_response: &str) -> &str {
-    let trimmed = raw_response.trim();
-    if !trimmed.starts_with("```") {
-        return trimmed;
-    }
-
-    let without_open = trimmed
-        .split_once('\n')
-        .map(|(_, rest)| rest)
-        .unwrap_or(trimmed);
-
-    without_open
-        .rsplit_once("```")
-        .map(|(body, _)| body.trim())
-        .unwrap_or(without_open.trim())
 }
 
 fn extract_first_nonempty_line(output: &str) -> Option<String> {
@@ -564,9 +530,7 @@ fn sidecar_relative_path() -> PathBuf {
 fn resolve_sidecar_path(app_handle: Option<&RuntimeAppHandle>) -> Option<PathBuf> {
     let sidecar_name = sidecar_filename();
     let relative_path = sidecar_relative_path();
-    let mut candidates = vec![
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(&relative_path),
-    ];
+    let mut candidates = vec![PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(&relative_path)];
 
     if let Ok(current_exe) = std::env::current_exe() {
         if let Some(parent) = current_exe.parent() {
@@ -644,60 +608,9 @@ fn executable_candidates(dir: &Path, command_name: &str) -> Vec<PathBuf> {
 
 fn parse_exec_response(
     raw_response: &str,
-    requests: &[TranslationRequest],
+    bundle: &CompactPromptBundle,
 ) -> Result<Vec<TranslationResponse>, AppError> {
-    let normalized = strip_markdown_fences(raw_response);
-    let parsed: CodexExecResponse = serde_json::from_str(normalized)
-        .map_err(|error| AppError::Api(format!("Failed to parse Codex response: {error}")))?;
-
-    if parsed.translations.len() != requests.len() {
-        return Err(AppError::Api(format!(
-            "Codex returned {} translations but expected {}",
-            parsed.translations.len(),
-            requests.len()
-        )));
-    }
-
-    let expected_ids = requests
-        .iter()
-        .map(|request| request.entry_id.as_str())
-        .collect::<HashSet<_>>();
-    let mut seen_ids = HashSet::new();
-    let mut by_id = HashMap::with_capacity(parsed.translations.len());
-
-    for translation in parsed.translations {
-        if !expected_ids.contains(translation.entry_id.as_str()) {
-            return Err(AppError::Api(format!(
-                "Codex returned an unexpected entry ID: {}",
-                translation.entry_id
-            )));
-        }
-
-        if !seen_ids.insert(translation.entry_id.clone()) {
-            return Err(AppError::Api(format!(
-                "Codex returned a duplicate entry ID: {}",
-                translation.entry_id
-            )));
-        }
-
-        by_id.insert(translation.entry_id, translation.translated_text);
-    }
-
-    requests
-        .iter()
-        .map(|request| {
-            let translated_text = by_id.remove(&request.entry_id).ok_or_else(|| {
-                AppError::Api(format!(
-                    "Codex omitted a translation for entry ID {}",
-                    request.entry_id
-                ))
-            })?;
-            Ok(TranslationResponse {
-                entry_id: request.entry_id.clone(),
-                translated_text,
-            })
-        })
-        .collect()
+    compact_prompt::parse_provider_response(raw_response, &bundle.entry_refs)
 }
 
 #[async_trait::async_trait]
@@ -721,6 +634,7 @@ impl TranslationProvider for CodexProvider {
         source_lang: &str,
         target_lang: &str,
         glossary: &[GlossaryTerm],
+        context: &TranslationBatchContext,
     ) -> Result<Vec<TranslationResponse>, AppError> {
         if requests.is_empty() {
             return Ok(Vec::new());
@@ -731,7 +645,14 @@ impl TranslationProvider for CodexProvider {
             .await
             .map_err(|failure| AppError::Api(failure.message))?;
 
-        let prompt = Self::build_prompt(source_lang, target_lang, requests, glossary)?;
+        let bundle = compact_prompt::build_provider_bundle(
+            source_lang,
+            target_lang,
+            requests,
+            glossary,
+            context,
+        )?;
+        let prompt = bundle.render_single_prompt();
         let temp_dir = temp_codex_dir();
         std::fs::create_dir_all(&temp_dir)?;
 
@@ -739,7 +660,12 @@ impl TranslationProvider for CodexProvider {
         let output_path = temp_dir.join("result.json");
         std::fs::write(
             &schema_path,
-            serde_json::to_vec_pretty(&Self::response_schema())?,
+            serde_json::to_vec_pretty(
+                &bundle
+                    .response_schema
+                    .clone()
+                    .unwrap_or_else(Self::response_schema),
+            )?,
         )?;
 
         let output = self
@@ -764,7 +690,7 @@ impl TranslationProvider for CodexProvider {
         let _ = std::fs::remove_file(output_path);
         let _ = std::fs::remove_dir_all(&temp_dir);
 
-        parse_exec_response(&raw_response, requests)
+        parse_exec_response(&raw_response, &bundle)
     }
 }
 
@@ -778,6 +704,7 @@ mod tests {
             Some("   ".to_string()),
             Some("  gpt-5.4  ".to_string()),
             Some("  codex-default  ".to_string()),
+            None,
         );
         assert!(provider.configured_command_path.is_none());
         assert_eq!(provider.model.as_deref(), Some("gpt-5.4"));
@@ -785,43 +712,56 @@ mod tests {
     }
 
     #[test]
-    fn test_build_prompt_includes_glossary_and_entry_ids() {
+    fn test_build_prompt_uses_compact_payload_and_masks_tokens() {
         let prompt = CodexProvider::build_prompt(
             "ja",
             "es",
             &[TranslationRequest {
                 entry_id: "entry-1".to_string(),
-                text: "勇者".to_string(),
+                file_context: "Map001 > Event 1 > Show Text".to_string(),
+                text: "\\N[1]\n勇者".to_string(),
+                notes: String::new(),
             }],
             &[GlossaryTerm {
                 source: "勇者".to_string(),
                 target: "Heroe".to_string(),
                 case_sensitive: true,
             }],
+            &TranslationBatchContext::default(),
         )
         .unwrap();
 
-        assert!(prompt.contains("entry-1"));
-        assert!(prompt.contains("\"勇者\" -> \"Heroe\""));
-        assert!(prompt.contains("Required output shape"));
+        assert!(prompt.contains("\"gl\":[{\"s\":\"勇者\",\"t\":\"Heroe\"}]"));
+        assert!(prompt.contains("\"k\":1"));
+        assert!(prompt.contains("__K1_CC0__"));
+        assert!(!prompt.contains("entry-1"));
     }
 
     #[test]
     fn test_parse_exec_response_rejects_missing_entries() {
-        let error = parse_exec_response(
-            r#"{"translations":[{"entryId":"entry-1","translatedText":"Hola"}]}"#,
+        let bundle = compact_prompt::build_provider_bundle(
+            "ja",
+            "es",
             &[
                 TranslationRequest {
                     entry_id: "entry-1".to_string(),
+                    file_context: String::new(),
                     text: "Hello".to_string(),
+                    notes: String::new(),
                 },
                 TranslationRequest {
                     entry_id: "entry-2".to_string(),
+                    file_context: String::new(),
                     text: "World".to_string(),
+                    notes: String::new(),
                 },
             ],
+            &[],
+            &TranslationBatchContext::default(),
         )
-        .unwrap_err();
+        .unwrap();
+        let error =
+            parse_exec_response(r#"{"translations":[{"k":1,"t":"Hola"}]}"#, &bundle).unwrap_err();
 
         assert!(error
             .to_string()
@@ -830,23 +770,30 @@ mod tests {
 
     #[test]
     fn test_parse_exec_response_preserves_request_order() {
-        let parsed = parse_exec_response(
-            r#"{
-              "translations": [
-                {"entryId":"entry-2","translatedText":"Mundo"},
-                {"entryId":"entry-1","translatedText":"Hola"}
-              ]
-            }"#,
+        let bundle = compact_prompt::build_provider_bundle(
+            "ja",
+            "es",
             &[
                 TranslationRequest {
                     entry_id: "entry-1".to_string(),
+                    file_context: String::new(),
                     text: "Hello".to_string(),
+                    notes: String::new(),
                 },
                 TranslationRequest {
                     entry_id: "entry-2".to_string(),
+                    file_context: String::new(),
                     text: "World".to_string(),
+                    notes: String::new(),
                 },
             ],
+            &[],
+            &TranslationBatchContext::default(),
+        )
+        .unwrap();
+        let parsed = parse_exec_response(
+            r#"{"translations":[{"k":2,"t":"Mundo"},{"k":1,"t":"Hola"}]}"#,
+            &bundle,
         )
         .unwrap();
 
@@ -858,22 +805,34 @@ mod tests {
 
     #[test]
     fn test_parse_exec_response_accepts_wrapped_json() {
-        let parsed = parse_exec_response(
-            "```json\n{\"translations\":[{\"entryId\":\"entry-1\",\"translatedText\":\"Hola\"}]}\n```",
+        let bundle = compact_prompt::build_provider_bundle(
+            "ja",
+            "es",
             &[TranslationRequest {
                 entry_id: "entry-1".to_string(),
-                text: "Hello".to_string(),
+                file_context: String::new(),
+                text: "\\N[1]\nHello".to_string(),
+                notes: String::new(),
             }],
+            &[],
+            &TranslationBatchContext::default(),
+        )
+        .unwrap();
+        let parsed = parse_exec_response(
+            "```json\n{\"translations\":[{\"k\":1,\"t\":\"__K1_CC0__\\\\nHola\"}]}\n```",
+            &bundle,
         )
         .unwrap();
 
         assert_eq!(parsed.len(), 1);
-        assert_eq!(parsed[0].translated_text, "Hola");
+        assert_eq!(parsed[0].translated_text, "\\N[1]\nHola");
     }
 
     #[test]
     fn test_login_requires_auth_detects_expected_prompts() {
-        assert!(login_requires_auth("Not logged in. Run `codex login` first."));
+        assert!(login_requires_auth(
+            "Not logged in. Run `codex login` first."
+        ));
         assert!(login_requires_auth("Authentication required"));
         assert!(!login_requires_auth("Logged in using ChatGPT"));
     }

@@ -8,6 +8,7 @@ import type {
   EntryStatus,
   ExportResult,
   GlossaryTerm,
+  ProjectEntryUpdate,
   Project,
   ProviderType,
 } from "@/types/domain";
@@ -99,6 +100,11 @@ export const projectUpdateEntry = (
     notes: notes ?? null,
   });
 
+export const projectUpdateEntries = (
+  updates: ProjectEntryUpdate[],
+) =>
+  safeInvoke<void>("project_update_entries", { updates });
+
 // ── Export commands ─────────────────────────────────────────────────
 
 export const exportProject = (outputDir: string) =>
@@ -165,12 +171,14 @@ export const translateAiBatchApply = (
   markStatus?: EntryStatus,
   expectedProjectId?: string,
   expectedBatchId?: string,
+  responseMap?: { localId: number; filePath: string; entryId: string }[],
 ) =>
   safeInvoke<AiBatchApplyResult>("translate_ai_batch_apply", {
     rawResponse,
     markStatus: markStatus ?? null,
     expectedProjectId: expectedProjectId ?? null,
     expectedBatchId: expectedBatchId ?? null,
+    responseMap: responseMap ?? null,
   });
 
 // ── Glossary commands ───────────────────────────────────────────────
@@ -194,6 +202,14 @@ export const glossaryRemove = (source: string) =>
 
 export const glossaryList = () =>
   safeInvoke<GlossaryTerm[]>("glossary_list");
+
+// ── Style guide commands ───────────────────────────────────────────
+
+export const styleGuideList = () =>
+  safeInvoke<string[]>("style_guide_list");
+
+export const styleGuideReplace = (items: string[]) =>
+  safeInvoke<string[]>("style_guide_replace", { items });
 
 // ── Batch translation command ───────────────────────────────────────
 

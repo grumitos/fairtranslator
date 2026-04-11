@@ -7,13 +7,14 @@ import { useProject } from "@/hooks/useProject";
 import { FindControlsRow } from "@/components/editor/find-replace/FindControlsRow";
 import { ReplaceControlsRow } from "@/components/editor/find-replace/ReplaceControlsRow";
 import { buildFindRegex, type FindMatch } from "@/components/editor/findReplaceUtils";
+import type { ProjectEntryUpdate } from "@/types/domain";
 
 export function FindReplaceBar() {
   const { t } = useTranslation("editor");
   const findInputRef = useRef<HTMLInputElement>(null);
   const project = useProjectStore((s) => s.project);
   const activeFile = useProjectStore((s) => s.activeFile);
-  const { updateEntry } = useProject();
+  const { updateEntry, updateEntriesBatch } = useProject();
 
   const findQuery = useEditorStore((s) => s.findQuery);
   const replaceText = useEditorStore((s) => s.replaceText);
@@ -138,8 +139,8 @@ export function FindReplaceBar() {
       return;
     }
 
-    let replacedCount = 0;
     const seen = new Set<string>();
+    const updates: ProjectEntryUpdate[] = [];
     for (const match of translationMatches) {
       const key = `${match.filePath}:${match.entryId}`;
       if (seen.has(key)) continue;
@@ -151,19 +152,24 @@ export function FindReplaceBar() {
       const updated = entry.translation.replace(regex, replaceText);
       regex.lastIndex = 0;
       if (updated !== entry.translation) {
-        try {
-          await updateEntry(
-            match.filePath,
-            match.entryId,
-            updated,
-            entry.status === "untranslated" ? "draft" : entry.status,
-          );
-          replacedCount++;
-        } catch {}
+        updates.push({
+          filePath: match.filePath,
+          entryId: match.entryId,
+          translation: updated,
+          status: entry.status === "untranslated" ? "draft" : entry.status,
+          notes: entry.notes,
+        });
       }
     }
-    toast.success(t("findReplace.replaced", { count: replacedCount }));
-  }, [regex, matches, project, replaceText, updateEntry, t]);
+    if (updates.length === 0) {
+      toast.error(t("findReplace.noMatches"));
+      return;
+    }
+    try {
+      await updateEntriesBatch(updates);
+      toast.success(t("findReplace.replaced", { count: updates.length }));
+    } catch {}
+  }, [regex, matches, project, replaceText, updateEntriesBatch, t]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {

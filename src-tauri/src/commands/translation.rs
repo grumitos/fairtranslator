@@ -13,11 +13,11 @@ use tauri_plugin_store::StoreExt;
 use crate::commands::project::AppState;
 use crate::error::AppError;
 use crate::models::{
-    AiBatchApplyResult, AiBatchExport, BatchProgress, EntryStatus, GlossaryTerm, Project,
-    ProviderType,
+    AiBatchApplyResult, AiBatchExport, AiBatchResponseRef, BatchProgress, EntryStatus,
+    GlossaryTerm, Project, ProviderType,
 };
-use crate::services::provider::{TranslationProvider, TranslationRequest, TranslationResponse};
-use crate::services::{ai_batch, persistence};
+use crate::services::provider::{TranslationBatchContext, TranslationProvider, TranslationRequest};
+use crate::services::{ai_batch, translation_apply, translation_orchestrator};
 
 /// Name of the store file for API settings
 const STORE_NAME: &str = "api-keys.json";
@@ -291,8 +291,13 @@ pub async fn apikey_validate(
         ProviderType::Codex => {
             use crate::services::codex::CodexProvider;
             use crate::services::provider::TranslationProvider;
-            let p =
-                CodexProvider::with_app_handle(app, info.command_path, info.model, info.profile);
+            let p = CodexProvider::with_app_handle(
+                app,
+                info.command_path,
+                info.model,
+                info.profile,
+                None,
+            );
             p.validate().await
         }
     }
@@ -308,7 +313,7 @@ pub async fn codex_status(
 ) -> Result<crate::services::codex::CodexRuntimeStatus, AppError> {
     use crate::services::codex::CodexProvider;
 
-    let provider = CodexProvider::with_app_handle(app, command_path, model, profile);
+    let provider = CodexProvider::with_app_handle(app, command_path, model, profile, None);
     provider.runtime_status().await
 }
 
@@ -355,11 +360,13 @@ pub async fn translate_ai_batch_apply(
     mark_status: Option<EntryStatus>,
     expected_project_id: Option<String>,
     expected_batch_id: Option<String>,
+    response_map: Option<Vec<AiBatchResponseRef>>,
 ) -> Result<AiBatchApplyResult, AppError> {
-    let translations = ai_batch::parse_ai_batch_response(
+    let translations = ai_batch::parse_ai_batch_response_with_refs(
         &raw_response,
         expected_project_id.as_deref(),
         expected_batch_id.as_deref(),
+        response_map.as_deref(),
     )?;
 
     let mut proj_guard = state
@@ -384,19 +391,11 @@ const BATCH_PROGRESS_EVENT: &str = "translation:progress";
 /// Event name for batch translation completion
 const BATCH_COMPLETE_EVENT: &str = "translation:complete";
 
-/// Number of entries to send to the provider in each batch
-const ENTRIES_PER_BATCH: usize = 20;
-
 #[derive(Debug, Clone)]
 struct FileTranslationBatch {
     relative_path: String,
     entries: Vec<TranslationRequest>,
-}
-
-#[derive(Debug, Default)]
-struct BatchApplyResult {
-    applied_entries: usize,
-    missing_project_entries: Vec<String>,
+    context: TranslationBatchContext,
 }
 
 /// Create a boxed TranslationProvider from API key info
@@ -433,6 +432,7 @@ fn create_provider(app: &tauri::AppHandle, info: &ApiKeyInfo) -> Box<dyn Transla
                 info.command_path.clone(),
                 info.model.clone(),
                 info.profile.clone(),
+                None,
             ))
         }
     }
@@ -441,9 +441,13 @@ fn create_provider(app: &tauri::AppHandle, info: &ApiKeyInfo) -> Box<dyn Transla
 fn make_progress(
     files_processed: usize,
     total_files: usize,
+    chunks_processed: usize,
+    total_chunks: usize,
     entries_translated: usize,
     total_entries: usize,
     current_file: String,
+    current_file_chunks_processed: usize,
+    current_file_total_chunks: usize,
     failed_entries: usize,
     failed_batches: usize,
     warnings: &[String],
@@ -451,9 +455,13 @@ fn make_progress(
     BatchProgress {
         files_processed,
         total_files,
+        chunks_processed,
+        total_chunks,
         entries_translated,
         total_entries,
         current_file,
+        current_file_chunks_processed,
+        current_file_total_chunks,
         failed_entries,
         failed_batches,
         warnings: warnings.to_vec(),
@@ -467,44 +475,6 @@ fn push_warning(warnings: &mut Vec<String>, message: String) {
     }
 }
 
-fn apply_batch_responses(
-    project_state: &Arc<Mutex<Option<Project>>>,
-    file_path: &str,
-    responses: &[TranslationResponse],
-) -> Result<BatchApplyResult, AppError> {
-    let mut proj_guard = project_state
-        .lock()
-        .map_err(|e| AppError::Project(format!("Lock error: {e}")))?;
-
-    let project = proj_guard
-        .as_mut()
-        .ok_or_else(|| AppError::Project("No project is currently open".into()))?;
-
-    let file = project
-        .files
-        .iter_mut()
-        .find(|f| f.relative_path == file_path)
-        .ok_or_else(|| AppError::NotFound(format!("File not found: {file_path}")))?;
-
-    let mut result = BatchApplyResult::default();
-
-    for resp in responses {
-        if let Some(entry) = file.entries.iter_mut().find(|e| e.id == resp.entry_id) {
-            entry.translation = resp.translated_text.clone();
-            entry.status = EntryStatus::Draft;
-            result.applied_entries += 1;
-        } else {
-            result.missing_project_entries.push(resp.entry_id.clone());
-        }
-    }
-
-    if result.applied_entries > 0 {
-        project.updated_at = persistence::now_iso8601();
-    }
-
-    Ok(result)
-}
-
 async fn run_batch_translation(
     app: tauri::AppHandle,
     project_state: Arc<Mutex<Option<Project>>>,
@@ -516,162 +486,196 @@ async fn run_batch_translation(
     batches: Vec<FileTranslationBatch>,
     total_entries: usize,
 ) {
+    let total_chunks = batches.len();
+    let total_files = batches
+        .iter()
+        .map(|batch| batch.relative_path.as_str())
+        .collect::<std::collections::HashSet<_>>()
+        .len();
+    let mut file_chunk_totals = std::collections::HashMap::new();
+    for batch in &batches {
+        *file_chunk_totals
+            .entry(batch.relative_path.clone())
+            .or_insert(0usize) += 1;
+    }
+
     log::info!(
-        "Starting batch translation with provider {} ({} files, {} entries)",
+        "Starting batch translation with provider {} ({} files, {} chunks, {} entries)",
         provider_name,
-        batches.len(),
+        total_files,
+        total_chunks,
         total_entries
     );
-    let total_files = batches.len();
     let mut files_processed = 0usize;
+    let mut chunks_processed = 0usize;
     let mut entries_translated = 0usize;
     let mut failed_entries = 0usize;
     let mut failed_batches = 0usize;
     let mut warnings: Vec<String> = Vec::new();
+    let mut file_chunks_processed = std::collections::HashMap::new();
 
     for file_batch in batches {
-        if file_batch.entries.is_empty() {
-            files_processed += 1;
-            let progress = make_progress(
-                files_processed,
-                total_files,
-                entries_translated,
-                total_entries,
-                file_batch.relative_path.clone(),
-                failed_entries,
-                failed_batches,
-                &warnings,
-            );
-            let _ = app.emit(BATCH_PROGRESS_EVENT, &progress);
-            continue;
-        }
+        match provider
+            .translate_batch(
+                &file_batch.entries,
+                &source_lang,
+                &target_lang,
+                &glossary,
+                &file_batch.context,
+            )
+            .await
+        {
+            Ok(responses) => {
+                let mut chunk_had_failure = false;
+                let response_ids = responses
+                    .iter()
+                    .map(|response| response.entry_id.as_str())
+                    .collect::<std::collections::HashSet<_>>();
+                let missing_response_count = file_batch
+                    .entries
+                    .iter()
+                    .filter(|request| !response_ids.contains(request.entry_id.as_str()))
+                    .count();
+                let requested_ids = file_batch
+                    .entries
+                    .iter()
+                    .map(|request| request.entry_id.as_str())
+                    .collect::<std::collections::HashSet<_>>();
 
-        for chunk in file_batch.entries.chunks(ENTRIES_PER_BATCH) {
-            let requested_ids = chunk
-                .iter()
-                .map(|request| request.entry_id.as_str())
-                .collect::<std::collections::HashSet<_>>();
+                match {
+                    let proj_guard = project_state
+                        .lock()
+                        .map_err(|e| AppError::Project(format!("Lock error: {e}")));
 
-            match provider
-                .translate_batch(chunk, &source_lang, &target_lang, &glossary)
-                .await
-            {
-                Ok(responses) => {
-                    let mut chunk_had_failure = false;
-                    let response_ids = responses
-                        .iter()
-                        .map(|response| response.entry_id.as_str())
-                        .collect::<std::collections::HashSet<_>>();
-                    let missing_response_count = chunk
-                        .iter()
-                        .filter(|request| !response_ids.contains(request.entry_id.as_str()))
-                        .count();
+                    proj_guard.and_then(|mut guard| {
+                        let project = guard.as_mut().ok_or_else(|| {
+                            AppError::Project("No project is currently open".into())
+                        })?;
+                        translation_apply::apply_provider_responses(
+                            project,
+                            &file_batch.relative_path,
+                            &responses,
+                        )
+                    })
+                } {
+                    Ok(result) => {
+                        entries_translated += result.applied_entries;
 
-                    match apply_batch_responses(
-                        &project_state,
-                        &file_batch.relative_path,
-                        &responses,
-                    ) {
-                        Ok(result) => {
-                            entries_translated += result.applied_entries;
-
-                            if missing_response_count > 0 {
-                                failed_entries += missing_response_count;
-                                chunk_had_failure = true;
-                                let message = format!(
-                                    "Provider '{}' returned {} fewer translations than requested for '{}'.",
-                                    provider_name,
-                                    missing_response_count,
-                                    file_batch.relative_path
-                                );
-                                log::error!("{message}");
-                                push_warning(&mut warnings, message);
-                            }
-
-                            if !result.missing_project_entries.is_empty() {
-                                failed_entries += result.missing_project_entries.len();
-                                chunk_had_failure = true;
-                                let message = format!(
-                                    "Translated responses could not be matched back into '{}' ({} entry IDs).",
-                                    file_batch.relative_path,
-                                    result.missing_project_entries.len()
-                                );
-                                log::error!("{message}");
-                                push_warning(&mut warnings, message);
-                            }
-
-                            let unexpected_response_count = responses
-                                .iter()
-                                .filter(|response| {
-                                    !requested_ids.contains(response.entry_id.as_str())
-                                })
-                                .count();
-                            if unexpected_response_count > 0 {
-                                chunk_had_failure = true;
-                                let message = format!(
-                                    "Provider '{}' returned {} unexpected entry IDs for '{}'.",
-                                    provider_name,
-                                    unexpected_response_count,
-                                    file_batch.relative_path
-                                );
-                                log::error!("{message}");
-                                push_warning(&mut warnings, message);
-                            }
-
-                            if chunk_had_failure {
-                                failed_batches += 1;
-                            }
-                        }
-                        Err(error) => {
-                            failed_entries += chunk.len();
-                            failed_batches += 1;
+                        if missing_response_count > 0 {
+                            failed_entries += missing_response_count;
+                            chunk_had_failure = true;
                             let message = format!(
-                                "Failed to apply translated responses for '{}' (provider {}): {}",
-                                file_batch.relative_path, provider_name, error
+                                "Provider '{}' returned {} fewer translations than requested for '{}'.",
+                                provider_name,
+                                missing_response_count,
+                                file_batch.relative_path
                             );
                             log::error!("{message}");
                             push_warning(&mut warnings, message);
                         }
+
+                        if !result.missing_project_entries.is_empty() {
+                            failed_entries += result.missing_project_entries.len();
+                            chunk_had_failure = true;
+                            let message = format!(
+                                "Translated responses could not be matched back into '{}' ({} entry IDs).",
+                                file_batch.relative_path,
+                                result.missing_project_entries.len()
+                            );
+                            log::error!("{message}");
+                            push_warning(&mut warnings, message);
+                        }
+
+                        if !result.invalid_entries.is_empty() {
+                            failed_entries += result.invalid_entries.len();
+                            chunk_had_failure = true;
+                            let message = format!(
+                                "Skipped {} translated entries in '{}' because integrity checks failed.",
+                                result.invalid_entries.len(),
+                                file_batch.relative_path
+                            );
+                            log::error!("{message}");
+                            push_warning(&mut warnings, message);
+                        }
+
+                        let unexpected_response_count = responses
+                            .iter()
+                            .filter(|response| !requested_ids.contains(response.entry_id.as_str()))
+                            .count();
+                        if unexpected_response_count > 0 {
+                            chunk_had_failure = true;
+                            let message = format!(
+                                "Provider '{}' returned {} unexpected entry IDs for '{}'.",
+                                provider_name, unexpected_response_count, file_batch.relative_path
+                            );
+                            log::error!("{message}");
+                            push_warning(&mut warnings, message);
+                        }
+
+                        for warning in result.warnings {
+                            push_warning(&mut warnings, warning);
+                        }
+
+                        if chunk_had_failure {
+                            failed_batches += 1;
+                        }
+                    }
+                    Err(error) => {
+                        failed_entries += file_batch.entries.len();
+                        failed_batches += 1;
+                        let message = format!(
+                            "Failed to apply translated responses for '{}' (provider {}): {}",
+                            file_batch.relative_path, provider_name, error
+                        );
+                        log::error!("{message}");
+                        push_warning(&mut warnings, message);
                     }
                 }
-                Err(error) => {
-                    failed_entries += chunk.len();
-                    failed_batches += 1;
-                    let message = format!(
-                        "Translation failed for '{}' with provider '{}': {}",
-                        file_batch.relative_path, provider_name, error
-                    );
-                    log::error!(
-                        "Translation failed (provider {}) for file {} ({} entries): {}",
-                        provider_name,
-                        file_batch.relative_path,
-                        chunk.len(),
-                        error
-                    );
-                    push_warning(&mut warnings, message);
-                }
             }
-
-            let progress = make_progress(
-                files_processed,
-                total_files,
-                entries_translated,
-                total_entries,
-                file_batch.relative_path.clone(),
-                failed_entries,
-                failed_batches,
-                &warnings,
-            );
-            let _ = app.emit(BATCH_PROGRESS_EVENT, &progress);
+            Err(error) => {
+                failed_entries += file_batch.entries.len();
+                failed_batches += 1;
+                let message = format!(
+                    "Translation failed for '{}' with provider '{}': {}",
+                    file_batch.relative_path, provider_name, error
+                );
+                log::error!(
+                    "Translation failed (provider {}) for file {} ({} entries): {}",
+                    provider_name,
+                    file_batch.relative_path,
+                    file_batch.entries.len(),
+                    error
+                );
+                push_warning(&mut warnings, message);
+            }
         }
 
-        files_processed += 1;
+        chunks_processed += 1;
+        let current_file_chunks_processed = {
+            let processed = file_chunks_processed
+                .entry(file_batch.relative_path.clone())
+                .or_insert(0usize);
+            *processed += 1;
+            *processed
+        };
+        let current_file_total_chunks = file_chunk_totals
+            .get(&file_batch.relative_path)
+            .copied()
+            .unwrap_or(1);
+        if current_file_chunks_processed == current_file_total_chunks {
+            files_processed += 1;
+        }
+
         let progress = make_progress(
             files_processed,
             total_files,
+            chunks_processed,
+            total_chunks,
             entries_translated,
             total_entries,
             file_batch.relative_path.clone(),
+            current_file_chunks_processed,
+            current_file_total_chunks,
             failed_entries,
             failed_batches,
             &warnings,
@@ -682,18 +686,23 @@ async fn run_batch_translation(
     let final_progress = make_progress(
         total_files,
         total_files,
+        total_chunks,
+        total_chunks,
         entries_translated,
         total_entries,
         String::new(),
+        0,
+        0,
         failed_entries,
         failed_batches,
         &warnings,
     );
     let _ = app.emit(BATCH_COMPLETE_EVENT, &final_progress);
     log::info!(
-        "Batch translation complete with provider {} ({} files, {} entries translated, {} failed entries)",
+        "Batch translation complete with provider {} ({} files, {} chunks, {} entries translated, {} failed entries)",
         provider_name,
         total_files,
+        total_chunks,
         entries_translated,
         failed_entries
     );
@@ -711,17 +720,7 @@ pub async fn translate_batch_start(
     file_paths: Vec<String>,
 ) -> Result<BatchProgress, AppError> {
     let info = apikey_load(app.clone(), provider).await?;
-    if provider_requires_api_key(&info.provider) && info.api_key.is_empty() {
-        return Err(AppError::Api(
-            "No API key configured for this provider".to_string(),
-        ));
-    }
-
-    let translation_provider = create_provider(&app, &info);
-    translation_provider.validate().await?;
-    let provider_name = translation_provider.name().to_string();
-
-    let (source_lang, target_lang, glossary, batches, total_entries) = {
+    let (source_lang, target_lang, glossary, batches, total_entries, total_files, total_chunks) = {
         let proj_guard = state
             .project
             .lock()
@@ -734,46 +733,66 @@ pub async fn translate_batch_start(
         let source_lang = project.source_lang.clone();
         let target_lang = project.target_lang.clone();
         let glossary = project.glossary.clone();
+        let planned_chunks =
+            translation_orchestrator::build_translation_plan(project, &file_paths, &info.provider);
+        translation_orchestrator::ensure_translation_plan_within_budget(
+            project,
+            &planned_chunks,
+            &info.provider,
+        )?;
+        let total_entries = planned_chunks.iter().map(|chunk| chunk.entries.len()).sum();
+        let total_files = planned_chunks
+            .iter()
+            .map(|chunk| chunk.relative_path.as_str())
+            .collect::<std::collections::HashSet<_>>()
+            .len();
+        let total_chunks = planned_chunks.len();
+        let batches: Vec<FileTranslationBatch> = planned_chunks
+            .into_iter()
+            .map(|chunk| FileTranslationBatch {
+                relative_path: chunk.relative_path,
+                entries: chunk.entries,
+                context: chunk.context,
+            })
+            .collect();
 
-        let mut batches: Vec<FileTranslationBatch> = Vec::new();
-        let mut total_entries = 0usize;
-
-        for file in &project.files {
-            if !file_paths.is_empty() && !file_paths.contains(&file.relative_path) {
-                continue;
-            }
-
-            let entries: Vec<TranslationRequest> = file
-                .entries
-                .iter()
-                .filter(|entry| entry.status == EntryStatus::Untranslated)
-                .map(|entry| TranslationRequest {
-                    entry_id: entry.id.clone(),
-                    text: entry.original.clone(),
-                })
-                .collect();
-
-            total_entries += entries.len();
-            batches.push(FileTranslationBatch {
-                relative_path: file.relative_path.clone(),
-                entries,
-            });
-        }
-
-        (source_lang, target_lang, glossary, batches, total_entries)
+        (
+            source_lang,
+            target_lang,
+            glossary,
+            batches,
+            total_entries,
+            total_files,
+            total_chunks,
+        )
     };
 
-    let total_files = batches.len();
-    let initial_progress =
-        make_progress(0, total_files, 0, total_entries, String::new(), 0, 0, &[]);
+    let initial_progress = make_progress(
+        0,
+        total_files,
+        0,
+        total_chunks,
+        0,
+        total_entries,
+        String::new(),
+        0,
+        0,
+        0,
+        0,
+        &[],
+    );
 
-    if total_files == 0 || total_entries == 0 {
+    if total_chunks == 0 || total_entries == 0 {
         let progress = make_progress(
             total_files,
             total_files,
+            total_chunks,
+            total_chunks,
             0,
             total_entries,
             String::new(),
+            0,
+            0,
             0,
             0,
             &[],
@@ -781,6 +800,16 @@ pub async fn translate_batch_start(
         let _ = app.emit(BATCH_COMPLETE_EVENT, &progress);
         return Ok(initial_progress);
     }
+
+    if provider_requires_api_key(&info.provider) && info.api_key.is_empty() {
+        return Err(AppError::Api(
+            "No API key configured for this provider".to_string(),
+        ));
+    }
+
+    let translation_provider = create_provider(&app, &info);
+    translation_provider.validate().await?;
+    let provider_name = translation_provider.name().to_string();
 
     let project_state = state.project.clone();
     tauri::async_runtime::spawn(async move {

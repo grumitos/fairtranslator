@@ -38,7 +38,7 @@ export function useTranslation() {
           void ipc.projectGet()
             .then((proj) => {
               if (proj) {
-                replaceProject(proj);
+                replaceProject(proj, { markDirty: true });
               }
             })
             .catch((refreshError) => {

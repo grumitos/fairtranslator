@@ -15,6 +15,10 @@
   "new": "Nuevo",
   "newProject": "Nuevo proyecto",
   "openProject": "Abrir proyecto",
+  "unsavedChanges": {
+    "openProject": "Hay cambios del proyecto sin guardar. ¿Abrir otro proyecto y descartarlos?",
+    "createProject": "Hay cambios del proyecto sin guardar. ¿Crear un proyecto nuevo y descartarlos?"
+  },
   "project": "Proyecto",
   "errorBoundary": {
     "title": "Algo salio mal",
@@ -61,6 +65,8 @@
     "exporting": "Exportando...",
     "success": "Exportación completada",
     "successDetail": "{{files}} archivos exportados, {{applied}} de {{total}} traducciones aplicadas",
+    "warning": "Exportación completada con advertencias",
+    "warningDetail": "{{count}} chequeos de traducción todavía requieren revisión.",
     "noTranslations": "No hay traducciones para exportar",
     "errorNoProject": "No hay proyecto abierto"
   }

@@ -7,11 +7,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
 use crate::models::GlossaryTerm;
-use crate::services::provider::{TranslationProvider, TranslationRequest, TranslationResponse};
+use crate::services::compact_prompt;
+use crate::services::provider::{
+    approximate_token_count, TranslationBatchContext, TranslationProvider, TranslationRequest,
+    TranslationResponse,
+};
 
 /// Maximum number of entries to send in a single API call.
 /// OpenAI can handle large prompts, but we cap to avoid token limits.
-const MAX_BATCH_SIZE: usize = 20;
+const MAX_BATCH_SIZE: usize = 24;
+const OPENAI_CHAT_WRAPPER_TOKEN_OVERHEAD: usize = 96;
+const OPENAI_RESPONSE_HEADROOM_TOKENS: usize = 2048;
 
 /// Default model to use if none is specified in config
 const DEFAULT_MODEL: &str = "gpt-4o-mini";
@@ -61,33 +67,41 @@ impl OpenAiProvider {
         }
     }
 
-    /// Build the system prompt with glossary context
-    fn build_system_prompt(
+    /// Build the system prompt with glossary and orchestration context.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn build_system_prompt(
         source_lang: &str,
         target_lang: &str,
         glossary: &[GlossaryTerm],
+        context: &TranslationBatchContext,
     ) -> String {
-        let mut prompt = format!(
-            "You are a professional translator for RPG Maker video games. \
-             Translate the following texts from {source_lang} to {target_lang}. \
-             Preserve all RPG Maker control codes (e.g., \\V[n], \\N[n], \\C[n], \\{{}}, \\{{}}, \\$, \\., \\|, \\!, \\>, \\<, \\^). \
-             Keep the tone and style appropriate for a video game. \
-             Maintain proper nouns as-is unless a glossary translation is provided."
-        );
+        compact_prompt::build_provider_bundle(source_lang, target_lang, &[], glossary, context)
+            .expect("building OpenAI prompt shell should not fail")
+            .system_prompt
+    }
 
-        if !glossary.is_empty() {
-            prompt.push_str("\n\nGlossary (use these translations consistently):\n");
-            for term in glossary {
-                prompt.push_str(&format!("- \"{}\" → \"{}\"\n", term.source, term.target));
-            }
-        }
+    pub(crate) fn estimate_total_tokens(
+        source_lang: &str,
+        target_lang: &str,
+        requests: &[TranslationRequest],
+        glossary: &[GlossaryTerm],
+        context: &TranslationBatchContext,
+    ) -> usize {
+        let bundle = compact_prompt::build_provider_bundle(
+            source_lang,
+            target_lang,
+            requests,
+            glossary,
+            context,
+        )
+        .expect("serializing compact OpenAI prompt should not fail");
+        let system_prompt = bundle.system_prompt;
+        let user_content = bundle.user_payload;
 
-        prompt.push_str(
-            "\n\nRespond ONLY with a JSON array of translated strings in the same order as the input. \
-             No explanations, no markdown, just the JSON array."
-        );
-
-        prompt
+        approximate_token_count(&system_prompt)
+            + approximate_token_count(&user_content)
+            + OPENAI_CHAT_WRAPPER_TOKEN_OVERHEAD
+            + OPENAI_RESPONSE_HEADROOM_TOKENS
     }
 }
 
@@ -162,17 +176,21 @@ impl TranslationProvider for OpenAiProvider {
         source_lang: &str,
         target_lang: &str,
         glossary: &[GlossaryTerm],
+        context: &TranslationBatchContext,
     ) -> Result<Vec<TranslationResponse>, AppError> {
         let mut all_responses = Vec::with_capacity(requests.len());
 
         // Process in chunks to avoid token limits
         for chunk in requests.chunks(MAX_BATCH_SIZE) {
-            let system_prompt = Self::build_system_prompt(source_lang, target_lang, glossary);
-
-            // Build the user message as a JSON array of source texts
-            let texts: Vec<&str> = chunk.iter().map(|r| r.text.as_str()).collect();
-            let user_content = serde_json::to_string(&texts)
-                .map_err(|e| AppError::Api(format!("Failed to serialize texts: {}", e)))?;
+            let bundle = compact_prompt::build_provider_bundle(
+                source_lang,
+                target_lang,
+                chunk,
+                glossary,
+                context,
+            )?;
+            let system_prompt = bundle.system_prompt.clone();
+            let user_content = bundle.user_payload.clone();
 
             let request = ChatRequest {
                 model: self.model.clone(),
@@ -215,7 +233,6 @@ impl TranslationProvider for OpenAiProvider {
                 .trim()
                 .to_string();
 
-            // Strip markdown code fences if the model wraps its response
             let json_str = content
                 .strip_prefix("```json")
                 .or_else(|| content.strip_prefix("```"))
@@ -223,28 +240,14 @@ impl TranslationProvider for OpenAiProvider {
                 .map(|s| s.trim())
                 .unwrap_or(&content);
 
-            // Parse the JSON array of translated strings
-            let translations: Vec<String> = serde_json::from_str(json_str).map_err(|e| {
-                AppError::Api(format!(
-                    "Failed to parse OpenAI response as JSON array: {}. Response: {}",
-                    e, content
-                ))
-            })?;
-
-            if translations.len() != chunk.len() {
-                return Err(AppError::Api(format!(
-                    "OpenAI returned {} translations but expected {}",
-                    translations.len(),
-                    chunk.len()
-                )));
-            }
-
-            for (req, translated) in chunk.iter().zip(translations.into_iter()) {
-                all_responses.push(TranslationResponse {
-                    entry_id: req.entry_id.clone(),
-                    translated_text: translated,
-                });
-            }
+            let parsed = compact_prompt::parse_provider_response(json_str, &bundle.entry_refs)
+                .map_err(|error| {
+                    AppError::Api(format!(
+                        "Failed to parse OpenAI response as JSON object: {}. Response: {}",
+                        error, content
+                    ))
+                })?;
+            all_responses.extend(parsed);
         }
 
         Ok(all_responses)
@@ -257,11 +260,23 @@ mod tests {
 
     #[test]
     fn test_build_system_prompt_without_glossary() {
-        let prompt = OpenAiProvider::build_system_prompt("ja", "es", &[]);
-        assert!(prompt.contains("ja"));
-        assert!(prompt.contains("es"));
-        assert!(prompt.contains("JSON array"));
-        assert!(!prompt.contains("Glossary"));
+        let bundle = compact_prompt::build_provider_bundle(
+            "ja",
+            "es",
+            &[TranslationRequest {
+                entry_id: "entry-1".into(),
+                file_context: "ctx".into(),
+                text: "Hello".into(),
+                notes: String::new(),
+            }],
+            &[],
+            &TranslationBatchContext::default(),
+        )
+        .unwrap();
+        assert!(bundle.system_prompt.contains("ja"));
+        assert!(bundle.system_prompt.contains("es"));
+        assert!(bundle.system_prompt.contains("\"translations\""));
+        assert!(!bundle.user_payload.contains("\"gl\""));
     }
 
     #[test]
@@ -271,10 +286,22 @@ mod tests {
             target: "Héroe".to_string(),
             case_sensitive: true,
         }];
-        let prompt = OpenAiProvider::build_system_prompt("ja", "es", &glossary);
-        assert!(prompt.contains("Glossary"));
-        assert!(prompt.contains("勇者"));
-        assert!(prompt.contains("Héroe"));
+        let bundle = compact_prompt::build_provider_bundle(
+            "ja",
+            "es",
+            &[TranslationRequest {
+                entry_id: "entry-1".into(),
+                file_context: "ctx".into(),
+                text: "勇者".into(),
+                notes: String::new(),
+            }],
+            &glossary,
+            &TranslationBatchContext::default(),
+        )
+        .unwrap();
+        assert!(bundle
+            .user_payload
+            .contains("\"gl\":[{\"s\":\"勇者\",\"t\":\"Héroe\"}]"));
     }
 
     #[test]
@@ -309,8 +336,12 @@ mod tests {
 
     #[test]
     fn test_system_prompt_mentions_control_codes() {
-        let prompt = OpenAiProvider::build_system_prompt("ja", "es", &[]);
-        // Should mention RPG Maker control codes
+        let prompt = OpenAiProvider::build_system_prompt(
+            "ja",
+            "es",
+            &[],
+            &TranslationBatchContext::default(),
+        );
         assert!(prompt.contains("\\V[n]") || prompt.contains("control codes"));
         assert!(prompt.contains("\\N[n]") || prompt.contains("RPG Maker"));
     }
@@ -329,11 +360,23 @@ mod tests {
                 case_sensitive: false,
             },
         ];
-        let prompt = OpenAiProvider::build_system_prompt("ja", "es", &glossary);
-        assert!(prompt.contains("勇者"));
-        assert!(prompt.contains("Héroe"));
-        assert!(prompt.contains("魔王"));
-        assert!(prompt.contains("Rey Demonio"));
+        let bundle = compact_prompt::build_provider_bundle(
+            "ja",
+            "es",
+            &[TranslationRequest {
+                entry_id: "entry-1".into(),
+                file_context: "ctx".into(),
+                text: "勇者 魔王".into(),
+                notes: String::new(),
+            }],
+            &glossary,
+            &TranslationBatchContext::default(),
+        )
+        .unwrap();
+        assert!(bundle.user_payload.contains("勇者"));
+        assert!(bundle.user_payload.contains("Héroe"));
+        assert!(bundle.user_payload.contains("魔王"));
+        assert!(bundle.user_payload.contains("Rey Demonio"));
     }
 
     #[test]

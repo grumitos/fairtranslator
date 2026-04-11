@@ -41,7 +41,7 @@ interface NewProjectDialogProps {
 
 export function NewProjectDialog({ open, onOpenChange }: NewProjectDialogProps) {
   const { t } = useTranslation("common");
-  const { create, isLoading, error } = useProject();
+  const { create, isDirty, isLoading, error } = useProject();
   const [formName, setFormName] = useState("");
   const [formGameDir, setFormGameDir] = useState("");
   const [formSourceLang, setFormSourceLang] = useState("ja");
@@ -63,6 +63,9 @@ export function NewProjectDialog({ open, onOpenChange }: NewProjectDialogProps) 
 
   const handleCreate = useCallback(async () => {
     if (!formGameDir || !formName) return;
+    if (isDirty && !window.confirm(t("unsavedChanges.createProject"))) {
+      return;
+    }
     try {
       await create(formGameDir, formName, formSourceLang, formTargetLang);
       onOpenChange(false);
@@ -76,7 +79,7 @@ export function NewProjectDialog({ open, onOpenChange }: NewProjectDialogProps) 
         description: e instanceof Error ? e.message : String(e),
       });
     }
-  }, [create, formGameDir, formName, formSourceLang, formTargetLang, onOpenChange, t]);
+  }, [create, formGameDir, formName, formSourceLang, formTargetLang, isDirty, onOpenChange, t]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
