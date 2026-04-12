@@ -34,7 +34,7 @@ Crear una herramienta nueva, moderna y sin fricciones de monetización, enfocada
 Principles:
 - El usuario conecta **sus propias API keys** (OpenAI, DeepL, Google). Sin créditos intermediarios. El costo real de traducir un juego completo con modelos como GPT-4o-mini ronda los $0.50–$2 USD.
 - Interfaz moderna y limpia desde el primer día.
-- Open source o licencia única simple — sin suscripciones.
+- Licencia comercial perpetua simple, sin suscripciones obligatorias.
 - El punto de entrada fue RPG Maker MV/MZ, y el alcance implementado ya se extendió a VX Ace, VX y XP.
 
 ---
@@ -73,7 +73,7 @@ Principles:
 
 ---
 
-## Stack Recommendations (open)
+## Stack Recommendations
 
 ### Option A — Electron + React
 - Acceso completo al filesystem nativo

@@ -159,7 +159,7 @@ Mirror these as Rust structs in `src-tauri/src/models/` with identical field nam
 - **File associations:** `.fairtl` directories registered as `application/x-fairtranslator-project`.
 - **NSIS config:** `installMode: "both"` (per-user or per-machine), language selector with Spanish + English.
 - **Metadata:** publisher, copyright, category (`DeveloperTool`), short/long descriptions all set in `tauri.conf.json`.
-- **License:** MIT license in `LICENSE` file at project root.
+- **License:** Proprietary source license in `LICENSE`; commercial binary distributions use `EULA.md` and must preserve `THIRD_PARTY_NOTICES.md`.
 - **CI/CD:** Two GitHub Actions workflows in `.github/workflows/`:
   - `ci.yml` — runs on push/PR to `master` and `main`: frontend tsc check (ubuntu) + Rust check + Rust tests (windows).
   - `release.yml` — runs on `v*` tag push: full build via `tauri-apps/tauri-action`, creates a draft GitHub Release with NSIS + MSI artifacts.

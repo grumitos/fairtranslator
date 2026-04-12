@@ -17,7 +17,9 @@
   "openProject": "Abrir proyecto",
   "unsavedChanges": {
     "openProject": "Hay cambios del proyecto sin guardar. ¿Abrir otro proyecto y descartarlos?",
-    "createProject": "Hay cambios del proyecto sin guardar. ¿Crear un proyecto nuevo y descartarlos?"
+    "createProject": "Hay cambios del proyecto sin guardar. ¿Crear un proyecto nuevo y descartarlos?",
+    "closeApp": "Hay cambios del proyecto sin guardar. ¿Cerrar la aplicación y descartarlos?",
+    "badge": "Sin guardar"
   },
   "project": "Proyecto",
   "errorBoundary": {

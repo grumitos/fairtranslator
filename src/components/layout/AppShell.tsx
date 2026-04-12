@@ -1,4 +1,8 @@
 import { useEffect, useRef, useState } from "react";
+import { confirm as dialogConfirm } from "@tauri-apps/plugin-dialog";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { isTauri } from "@tauri-apps/api/core";
+import { useTranslation } from "react-i18next";
 import { Sidebar } from "./Sidebar";
 import { Toolbar } from "./Toolbar";
 import { StatusBar } from "./StatusBar";
@@ -12,7 +16,9 @@ import { FindReplaceBar } from "@/components/editor/FindReplaceBar";
 import { cn } from "@/lib/utils";
 
 export function AppShell() {
+  const { t } = useTranslation("common");
   const project = useProjectStore((s) => s.project);
+  const isDirty = useProjectStore((s) => s.isDirty);
   const showFindReplace = useEditorStore((s) => s.showFindReplace);
   const sidebarWidth = useSettingsStore((s) => s.sidebarWidth);
   const setSidebarWidth = useSettingsStore((s) => s.setSidebarWidth);
@@ -24,10 +30,82 @@ export function AppShell() {
   useKeyboardShortcuts();
 
   useEffect(() => {
+    const appName = t("appName");
+    if (!project) {
+      document.title = appName;
+      return;
+    }
+
+    document.title = `${isDirty ? "* " : ""}${project.name} - ${appName}`;
+  }, [isDirty, project, t]);
+
+  useEffect(() => {
     if (!isResizingSidebar) {
       setDraftSidebarWidth(sidebarWidth);
     }
   }, [sidebarWidth, isResizingSidebar]);
+
+  useEffect(() => {
+    if (isTauri()) {
+      return;
+    }
+
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      const { project: currentProject, isDirty: currentDirty } = useProjectStore.getState();
+      if (!currentProject || !currentDirty) {
+        return;
+      }
+
+      event.preventDefault();
+      event.returnValue = "";
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, []);
+
+  useEffect(() => {
+    if (!isTauri()) {
+      return;
+    }
+
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+
+    void getCurrentWindow()
+      .onCloseRequested(async (event) => {
+        const { project: currentProject, isDirty: currentDirty } = useProjectStore.getState();
+        if (!currentProject || !currentDirty) {
+          return;
+        }
+
+        const shouldClose = await dialogConfirm(t("unsavedChanges.closeApp"), {
+          title: t("appName"),
+          kind: "warning",
+          okLabel: t("close"),
+          cancelLabel: t("cancel"),
+        });
+
+        if (!shouldClose) {
+          event.preventDefault();
+        }
+      })
+      .then((dispose) => {
+        if (disposed) {
+          dispose();
+          return;
+        }
+        unlisten = dispose;
+      })
+      .catch(() => {
+        // Browser/test environments can reach this path even with Tauri packages installed.
+      });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [t]);
 
   useEffect(() => {
     if (!isResizingSidebar) return;

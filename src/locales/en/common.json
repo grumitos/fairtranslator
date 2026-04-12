@@ -17,7 +17,9 @@
   "openProject": "Open Project",
   "unsavedChanges": {
     "openProject": "You have unsaved project changes. Open another project and discard them?",
-    "createProject": "You have unsaved project changes. Create a new project and discard them?"
+    "createProject": "You have unsaved project changes. Create a new project and discard them?",
+    "closeApp": "You have unsaved project changes. Close the app and discard them?",
+    "badge": "Unsaved"
   },
   "project": "Project",
   "errorBoundary": {

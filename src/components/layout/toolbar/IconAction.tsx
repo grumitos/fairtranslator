@@ -25,6 +25,8 @@ export function IconAction({
           size="icon-sm"
           onClick={onClick}
           disabled={disabled}
+          aria-label={label}
+          aria-pressed={active || undefined}
         >
           {children}
         </Button>

@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import { useProjectStore } from "@/stores/projectStore";
 import * as ipc from "@/lib/ipc";
+import { normalizeProjectEntryUpdate } from "@/lib/translationState";
 import type {
   Project,
   EntryStatus,
@@ -12,12 +13,13 @@ function applyEntryUpdates(project: Project, updates: ProjectEntryUpdate[]): Pro
   const updatesByFile = new Map<string, Map<string, ProjectEntryUpdate>>();
 
   for (const update of updates) {
-    let fileUpdates = updatesByFile.get(update.filePath);
+    const normalizedUpdate = normalizeProjectEntryUpdate(update);
+    let fileUpdates = updatesByFile.get(normalizedUpdate.filePath);
     if (!fileUpdates) {
       fileUpdates = new Map<string, ProjectEntryUpdate>();
-      updatesByFile.set(update.filePath, fileUpdates);
+      updatesByFile.set(normalizedUpdate.filePath, fileUpdates);
     }
-    fileUpdates.set(update.entryId, update);
+    fileUpdates.set(normalizedUpdate.entryId, normalizedUpdate);
   }
 
   return {
@@ -139,12 +141,19 @@ export function useProject() {
         status,
         notes,
       };
+      const normalizedUpdate = normalizeProjectEntryUpdate(update);
       if (currentProject) {
-        replaceProject(applyEntryUpdates(currentProject, [update]), { markDirty: true });
+        replaceProject(applyEntryUpdates(currentProject, [normalizedUpdate]), { markDirty: true });
       }
 
       try {
-        await ipc.projectUpdateEntry(filePath, entryId, translation, status, notes);
+        await ipc.projectUpdateEntry(
+          normalizedUpdate.filePath,
+          normalizedUpdate.entryId,
+          normalizedUpdate.translation,
+          normalizedUpdate.status,
+          normalizedUpdate.notes,
+        );
       } catch (e) {
         if (currentProject) {
           replaceProject(currentProject, { markDirty: previousDirty });
@@ -166,12 +175,13 @@ export function useProject() {
       const store = useProjectStore.getState();
       const currentProject = store.project;
       const previousDirty = store.isDirty;
+      const normalizedUpdates = updates.map(normalizeProjectEntryUpdate);
       if (currentProject) {
-        replaceProject(applyEntryUpdates(currentProject, updates), { markDirty: true });
+        replaceProject(applyEntryUpdates(currentProject, normalizedUpdates), { markDirty: true });
       }
 
       try {
-        await ipc.projectUpdateEntries(updates);
+        await ipc.projectUpdateEntries(normalizedUpdates);
       } catch (e) {
         if (currentProject) {
           replaceProject(currentProject, { markDirty: previousDirty });

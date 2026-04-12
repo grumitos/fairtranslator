@@ -2,6 +2,8 @@
 
 FairTranslator is a desktop application for translating RPG Maker games without locking core workflows behind subscriptions or hosted accounts. It scans a supported game, extracts translatable text into a `.fairtl` project, lets you edit or batch-translate entries, and exports a translated copy of the game without modifying the source folder.
 
+This repository is private and proprietary. Source code access is limited to authorized collaborators. Commercial builds are intended to be distributed to customers under a paid perpetual end-user license rather than a subscription model.
+
 ## Current Scope
 
 FairTranslator currently targets the RPG Maker family, not every RPG engine.
@@ -110,6 +112,8 @@ npm run tauri:build:codex-sidecar
 - Initial release notes: [docs/releases/v0.9.0.md](./docs/releases/v0.9.0.md)
 - Changelog: [CHANGELOG.md](./CHANGELOG.md)
 
-## License
+## Licensing
 
-MIT. See [LICENSE](./LICENSE).
+- Source code in this repository is proprietary. See [LICENSE](./LICENSE).
+- Commercial binary distributions should include [EULA.md](./EULA.md).
+- Third-party components keep their own licenses. See [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).

@@ -198,7 +198,16 @@ export function Toolbar() {
           <IconAction label={t("editor:toolbar.settings")} onClick={() => setShowSettings(true)}>
             <Settings className="size-4" />
           </IconAction>
-          {project && <span className="max-w-48 truncate text-xs text-muted-foreground">{project.name}</span>}
+          {project && (
+            <div className="flex min-w-0 items-center gap-2">
+              {isDirty && (
+                <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-300">
+                  {t("common:unsavedChanges.badge")}
+                </span>
+              )}
+              <span className="max-w-48 truncate text-xs text-muted-foreground">{project.name}</span>
+            </div>
+          )}
         </div>
       </header>
 

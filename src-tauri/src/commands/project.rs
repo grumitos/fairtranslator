@@ -267,7 +267,11 @@ fn apply_entry_update(project: &mut Project, update: &ProjectEntryUpdate) -> Res
         .ok_or_else(|| AppError::NotFound(format!("Entry not found: {}", update.entry_id)))?;
 
     entry.translation = update.translation.clone();
-    entry.status = update.status.clone();
+    entry.status = if update.translation.trim().is_empty() {
+        EntryStatus::Untranslated
+    } else {
+        update.status.clone()
+    };
     if let Some(notes) = &update.notes {
         entry.notes = notes.clone();
     }

@@ -2,6 +2,7 @@
   "name": "fairtranslator",
   "private": true,
   "version": "0.9.0",
+  "license": "UNLICENSED",
   "type": "module",
   "scripts": {
     "dev": "vite",

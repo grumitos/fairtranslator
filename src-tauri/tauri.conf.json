@@ -28,6 +28,10 @@
   "bundle": {
     "active": true,
     "targets": ["nsis", "msi"],
+    "resources": {
+      "../EULA.md": "licenses/EULA.md",
+      "../THIRD_PARTY_NOTICES.md": "licenses/THIRD_PARTY_NOTICES.md"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -39,7 +43,7 @@
     "copyright": "Copyright 2026 FairTranslator contributors",
     "category": "DeveloperTool",
     "shortDescription": "Desktop translation tool for RPG Maker games",
-    "longDescription": "FairTranslator is a free, open-source desktop application for translating RPG Maker MZ, MV, VX Ace, VX, and XP games. It supports manual editing, glossary-based workflows, built-in providers such as OpenAI, DeepL, Google Translate, and Codex, plus structured external AI batch flows.",
+    "longDescription": "FairTranslator is a desktop application for translating RPG Maker MZ, MV, VX Ace, VX, and XP games. It supports manual editing, glossary-based workflows, built-in providers such as OpenAI, DeepL, Google Translate, and Codex, plus structured external AI batch flows. Commercial releases are intended for direct-license distribution without mandatory subscriptions.",
     "fileAssociations": [
       {
         "ext": ["fairtl"],
