@@ -49,6 +49,20 @@ Use this versioning path:
 - `1.1+`: Incremental quality improvements, performance, UI polish, release automation
 - `2.0.0` or a later major: Only if the product scope expands materially beyond RPG Maker and changes the support model
 
+## Current 0.9.x Hardening Baseline
+
+As of 2026-04-25, the local hardening baseline includes:
+
+- API keys stored in Windows Credential Manager through the Rust `keyring` integration, with legacy JSON-store migration on load.
+- Explicit Tauri CSP instead of a null policy.
+- Provider endpoint overrides constrained to HTTPS URLs without embedded credentials, query strings, or fragments.
+- Frontend accessibility fixes for the New Project dialog, Settings sheet, Style Guide sheet, and provider API-key fields.
+- Production Vite output split into stable vendor chunks, with stale generated Vite config artifacts removed from source control.
+- Manual editing/search hot-path improvements for active-file grid/find views and resize persistence.
+- `npm audit --audit-level=high` returning zero vulnerabilities after lockfile updates.
+
+This does not make `1.0.0` automatic. The remaining blocker is still real-game validation breadth and release support maturity, not the absence of basic local build/test hardening.
+
 ## What 1.0.0 Should Mean
 
 Before tagging `1.0.0`, the repo should have:

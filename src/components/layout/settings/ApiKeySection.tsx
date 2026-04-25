@@ -243,6 +243,10 @@ export function ApiKeySection({ provider }: ApiKeySectionProps) {
       {!isCodex && (
         <Input
           type="password"
+          name={`${providerKey}-api-key`}
+          aria-label={`${t(`apiKeys.${providerKey}.label`)} ${t("apiKeys.apiKey")}`}
+          autoComplete="off"
+          spellCheck={false}
           value={apiKey}
           onChange={(e) => setApiKey(e.target.value)}
           placeholder={t(`apiKeys.${providerKey}.placeholder`)}
@@ -252,6 +256,10 @@ export function ApiKeySection({ provider }: ApiKeySectionProps) {
 
       {supportsModel && (
         <Input
+          name={`${providerKey}-model`}
+          aria-label={t("apiKeys.model")}
+          autoComplete="off"
+          spellCheck={false}
           value={model}
           onChange={(e) => setModel(e.target.value)}
           placeholder={t("apiKeys.modelPlaceholder")}
@@ -262,12 +270,20 @@ export function ApiKeySection({ provider }: ApiKeySectionProps) {
       {provider === "openai" && (
         <>
           <Input
+            name="openai-organization"
+            aria-label={t("apiKeys.openai.organization")}
+            autoComplete="off"
+            spellCheck={false}
             value={organization}
             onChange={(e) => setOrganization(e.target.value)}
             placeholder={t("apiKeys.openai.organizationPlaceholder")}
             className="text-xs"
           />
           <Input
+            name="openai-project"
+            aria-label={t("apiKeys.openai.project")}
+            autoComplete="off"
+            spellCheck={false}
             value={project}
             onChange={(e) => setProject(e.target.value)}
             placeholder={t("apiKeys.openai.projectPlaceholder")}
@@ -280,12 +296,20 @@ export function ApiKeySection({ provider }: ApiKeySectionProps) {
       {isCodex && (
         <>
           <Input
+            name="codex-command-path"
+            aria-label={t("apiKeys.codex.commandPath")}
+            autoComplete="off"
+            spellCheck={false}
             value={commandPath}
             onChange={(e) => setCommandPath(e.target.value)}
             placeholder={t("apiKeys.codex.commandPathPlaceholder")}
             className="text-xs"
           />
           <Input
+            name="codex-profile"
+            aria-label={t("apiKeys.codex.profile")}
+            autoComplete="off"
+            spellCheck={false}
             value={profile}
             onChange={(e) => setProfile(e.target.value)}
             placeholder={t("apiKeys.codex.profilePlaceholder")}
@@ -327,6 +351,12 @@ export function ApiKeySection({ provider }: ApiKeySectionProps) {
 
       {supportsEndpoint && (
         <Input
+          name={`${providerKey}-endpoint`}
+          type="url"
+          inputMode="url"
+          aria-label={t("apiKeys.endpoint")}
+          autoComplete="off"
+          spellCheck={false}
           value={endpoint}
           onChange={(e) => setEndpoint(e.target.value)}
           placeholder={t("apiKeys.endpointPlaceholder")}

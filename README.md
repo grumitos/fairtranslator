@@ -33,6 +33,10 @@ FairTranslator supports two provider styles today:
 - Direct HTTP providers that use an API key: OpenAI, DeepL, Google Translate
 - Codex through the Codex CLI runtime
 
+Provider API keys are stored in the operating-system credential store on Windows. Non-secret provider settings, such as selected model, profile, organization/project identifiers, and endpoint override metadata, remain in the local app store. Legacy API keys found in the older JSON-backed store are migrated into secure storage when loaded and then removed from the JSON store.
+
+Custom provider endpoint overrides are intentionally restricted: they must be HTTPS URLs without embedded credentials, query strings, or fragments. This keeps API keys from being sent to malformed or ambiguous endpoints.
+
 For Codex, authentication is managed by the installed Codex CLI. FairTranslator does not implement ChatGPT OAuth itself and does not store ChatGPT OAuth tokens. The runtime can be resolved from:
 
 1. A bundled sidecar binary
@@ -89,6 +93,7 @@ Requirements:
 - Node.js
 - Rust toolchain
 - Tauri prerequisites for your platform
+- Windows release/build validation: Visual Studio Build Tools 2022 with the C++ toolchain
 
 Common commands:
 
@@ -97,6 +102,24 @@ npm install
 npm run tauri dev
 npm run test:run
 cargo test
+```
+
+On Windows, if `cargo` cannot find `link.exe`, run Rust/Tauri validation from a Visual Studio developer environment:
+
+```powershell
+& $env:ComSpec /c '"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 && cargo test --manifest-path src-tauri\Cargo.toml --no-fail-fast'
+```
+
+Release-quality local checks used for the current hardening pass:
+
+```powershell
+npx tsc --noEmit
+npm run test:run
+npm run build
+npm audit --audit-level=high
+cargo check --manifest-path src-tauri\Cargo.toml
+cargo test --manifest-path src-tauri\Cargo.toml --no-fail-fast
+npm run tauri -- build
 ```
 
 Optional Codex sidecar preparation:

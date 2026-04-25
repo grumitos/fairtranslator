@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { useStyleGuide } from "@/hooks/useStyleGuide";
 
 interface StyleGuidePanelProps {
@@ -105,18 +105,21 @@ export function StyleGuidePanel({ open, onOpenChange }: StyleGuidePanelProps) {
       <SheetContent style={{ "--sheet-width": "480px" } as CSSProperties}>
         <SheetHeader>
           <SheetTitle>{t("styleGuide.title")}</SheetTitle>
+          <SheetDescription>{t("styleGuide.description")}</SheetDescription>
         </SheetHeader>
 
         <div className="mt-4 space-y-4">
-          <p className="text-xs text-muted-foreground">{t("styleGuide.description")}</p>
-
           <div className="space-y-2">
-            <Label>{t("styleGuide.addTitle")}</Label>
+            <Label htmlFor="style-guide-new-rule">{t("styleGuide.addTitle")}</Label>
             <div className="flex gap-2">
               <Input
+                id="style-guide-new-rule"
+                name="style-guide-new-rule"
                 value={newRule}
                 onChange={(event) => setNewRule(event.target.value)}
                 placeholder={t("styleGuide.addPlaceholder")}
+                autoComplete="off"
+                spellCheck={false}
                 className="text-xs"
               />
               <Button size="sm" onClick={handleAddRule} disabled={!newRule.trim() || isLoading}>
@@ -150,17 +153,22 @@ export function StyleGuidePanel({ open, onOpenChange }: StyleGuidePanelProps) {
                   {normalizedDraft.map((rule, index) => (
                     <div key={`${rule}-${index}`} className="flex gap-2">
                       <Input
+                        aria-label={t("styleGuide.ruleInputLabel", { index: index + 1 })}
+                        name={`style-guide-rule-${index + 1}`}
                         value={rule}
                         onChange={(event) => handleRuleChange(index, event.target.value)}
+                        autoComplete="off"
+                        spellCheck={false}
                         className="text-xs"
                       />
                       <Button
                         size="icon-sm"
                         variant="ghost"
                         onClick={() => handleRemoveRule(index)}
+                        aria-label={t("styleGuide.removeRuleLabel", { index: index + 1 })}
                         title={t("styleGuide.remove")}
                       >
-                        <Trash2 className="size-3.5" />
+                        <Trash2 aria-hidden="true" className="size-3.5" />
                       </Button>
                     </div>
                   ))}

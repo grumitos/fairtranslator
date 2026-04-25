@@ -1,11 +1,14 @@
 {
   "title": "Settings",
+  "description": "Configure providers, appearance, and application language.",
   "apiKeys": {
     "title": "Providers",
     "openai": {
       "label": "OpenAI",
       "placeholder": "sk-...",
+      "organization": "OpenAI organization",
       "organizationPlaceholder": "OpenAI organization ID (optional)",
+      "project": "OpenAI project",
       "projectPlaceholder": "OpenAI project ID (optional)",
       "authNote": "Supported OpenAI auth here is API-key based. ChatGPT/session cookies are not used; optional organization/project fields add official request scoping."
     },
@@ -19,7 +22,9 @@
     },
     "codex": {
       "label": "Codex",
+      "commandPath": "Codex executable path",
       "commandPathPlaceholder": "codex executable path (optional)",
+      "profile": "Codex profile",
       "profilePlaceholder": "Codex profile name (optional)",
       "authNote": "Codex auth is managed by the installed Codex CLI. Leave the command path empty to use `codex` from PATH; the status below shows whether the binary and ChatGPT session are ready.",
       "statusReady": "Installed and authenticated",
@@ -41,6 +46,7 @@
     "validating": "Validating...",
     "valid": "Provider is ready",
     "invalid": "Provider validation failed",
+    "apiKey": "API key",
     "model": "Model",
     "modelPlaceholder": "gpt-4o-mini / gpt-5.4",
     "endpoint": "Custom endpoint",

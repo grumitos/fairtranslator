@@ -71,19 +71,6 @@ fn total_selected_entries(project: &Project, file_paths: &[String]) -> usize {
         .count()
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) fn build_ai_batch_prompt(
-    project: &Project,
-    batch_id: &str,
-    entries: &[AiBatchEntry],
-    context: &TranslationBatchContext,
-) -> Result<String, AppError> {
-    Ok(
-        compact_prompt::build_external_ai_bundle(project, batch_id, entries, context)?
-            .render_single_prompt(),
-    )
-}
-
 pub(crate) fn estimate_ai_batch_prompt_tokens(
     project: &Project,
     requests: &[TranslationRequest],

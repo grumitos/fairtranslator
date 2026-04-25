@@ -6,6 +6,7 @@ import {
   Sheet,
   SheetContent,
   SheetHeader,
+  SheetDescription,
   SheetTitle,
 } from "@/components/ui/sheet";
 import {
@@ -51,6 +52,7 @@ export function SettingsPanel({ open, onOpenChange }: SettingsPanelProps) {
       <SheetContent style={{ "--sheet-width": "420px" } as CSSProperties}>
         <SheetHeader>
           <SheetTitle>{t("settings:title")}</SheetTitle>
+          <SheetDescription>{t("settings:description")}</SheetDescription>
         </SheetHeader>
 
         <Tabs defaultValue="apikeys" className="mt-4">
@@ -72,9 +74,9 @@ export function SettingsPanel({ open, onOpenChange }: SettingsPanelProps) {
           <TabsContent value="appearance" className="mt-4 space-y-6">
             {/* Theme */}
             <div className="space-y-2">
-              <Label>{t("settings:appearance.theme")}</Label>
+              <Label id="settings-theme-label">{t("settings:appearance.theme")}</Label>
               <Select value={theme} onValueChange={(v) => setTheme(v as "light" | "dark" | "system")}>
-                <SelectTrigger className="w-full">
+                <SelectTrigger aria-labelledby="settings-theme-label" className="w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -87,12 +89,12 @@ export function SettingsPanel({ open, onOpenChange }: SettingsPanelProps) {
 
             {/* Language */}
             <div className="space-y-2">
-              <Label>{t("settings:language.title")}</Label>
+              <Label id="settings-language-label">{t("settings:language.title")}</Label>
               <Select
                 value={language}
                 onValueChange={(v) => setLanguage(v as "es" | "en")}
               >
-                <SelectTrigger className="w-full">
+                <SelectTrigger aria-labelledby="settings-language-label" className="w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -104,9 +106,13 @@ export function SettingsPanel({ open, onOpenChange }: SettingsPanelProps) {
 
             {/* Word Wrap */}
             <div className="space-y-2">
-              <Label>{t("settings:wordWrap.title")}</Label>
+              <Label htmlFor="settings-word-wrap-column">{t("settings:wordWrap.title")}</Label>
               <Input
+                id="settings-word-wrap-column"
+                name="word-wrap-column"
                 type="number"
+                inputMode="numeric"
+                autoComplete="off"
                 min={0}
                 max={500}
                 value={wordWrapColumn}

@@ -49,6 +49,7 @@
   },
   "newProjectDialog": {
     "title": "New Project",
+    "description": "Select the game folder, name the project, and choose the working languages.",
     "name": "Project name",
     "namePlaceholder": "My translation",
     "gameDir": "Game folder",

@@ -43,14 +43,27 @@ export function FindReplaceBar() {
     [findQuery, matchCase, useRegex],
   );
   const isInvalidRegex = useRegex && findQuery.length > 0 && regex === null;
+  const projectFiles = activeFile ? null : project?.files;
+  const searchableFiles = useMemo(() => {
+    if (activeFile) return [activeFile];
+    return projectFiles ?? [];
+  }, [activeFile, projectFiles]);
+  const entryByKey = useMemo(() => {
+    const entries = new Map<string, (typeof searchableFiles)[number]["entries"][number]>();
+    for (const file of searchableFiles) {
+      for (const entry of file.entries) {
+        entries.set(`${file.relativePath}:${entry.id}`, entry);
+      }
+    }
+    return entries;
+  }, [searchableFiles]);
 
   const matches = useMemo<FindMatch[]>(() => {
-    if (!regex || !project) return [];
-    const files = activeFile ? [activeFile] : project.files;
+    if (!regex) return [];
     const result: FindMatch[] = [];
     let dataIndex = 0;
 
-    for (const file of files) {
+    for (const file of searchableFiles) {
       for (const entry of file.entries) {
         if (searchTarget === "original" || searchTarget === "both") {
           if (regex.test(entry.original)) {
@@ -78,7 +91,7 @@ export function FindReplaceBar() {
       }
     }
     return result;
-  }, [regex, project, activeFile, searchTarget]);
+  }, [regex, searchableFiles, searchTarget]);
 
   // Keep matchCount in store for global keyboard shortcuts
   useEffect(() => {
@@ -115,8 +128,7 @@ export function FindReplaceBar() {
       return;
     }
 
-    const file = project?.files.find((f) => f.relativePath === match.filePath);
-    const entry = file?.entries.find((e) => e.id === match.entryId);
+    const entry = entryByKey.get(`${match.filePath}:${match.entryId}`);
     if (!entry) return;
 
     const updated = entry.translation.replace(regex, replaceText);
@@ -129,7 +141,7 @@ export function FindReplaceBar() {
         entry.status === "untranslated" ? "draft" : entry.status,
       );
     } catch {}
-  }, [regex, matches, currentMatchIndex, project, replaceText, updateEntry, t]);
+  }, [regex, matches, currentMatchIndex, entryByKey, replaceText, updateEntry, t]);
 
   const handleReplaceAll = useCallback(async () => {
     if (!regex || matches.length === 0) return;
@@ -145,8 +157,7 @@ export function FindReplaceBar() {
       const key = `${match.filePath}:${match.entryId}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      const file = project?.files.find((f) => f.relativePath === match.filePath);
-      const entry = file?.entries.find((e) => e.id === match.entryId);
+      const entry = entryByKey.get(key);
       if (!entry) continue;
 
       const updated = entry.translation.replace(regex, replaceText);
@@ -169,7 +180,7 @@ export function FindReplaceBar() {
       await updateEntriesBatch(updates);
       toast.success(t("findReplace.replaced", { count: updates.length }));
     } catch {}
-  }, [regex, matches, project, replaceText, updateEntriesBatch, t]);
+  }, [regex, matches, entryByKey, replaceText, updateEntriesBatch, t]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {

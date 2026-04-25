@@ -4,6 +4,26 @@
 - Audit, strengthen, and verify FairTranslator as a coherent product across manual, AI, and mixed translation workflows.
 - Revalidate prior known findings, identify new product-integrity gaps, implement fixes in controlled batches, verify behavior, and leave a durable audit trail for context recovery.
 
+## Current Verified State - 2026-04-25
+- The older `Confirmed Findings` section below is historical audit context from 2026-04-11. Several entries there have since been fixed; use this section plus `docs/AUDIT_TODO.md` current status before treating old findings as active.
+- Stack verified: Tauri 2 + Rust 2021 backend, React 19 + TypeScript + Vite 6 frontend, Tailwind 4/shadcn-style UI, Vitest, GitHub Actions CI/release.
+- Security hardening now landed:
+  - Tauri CSP is explicit instead of `null`.
+  - Provider endpoint overrides are normalized and rejected unless they are HTTPS URLs without embedded credentials, query strings, or fragments.
+  - Provider API keys are stored in Windows Credential Manager via `keyring`; `tauri-plugin-store` is retained only for non-secret provider settings, and legacy JSON API keys migrate on load.
+  - `npm audit --audit-level=high` reports zero vulnerabilities after dependency lock updates.
+- Frontend accessibility hardening now landed for the New Project dialog, Settings sheet, Style Guide sheet, and API-key fields. Playwright smoke found no relevant Radix `Missing Description`/ARIA warnings for the New Project dialog.
+- Performance hardening now landed for audited hot paths: Vite output is split into stable vendor chunks, stale generated Vite config artifacts are removed, active-file grid/find views avoid depending on the full project file list, search text is precomputed per row, and grid/sidebar resize persistence commits at drag end.
+- Rust validation is no longer environment-limited on this workstation when commands are run through `VsDevCmd.bat`; Visual Studio Build Tools 2022 VC tools were installed. The installer requested a reboot, but current-session validation already works.
+- Current validation evidence:
+  - `npx tsc --noEmit`
+  - `npm run test:run` (`9` files, `18` tests)
+  - `npm run build` with split chunks and no >500 kB warning
+  - `npm audit --audit-level=high`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+  - `cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast` (`116` lib tests plus QA bin tests)
+  - `npm run tauri -- build`, producing NSIS and MSI bundles
+
 ## Full Scope
 - Project lifecycle: create, open, save, reopen, backward compatibility.
 - Translation pipeline: batching, chunking, context budgeting, progress reporting, provider parity, external AI round-trip.
@@ -42,7 +62,7 @@
 - `P2-04` Align provider messaging with real capabilities; either improve provider context handling where possible or narrow UI promises per provider.
 - `P2-05` Tighten provider-specific safeguards where weak implementations remain, especially Google glossary protection and provider-capability disclosure.
 - `P3-01` Remove artificial inline-edit latency; make edits optimistic or visibly saving; collapse replace-all into a bulk path.
-- `P3-02` Reduce global recomputation around manual editing and search/filter flows where it materially affects UX.
+- `P3-02` Reduce global recomputation around manual editing and search/filter flows where it materially affects UX. Current audited hot paths are now closed; future work should use profiler traces on large real projects before adding more performance complexity.
 
 ## Architectural Decisions
 - Session memory will be persisted in this file plus `docs/AUDIT_TODO.md`.
@@ -59,7 +79,7 @@
 - 2026-04-11: confirmed the real-campaign helper path `qa_translate_provider` uses `CodexProvider` only, with report output hardcoded as `provider: "codex"` and default model `gpt-5.4`; the first long run against `G:\...Buebito...` was interrupted manually before completion and must be rerun.
 - 2026-04-11: re-audited remaining perf/debt items with read-only explorers:
   - `P3-01` is effectively resolved after immediate inline editing, optimistic single-entry saves, and batched replace-all IPC/backend application.
-  - `P3-02` is only partially improved; deferred search and memoized stats landed, but project-wide recomputation on committed edits and column-resize persistence churn remain.
+  - `P3-02` was partially improved in the 2026-04-11 batch and then closed on 2026-04-25 with grid column resize committed on drag end, precomputed row search text, and active-file grid/find memoization.
   - `P2-06` is now closed on code re-audit: unshrinkable oversize chunks fail fast before provider execution and External AI export; the remaining debt is only that the ceiling is conservative and glossary relevance is not yet trimmed per chunk.
 - 2026-04-11: upgraded `qa_translate_provider` for long-running campaign visibility by adding startup/progress logging and a dedicated `qa_translate.progress.log` file inside the workspace so background runs can be monitored without looking hung.
 - 2026-04-11: started the real removable-disk Buebito campaign translation in `D:\FairTranslatorRuns\buebito-codex-20260411-spark` using `gpt-5.3-codex-spark`; the live progress log confirms runtime validation completed and contextual planning has begun.
@@ -535,7 +555,7 @@
 
 ### Micro-Audit After Batch E
 - Confirmed `P3-01` is now resolved: the original close criteria for immediate editing, optimistic state, and batched replace-all are met.
-- Confirmed `P3-02` is improved but not closed: the grid still re-derives project-wide flattened/filter data after committed edits, and column resize still persists on every drag tick.
+- Confirmed `P3-02` was improved but not closed in this batch: the grid still re-derived project-wide flattened/filter data after committed edits, and column resize still persisted on every drag tick. Follow-up work on 2026-04-25 closed the audited hot paths.
 - Found an execution-observability gap during the first real Buebito rerun: background `stderr` redirection was not reliable enough to prove live progress. The helper now writes to a dedicated progress file with per-line flushes.
 - Found a real campaign-recovery gap during the live Buebito `spark-low` run: `data/CommonEvents.json` chunk `3/252` returned two whitespace-only translations and the helper aborted even though the checkpoint was clean. The helper now reverts partial chunk mutations, retries invalid chunk responses, and only advances the checkpoint after a clean chunk apply.
 - Revalidated the `CommonEvents` failure root cause locally: the repeating invalid IDs were blank-source entries (`original: ""`) that should never have entered translation planning in the first place. The pipeline now skips blank-source entries centrally instead of asking providers to "translate" empty strings.

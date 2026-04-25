@@ -14,6 +14,17 @@ import type { EntryWithPath } from "@/components/editor/translation-grid/types";
 
 const ROW_HEIGHT_ESTIMATE = 52;
 
+function buildSearchText(entry: Omit<EntryWithPath, "_filePath" | "_searchText">): string {
+  return [entry.original, entry.translation, entry.fileContext, entry.id].join("\n").toLowerCase();
+}
+
+function toGridEntry(
+  entry: Omit<EntryWithPath, "_filePath" | "_searchText">,
+  filePath: string,
+): EntryWithPath {
+  return { ...entry, _filePath: filePath, _searchText: buildSearchText(entry) };
+}
+
 export function TranslationGrid() {
   const { t } = useTranslation("editor");
   const project = useProjectStore((s) => s.project);
@@ -48,11 +59,17 @@ export function TranslationGrid() {
     [wordWrapColumn],
   );
 
+  const activeFileData = useMemo<EntryWithPath[] | null>(() => {
+    if (!activeFile) return null;
+    return activeFile.entries.map((entry) => toGridEntry(entry, activeFile.relativePath));
+  }, [activeFile]);
+
+  const projectFiles = activeFile ? null : project?.files;
   const data = useMemo<EntryWithPath[]>(() => {
-    if (!project) return [];
-    const files = activeFile ? [activeFile] : project.files;
-    return files.flatMap((file) => file.entries.map((entry) => ({ ...entry, _filePath: file.relativePath })));
-  }, [project, activeFile]);
+    if (activeFileData) return activeFileData;
+    if (!projectFiles) return [];
+    return projectFiles.flatMap((file) => file.entries.map((entry) => toGridEntry(entry, file.relativePath)));
+  }, [activeFileData, projectFiles]);
   const getEntryKey = useCallback(
     (entry: EntryWithPath | null | undefined) => (entry ? `${entry._filePath}:${entry.id}` : null),
     [],
@@ -65,13 +82,7 @@ export function TranslationGrid() {
     }
     if (deferredSearchQuery.trim()) {
       const q = deferredSearchQuery.toLowerCase();
-      result = result.filter(
-        (entry) =>
-          entry.original.toLowerCase().includes(q) ||
-          entry.translation.toLowerCase().includes(q) ||
-          entry.fileContext.toLowerCase().includes(q) ||
-          entry.id.toLowerCase().includes(q),
-      );
+      result = result.filter((entry) => (entry._searchText ?? buildSearchText(entry)).includes(q));
     }
     return result;
   }, [data, statusFilter, deferredSearchQuery]);
@@ -157,7 +168,7 @@ export function TranslationGrid() {
     getCoreRowModel: getCoreRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
     enableColumnResizing: true,
-    columnResizeMode: "onChange",
+    columnResizeMode: "onEnd",
     state: {
       columnSizing: columnSizes,
     },

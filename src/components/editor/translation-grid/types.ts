@@ -1,6 +1,6 @@
 import type { TranslationEntry, EntryStatus } from "@/types/domain";
 
-export type EntryWithPath = TranslationEntry & { _filePath: string };
+export type EntryWithPath = TranslationEntry & { _filePath: string; _searchText?: string };
 
 export interface TranslationGridMeta {
   inlineEditingEntryId: string | null;

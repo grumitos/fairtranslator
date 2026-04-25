@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogFooter,
@@ -86,6 +87,7 @@ export function NewProjectDialog({ open, onOpenChange }: NewProjectDialogProps) 
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{t("newProjectDialog.title")}</DialogTitle>
+          <DialogDescription>{t("newProjectDialog.description")}</DialogDescription>
         </DialogHeader>
 
         <div className="flex flex-col gap-4 py-4">
@@ -101,6 +103,9 @@ export function NewProjectDialog({ open, onOpenChange }: NewProjectDialogProps) 
                 onChange={(e) => setFormGameDir(e.target.value)}
                 placeholder={t("newProjectDialog.gameDirPlaceholder")}
                 className="flex-1 text-xs"
+                name="game-directory"
+                autoComplete="off"
+                spellCheck={false}
                 readOnly
               />
               <Button
@@ -108,7 +113,7 @@ export function NewProjectDialog({ open, onOpenChange }: NewProjectDialogProps) 
                 size="sm"
                 onClick={handleBrowseGameDir}
               >
-                <FolderSearch className="size-4 mr-1" />
+                <FolderSearch aria-hidden="true" className="size-4 mr-1" />
                 {t("newProjectDialog.browse")}
               </Button>
             </div>
@@ -124,17 +129,20 @@ export function NewProjectDialog({ open, onOpenChange }: NewProjectDialogProps) 
               value={formName}
               onChange={(e) => setFormName(e.target.value)}
               placeholder={t("newProjectDialog.namePlaceholder")}
+              name="project-name"
+              autoComplete="off"
+              spellCheck={false}
             />
           </div>
 
           {/* Languages */}
           <div className="grid grid-cols-2 gap-3">
             <div className="flex flex-col gap-1.5">
-              <label className="text-sm font-medium">
+              <label id="npd-source-lang-label" className="text-sm font-medium">
                 {t("newProjectDialog.sourceLang")}
               </label>
               <Select value={formSourceLang} onValueChange={setFormSourceLang}>
-                <SelectTrigger>
+                <SelectTrigger aria-labelledby="npd-source-lang-label">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -147,11 +155,11 @@ export function NewProjectDialog({ open, onOpenChange }: NewProjectDialogProps) 
               </Select>
             </div>
             <div className="flex flex-col gap-1.5">
-              <label className="text-sm font-medium">
+              <label id="npd-target-lang-label" className="text-sm font-medium">
                 {t("newProjectDialog.targetLang")}
               </label>
               <Select value={formTargetLang} onValueChange={setFormTargetLang}>
-                <SelectTrigger>
+                <SelectTrigger aria-labelledby="npd-target-lang-label">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>

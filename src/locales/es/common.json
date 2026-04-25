@@ -49,6 +49,7 @@
   },
   "newProjectDialog": {
     "title": "Nuevo proyecto",
+    "description": "Selecciona la carpeta del juego, nombra el proyecto y define los idiomas de trabajo.",
     "name": "Nombre del proyecto",
     "namePlaceholder": "Mi traducción",
     "gameDir": "Carpeta del juego",

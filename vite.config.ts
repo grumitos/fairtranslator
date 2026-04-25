@@ -21,6 +21,41 @@ export default defineConfig(async () => ({
     globals: true,
     include: ["src/__tests__/**/*.test.ts", "src/__tests__/**/*.test.tsx"],
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id: string) {
+          const normalizedId = id.replace(/\\/g, "/");
+          if (!normalizedId.includes("/node_modules/")) return undefined;
+          if (
+            normalizedId.includes("/node_modules/react/") ||
+            normalizedId.includes("/node_modules/react-dom/") ||
+            normalizedId.includes("/node_modules/scheduler/")
+          ) {
+            return "react-vendor";
+          }
+          if (normalizedId.includes("/node_modules/@tanstack/")) return "grid-vendor";
+          if (
+            normalizedId.includes("/node_modules/i18next/") ||
+            normalizedId.includes("/node_modules/react-i18next/")
+          ) {
+            return "i18n-vendor";
+          }
+          if (
+            normalizedId.includes("/node_modules/radix-ui/") ||
+            normalizedId.includes("/node_modules/lucide-react/") ||
+            normalizedId.includes("/node_modules/sonner/") ||
+            normalizedId.includes("/node_modules/next-themes/") ||
+            normalizedId.includes("/node_modules/class-variance-authority/") ||
+            normalizedId.includes("/node_modules/tailwind-merge/")
+          ) {
+            return "ui-vendor";
+          }
+          return "vendor";
+        },
+      },
+    },
+  },
   server: {
     port: 1420,
     strictPort: true,

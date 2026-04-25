@@ -1,7 +1,7 @@
 /// Tauri commands for managing translation API keys and batch translation.
 ///
-/// API keys are stored via `tauri-plugin-store` in a local JSON file
-/// (never in project files). Keys are identified by provider name.
+/// API keys are stored in the operating system secure credential store.
+/// Non-secret provider configuration is stored via `tauri-plugin-store`.
 ///
 /// Batch translation emits progress events via `app.emit()` so the
 /// frontend can display a progress bar.
@@ -17,7 +17,10 @@ use crate::models::{
     GlossaryTerm, Project, ProviderType,
 };
 use crate::services::provider::{TranslationBatchContext, TranslationProvider, TranslationRequest};
-use crate::services::{ai_batch, translation_apply, translation_orchestrator};
+use crate::services::{
+    ai_batch, endpoint::normalize_https_endpoint_override, secrets, translation_apply,
+    translation_orchestrator,
+};
 
 /// Name of the store file for API settings
 const STORE_NAME: &str = "api-keys.json";
@@ -82,6 +85,21 @@ fn provider_requires_api_key(provider: &ProviderType) -> bool {
     !matches!(provider, ProviderType::Codex)
 }
 
+fn api_key_secret_id(provider: &ProviderType) -> String {
+    format!("fairtranslator:{}", api_key_for(provider))
+}
+
+fn normalize_provider_endpoint_override(
+    provider: &ProviderType,
+    endpoint: Option<String>,
+) -> Result<Option<String>, AppError> {
+    if matches!(provider, ProviderType::Codex) {
+        return Ok(None);
+    }
+
+    normalize_https_endpoint_override(endpoint)
+}
+
 /// Stable string ID for each provider (used as store keys)
 fn provider_id(provider: &ProviderType) -> &'static str {
     match provider {
@@ -107,15 +125,19 @@ pub async fn apikey_save(
     profile: Option<String>,
     _auth_mode: Option<String>,
 ) -> Result<(), AppError> {
+    let endpoint = normalize_provider_endpoint_override(&provider, endpoint)?;
+
     let store = app
         .store(STORE_NAME)
         .map_err(|e| AppError::Project(format!("Failed to open key store: {}", e)))?;
 
-    if provider_requires_api_key(&provider) || !api_key.trim().is_empty() {
-        store.set(api_key_for(&provider), Value::String(api_key));
+    let trimmed_api_key = api_key.trim();
+    if provider_requires_api_key(&provider) || !trimmed_api_key.is_empty() {
+        secrets::save_secret(&api_key_secret_id(&provider), trimmed_api_key)?;
     } else {
-        let _ = store.delete(api_key_for(&provider));
+        secrets::delete_secret(&api_key_secret_id(&provider))?;
     }
+    let _ = store.delete(api_key_for(&provider));
 
     if let Some(m) = model {
         store.set(model_key_for(&provider), Value::String(m));
@@ -171,10 +193,27 @@ pub async fn apikey_load(
         .store(STORE_NAME)
         .map_err(|e| AppError::Project(format!("Failed to open key store: {}", e)))?;
 
-    let api_key = store
+    let legacy_api_key = store
         .get(api_key_for(&provider))
         .and_then(|v| v.as_str().map(|s| s.to_string()))
         .unwrap_or_default();
+    let api_key = if provider_requires_api_key(&provider) {
+        match secrets::load_secret(&api_key_secret_id(&provider))? {
+            Some(secret) => secret,
+            None if !legacy_api_key.trim().is_empty() => {
+                let migrated = legacy_api_key.trim().to_string();
+                secrets::save_secret(&api_key_secret_id(&provider), &migrated)?;
+                let _ = store.delete(api_key_for(&provider));
+                store.save().map_err(|e| {
+                    AppError::Project(format!("Failed to remove legacy API key from store: {}", e))
+                })?;
+                migrated
+            }
+            None => String::new(),
+        }
+    } else {
+        String::new()
+    };
 
     let model = store
         .get(model_key_for(&provider))
@@ -232,6 +271,7 @@ pub async fn apikey_delete(app: tauri::AppHandle, provider: ProviderType) -> Res
         .store(STORE_NAME)
         .map_err(|e| AppError::Project(format!("Failed to open key store: {}", e)))?;
 
+    secrets::delete_secret(&api_key_secret_id(&provider))?;
     let _ = store.delete(api_key_for(&provider));
     let _ = store.delete(model_key_for(&provider));
     let _ = store.delete(endpoint_key_for(&provider));
@@ -262,45 +302,7 @@ pub async fn apikey_validate(
         ));
     }
 
-    // Create the appropriate provider and validate
-    match info.provider {
-        ProviderType::Openai => {
-            use crate::services::openai::OpenAiProvider;
-            use crate::services::provider::TranslationProvider;
-            let p = OpenAiProvider::new(
-                info.api_key,
-                info.model,
-                info.endpoint,
-                info.organization,
-                info.project,
-            );
-            p.validate().await
-        }
-        ProviderType::Deepl => {
-            use crate::services::deepl::DeepLProvider;
-            use crate::services::provider::TranslationProvider;
-            let p = DeepLProvider::new(info.api_key, info.endpoint);
-            p.validate().await
-        }
-        ProviderType::Google => {
-            use crate::services::google::GoogleProvider;
-            use crate::services::provider::TranslationProvider;
-            let p = GoogleProvider::new(info.api_key, info.endpoint);
-            p.validate().await
-        }
-        ProviderType::Codex => {
-            use crate::services::codex::CodexProvider;
-            use crate::services::provider::TranslationProvider;
-            let p = CodexProvider::with_app_handle(
-                app,
-                info.command_path,
-                info.model,
-                info.profile,
-                None,
-            );
-            p.validate().await
-        }
-    }
+    create_provider(&app, &info)?.validate().await
 }
 
 /// Inspect the local Codex runtime without requiring saved settings.
@@ -399,41 +401,43 @@ struct FileTranslationBatch {
 }
 
 /// Create a boxed TranslationProvider from API key info
-fn create_provider(app: &tauri::AppHandle, info: &ApiKeyInfo) -> Box<dyn TranslationProvider> {
+fn create_provider(
+    app: &tauri::AppHandle,
+    info: &ApiKeyInfo,
+) -> Result<Box<dyn TranslationProvider>, AppError> {
+    let endpoint = normalize_provider_endpoint_override(&info.provider, info.endpoint.clone())?;
+
     match info.provider {
         ProviderType::Openai => {
             use crate::services::openai::OpenAiProvider;
-            Box::new(OpenAiProvider::new(
+            Ok(Box::new(OpenAiProvider::new(
                 info.api_key.clone(),
                 info.model.clone(),
-                info.endpoint.clone(),
+                endpoint,
                 info.organization.clone(),
                 info.project.clone(),
-            ))
+            )))
         }
         ProviderType::Deepl => {
             use crate::services::deepl::DeepLProvider;
-            Box::new(DeepLProvider::new(
-                info.api_key.clone(),
-                info.endpoint.clone(),
-            ))
+            Ok(Box::new(DeepLProvider::new(info.api_key.clone(), endpoint)))
         }
         ProviderType::Google => {
             use crate::services::google::GoogleProvider;
-            Box::new(GoogleProvider::new(
+            Ok(Box::new(GoogleProvider::new(
                 info.api_key.clone(),
-                info.endpoint.clone(),
-            ))
+                endpoint,
+            )))
         }
         ProviderType::Codex => {
             use crate::services::codex::CodexProvider;
-            Box::new(CodexProvider::with_app_handle(
+            Ok(Box::new(CodexProvider::with_app_handle(
                 app.clone(),
                 info.command_path.clone(),
                 info.model.clone(),
                 info.profile.clone(),
                 None,
-            ))
+            )))
         }
     }
 }
@@ -807,7 +811,7 @@ pub async fn translate_batch_start(
         ));
     }
 
-    let translation_provider = create_provider(&app, &info);
+    let translation_provider = create_provider(&app, &info)?;
     translation_provider.validate().await?;
     let provider_name = translation_provider.name().to_string();
 
