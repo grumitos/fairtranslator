@@ -23,10 +23,15 @@ vi.mock("@/lib/ipc", () => ({
 
 describe("useTranslation hook", () => {
   beforeEach(() => {
+    vi.stubGlobal("__TAURI_INTERNALS__", { transformCallback: vi.fn() });
     listeners.clear();
     translateBatchStartMock.mockReset();
     projectGetMock.mockReset();
     useProjectStore.getState().reset();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("tracks batch translation lifecycle through events", async () => {

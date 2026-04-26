@@ -40,12 +40,12 @@ export function TranslationGridTableView({
   return (
     <>
       {/* Header with resize handles */}
-      <div className="flex border-b bg-muted/30 text-xs font-medium text-muted-foreground">
+      <div className="sticky top-0 z-10 flex h-9 border-b bg-card/95 text-[11px] font-semibold uppercase tracking-normal text-muted-foreground shadow-xs">
         {table.getHeaderGroups().map((headerGroup) =>
           headerGroup.headers.map((header) => (
             <div
               key={header.id}
-              className="relative flex items-center border-r px-3 py-2 last:border-r-0 select-none"
+              className="relative flex items-center border-r px-3 last:border-r-0 select-none"
               style={{ width: header.getSize(), minWidth: header.getSize() }}
             >
               {flexRender(header.column.columnDef.header, header.getContext())}
@@ -56,7 +56,7 @@ export function TranslationGridTableView({
                   onMouseDown={header.getResizeHandler()}
                   onTouchStart={header.getResizeHandler()}
                   className={cn(
-                    "absolute right-0 top-0 h-full w-1.5 cursor-col-resize select-none touch-none",
+                    "absolute right-0 top-0 h-full w-1.5 cursor-col-resize select-none touch-none transition-colors duration-150",
                     "hover:bg-primary/40 active:bg-primary/60",
                     header.column.getIsResizing() && "bg-primary",
                   )}
@@ -68,10 +68,13 @@ export function TranslationGridTableView({
       </div>
 
       {/* Virtualized rows */}
-      <div ref={parentRef} className="flex-1 overflow-auto">
+      <div ref={parentRef} className="min-h-0 flex-1 overflow-auto bg-background/40">
         {rows.length === 0 ? (
-          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            {emptyText}
+          <div className="flex h-full items-center justify-center p-6">
+            <div className="rounded-md border bg-card px-5 py-4 text-center shadow-sm">
+              <p className="text-sm font-medium text-foreground">{emptyText}</p>
+              <p className="mt-1 text-xs text-muted-foreground">{totalEntriesText}</p>
+            </div>
           </div>
         ) : (
           <div style={{ height: totalSize, position: "relative" }}>
@@ -87,16 +90,16 @@ export function TranslationGridTableView({
                   data-index={virtualRow.index}
                   ref={measureElement}
                   className={cn(
-                    "absolute left-0 flex w-full cursor-pointer items-stretch border-b transition-colors hover:bg-accent/50",
+                    "absolute left-0 flex w-full cursor-pointer items-stretch border-b transition-[background-color,box-shadow] duration-150 hover:bg-accent/60",
                     isMatch
-                      ? "bg-yellow-50 dark:bg-yellow-950/30"
+                      ? "bg-warning/10"
                       : isSelected
-                        ? "bg-accent/30"
+                        ? "bg-accent/55"
                         : virtualRow.index % 2 === 0
-                          ? "bg-background"
+                          ? "bg-card"
                           : "bg-muted/20",
-                    isSelected && "ring-2 ring-inset ring-primary/50",
-                    isEditing && "ring-2 ring-inset ring-primary",
+                    isSelected && "shadow-[inset_2px_0_0_var(--primary)]",
+                    isEditing && "shadow-[inset_2px_0_0_var(--primary),inset_0_0_0_1px_var(--primary)]",
                   )}
                   style={{
                     minHeight: "36px",
@@ -136,7 +139,7 @@ export function TranslationGridTableView({
       </div>
 
       {/* Footer */}
-      <div className="flex items-center border-t px-3 py-1 text-xs text-muted-foreground">
+      <div className="flex h-7 items-center border-t bg-card/95 px-3 text-xs text-muted-foreground">
         {totalEntriesText}
       </div>
     </>

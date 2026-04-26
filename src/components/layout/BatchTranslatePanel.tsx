@@ -302,7 +302,7 @@ export function BatchTranslatePanel({
             </TabsList>
 
             <TabsContent value="providers" className="space-y-4 pt-2">
-              <div className="rounded-md border border-blue-500/20 bg-blue-500/10 p-3 text-[11px] text-muted-foreground">
+              <div className="ft-callout-info p-3 text-[11px]">
                 <p className="font-medium text-foreground">{t("editor:batch.providers.modeTitle")}</p>
                 <p className="mt-1">{t("editor:batch.providers.modeDescription")}</p>
                 <p className="mt-1">{t("editor:batch.providers.modeFeatures")}</p>
@@ -439,7 +439,7 @@ export function BatchTranslatePanel({
 
               {aiError && <p className="text-xs text-destructive">{aiError}</p>}
               {aiWarnings.length > 0 && (
-                <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-amber-900 dark:text-amber-100">
+                <div className="ft-callout-warning p-2 text-xs">
                   {aiWarnings.map((warning) => (
                     <p key={warning}>{warning}</p>
                   ))}
@@ -492,14 +492,14 @@ export function BatchTranslatePanel({
                   <div className="flex items-center gap-2 text-xs">
                     <CheckCircle
                       className={
-                        progress.failedEntries > 0 ? "size-4 text-amber-500" : "size-4 text-green-500"
+                        progress.failedEntries > 0 ? "size-4 text-warning" : "size-4 text-success"
                       }
                     />
                     <span
                       className={
                         progress.failedEntries > 0
-                          ? "text-amber-600 dark:text-amber-400"
-                          : "text-green-600 dark:text-green-400"
+                          ? "text-warning"
+                          : "text-success"
                       }
                     >
                       {progress.failedEntries > 0
@@ -515,7 +515,7 @@ export function BatchTranslatePanel({
                     </span>
                   </div>
                   {progress.warnings.length > 0 && (
-                    <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-amber-900 dark:text-amber-100">
+                    <div className="ft-callout-warning p-2 text-xs">
                       {progress.warnings.map((warning) => (
                         <p key={warning}>{warning}</p>
                       ))}

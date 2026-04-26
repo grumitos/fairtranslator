@@ -32,7 +32,7 @@ export function StatusBar() {
 
   if (!project) {
     return (
-      <footer className="flex h-6 items-center border-t bg-muted/50 px-3 text-xs text-muted-foreground">
+      <footer className="flex h-7 items-center border-t bg-card/95 px-3 text-xs text-muted-foreground">
         {t("statusBar.noProject")}
       </footer>
     );
@@ -60,40 +60,40 @@ export function StatusBar() {
   }, [project.files, activeFile]);
 
   return (
-    <footer className="flex h-6 items-center justify-between border-t bg-muted/50 px-3 text-xs text-muted-foreground">
-      <div className="flex items-center gap-4">
+    <footer className="flex h-7 items-center justify-between gap-3 border-t bg-card/95 px-3 text-xs text-muted-foreground">
+      <div className="flex min-w-0 items-center gap-3">
         <span>{t("statusBar.engine", { engine: formatEngineLabel(project.engine) })}</span>
         <span>
           {project.sourceLang.toUpperCase()} &rarr; {project.targetLang.toUpperCase()}
         </span>
       </div>
-      <div className="flex items-center gap-3">
+      <div className="flex min-w-0 items-center gap-3">
         {activeFile && (
-          <span className="text-foreground/70">
+          <span className="hidden max-w-48 truncate text-foreground/70 sm:inline">
             {fileStem(activeFile.relativePath)}: {activeTranslated}/{activeTotal}
           </span>
         )}
-        <span>{t("statusBar.total", { count: totalEntries })}</span>
-        <span>{t("statusBar.translated", { count: translatedEntries })}</span>
+        <span className="hidden sm:inline">{t("statusBar.total", { count: totalEntries })}</span>
+        <span className="hidden sm:inline">{t("statusBar.translated", { count: translatedEntries })}</span>
 
         {/* Mini inline progress bar */}
         <div className="flex items-center gap-1.5">
-          <div className="h-2 w-20 rounded-full bg-muted overflow-hidden">
+          <div className="h-2 w-20 overflow-hidden rounded-full border bg-muted">
             <div
               className={cn(
-                "h-full rounded-full transition-all",
+                "h-full rounded-full transition-[width] duration-200",
                 percent >= 100
-                  ? "bg-green-500"
+                  ? "ft-progress-complete"
                   : percent >= 60
-                    ? "bg-yellow-500"
+                    ? "ft-progress-good"
                     : percent >= 30
-                      ? "bg-orange-500"
-                      : "bg-red-500",
+                      ? "ft-progress-partial"
+                      : "ft-progress-blocked",
               )}
               style={{ width: `${percent}%` }}
             />
           </div>
-          <span className="font-medium text-foreground/80">
+          <span className="font-semibold tabular-nums text-foreground/80">
             {t("statusBar.percentage", { percent })}
           </span>
         </div>

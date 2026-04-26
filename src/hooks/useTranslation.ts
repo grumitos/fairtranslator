@@ -4,6 +4,14 @@ import { useProjectStore } from "@/stores/projectStore";
 import * as ipc from "@/lib/ipc";
 import type { BatchProgress, ProviderType } from "@/types/domain";
 
+function canListenToTauriEvents(): boolean {
+  const tauriInternals = (globalThis as {
+    __TAURI_INTERNALS__?: { transformCallback?: unknown };
+  }).__TAURI_INTERNALS__;
+
+  return typeof tauriInternals?.transformCallback === "function";
+}
+
 /**
  * Hook for batch translation operations.
  * Manages the translation lifecycle: start, progress tracking, completion.
@@ -17,6 +25,10 @@ export function useTranslation() {
 
   // Listen for progress and completion events
   useEffect(() => {
+    if (!canListenToTauriEvents()) {
+      return;
+    }
+
     const unlisteners: UnlistenFn[] = [];
 
     const setup = async () => {
@@ -53,7 +65,13 @@ export function useTranslation() {
       unlisteners.push(unComplete);
     };
 
-    setup();
+    void setup().catch((listenError) => {
+      const msg =
+        listenError instanceof Error
+          ? listenError.message
+          : String(listenError);
+      setError(msg);
+    });
 
     return () => {
       unlisteners.forEach((u) => u());

@@ -110,75 +110,79 @@ export function Toolbar() {
 
   return (
     <>
-      <header className="flex h-10 items-center gap-1 border-b bg-background px-2">
-        <IconAction label={t("common:newProject")} onClick={() => setShowNewDialog(true)}>
-          <FilePlus className="size-4" />
-        </IconAction>
-        <IconAction label={t("common:openProject")} onClick={handleOpen}>
-          <FolderOpen className="size-4" />
-        </IconAction>
-        <IconAction label={t("common:save")} onClick={handleSave} disabled={projectUnavailable}>
-          <Save className="size-4" />
-        </IconAction>
-        <IconAction
-          label={t("common:export.button")}
-          onClick={handleExport}
-          disabled={projectUnavailable}
-        >
-          <Download className="size-4" />
-        </IconAction>
+      <header className="flex h-11 items-center gap-1 border-b bg-card/95 px-1.5 shadow-xs">
+        <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto overflow-y-hidden">
+          <div className="flex shrink-0 items-center gap-1 rounded-md border bg-background/65 p-0.5">
+            <IconAction label={t("common:newProject")} onClick={() => setShowNewDialog(true)}>
+              <FilePlus className="size-4" />
+            </IconAction>
+            <IconAction label={t("common:openProject")} onClick={handleOpen}>
+              <FolderOpen className="size-4" />
+            </IconAction>
+            <IconAction label={t("common:save")} onClick={handleSave} disabled={projectUnavailable}>
+              <Save className="size-4" />
+            </IconAction>
+            <IconAction
+              label={t("common:export.button")}
+              onClick={handleExport}
+              disabled={projectUnavailable}
+            >
+              <Download className="size-4" />
+            </IconAction>
+          </div>
 
-        <Separator orientation="vertical" className="mx-1 h-5" />
+          <Separator orientation="vertical" className="mx-1 h-6 shrink-0" />
 
-        <IconAction
-          label={t("editor:toolbar.batchTranslate")}
-          onClick={() => setShowBatchTranslate(true)}
-          disabled={!project}
-        >
-          <Languages className="size-4" />
-        </IconAction>
-        <IconAction
-          label={t("editor:toolbar.glossary")}
-          onClick={() => setShowGlossary(true)}
-          disabled={!project}
-        >
-          <BookOpen className="size-4" />
-        </IconAction>
-        <IconAction
-          label={t("editor:toolbar.styleGuide")}
-          onClick={() => setShowStyleGuide(true)}
-          disabled={!project}
-        >
-          <FileText className="size-4" />
-        </IconAction>
-        <IconAction
-          label={`${t("editor:toolbar.findReplace")} - ${t("editor:toolbar.findReplaceShortcut")}`}
-          onClick={toggleFindReplace}
-          disabled={!project}
-          active={showFindReplace}
-        >
-          <Replace className="size-4" />
-        </IconAction>
+          <div className="flex shrink-0 items-center gap-1 rounded-md border bg-background/65 p-0.5">
+            <IconAction
+              label={t("editor:toolbar.batchTranslate")}
+              onClick={() => setShowBatchTranslate(true)}
+              disabled={!project}
+            >
+              <Languages className="size-4" />
+            </IconAction>
+            <IconAction
+              label={t("editor:toolbar.glossary")}
+              onClick={() => setShowGlossary(true)}
+              disabled={!project}
+            >
+              <BookOpen className="size-4" />
+            </IconAction>
+            <IconAction
+              label={t("editor:toolbar.styleGuide")}
+              onClick={() => setShowStyleGuide(true)}
+              disabled={!project}
+            >
+              <FileText className="size-4" />
+            </IconAction>
+            <IconAction
+              label={`${t("editor:toolbar.findReplace")} - ${t("editor:toolbar.findReplaceShortcut")}`}
+              onClick={toggleFindReplace}
+              disabled={!project}
+              active={showFindReplace}
+            >
+              <Replace className="size-4" />
+            </IconAction>
+          </div>
 
-        <Separator orientation="vertical" className="mx-1 h-5" />
+          <Separator orientation="vertical" className="mx-1 h-6 shrink-0" />
 
-        <div className="relative flex items-center">
-          <Search className="absolute left-2 size-3.5 text-muted-foreground" />
-          <Input
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder={t("common:search")}
-            className="h-7 w-48 pl-7 text-xs"
-          />
-        </div>
+          <div className="relative flex shrink-0 items-center">
+            <Search className="pointer-events-none absolute left-2.5 size-3.5 text-muted-foreground" />
+            <Input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder={t("common:search")}
+              className="h-8 w-52 pl-7 text-xs"
+            />
+          </div>
 
-        <div className="ml-1 flex items-center gap-1">
-          <Filter className="size-3.5 text-muted-foreground" />
           <Select
             value={statusFilter ?? "all"}
             onValueChange={(value) => setStatusFilter(value === "all" ? null : (value as EntryStatus))}
           >
-            <SelectTrigger className="h-7 w-32 text-xs">
+            <SelectTrigger className="h-8 w-36 shrink-0 gap-1.5 px-2.5 text-xs">
+              <Filter className="size-3.5 text-muted-foreground" />
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -191,7 +195,7 @@ export function Toolbar() {
           </Select>
         </div>
 
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-1 flex shrink-0 items-center gap-1">
           <IconAction label={t("editor:toolbar.toggleTheme")} onClick={handleThemeToggle}>
             {theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}
           </IconAction>
@@ -199,9 +203,9 @@ export function Toolbar() {
             <Settings className="size-4" />
           </IconAction>
           {project && (
-            <div className="flex min-w-0 items-center gap-2">
+            <div className="hidden min-w-0 items-center gap-2 rounded-md border bg-background/65 px-2 py-1 md:flex">
               {isDirty && (
-                <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-300">
+                <span className="ft-status-draft rounded-full px-1.5 py-0.5 text-[10px] font-semibold">
                   {t("common:unsavedChanges.badge")}
                 </span>
               )}

@@ -3,6 +3,7 @@ import { confirm as dialogConfirm } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isTauri } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
+import { Files, TableProperties } from "lucide-react";
 import { Sidebar } from "./Sidebar";
 import { Toolbar } from "./Toolbar";
 import { StatusBar } from "./StatusBar";
@@ -16,7 +17,7 @@ import { FindReplaceBar } from "@/components/editor/FindReplaceBar";
 import { cn } from "@/lib/utils";
 
 export function AppShell() {
-  const { t } = useTranslation("common");
+  const { t } = useTranslation(["common", "editor"]);
   const project = useProjectStore((s) => s.project);
   const isDirty = useProjectStore((s) => s.isDirty);
   const showFindReplace = useEditorStore((s) => s.showFindReplace);
@@ -24,13 +25,31 @@ export function AppShell() {
   const setSidebarWidth = useSettingsStore((s) => s.setSidebarWidth);
   const [isResizingSidebar, setIsResizingSidebar] = useState(false);
   const [draftSidebarWidth, setDraftSidebarWidth] = useState(sidebarWidth);
+  const [mobilePane, setMobilePane] = useState<"files" | "editor">("editor");
   const draftSidebarWidthRef = useRef(sidebarWidth);
   draftSidebarWidthRef.current = draftSidebarWidth;
 
   useKeyboardShortcuts();
 
   useEffect(() => {
-    const appName = t("appName");
+    if (!import.meta.env.DEV || !window.location.search.includes("visualDemo=1")) {
+      return;
+    }
+
+    let disposed = false;
+    void import("@/dev/visualDemoProject").then(({ createVisualDemoProject }) => {
+      if (!disposed && !useProjectStore.getState().project) {
+        useProjectStore.getState().setProject(createVisualDemoProject(), { markDirty: false });
+      }
+    });
+
+    return () => {
+      disposed = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const appName = t("common:appName");
     if (!project) {
       document.title = appName;
       return;
@@ -79,11 +98,11 @@ export function AppShell() {
           return;
         }
 
-        const shouldClose = await dialogConfirm(t("unsavedChanges.closeApp"), {
-          title: t("appName"),
+        const shouldClose = await dialogConfirm(t("common:unsavedChanges.closeApp"), {
+          title: t("common:appName"),
           kind: "warning",
-          okLabel: t("close"),
-          cancelLabel: t("cancel"),
+          okLabel: t("common:close"),
+          cancelLabel: t("common:cancel"),
         });
 
         if (!shouldClose) {
@@ -137,7 +156,7 @@ export function AppShell() {
   }
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden">
+    <div className="flex h-screen flex-col overflow-hidden bg-background">
       {/* Toolbar */}
       <Toolbar />
 
@@ -145,9 +164,15 @@ export function AppShell() {
       {showFindReplace && <FindReplaceBar />}
 
       {/* Main area: sidebar + resize handle + content */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex min-h-0 flex-1 overflow-hidden p-1.5 pt-1">
         {/* Sidebar */}
-        <div className="flex-shrink-0" style={{ width: draftSidebarWidth }}>
+        <div
+          className={cn(
+            "min-h-0 flex-shrink-0 overflow-hidden rounded-md border bg-sidebar shadow-sm md:block",
+            mobilePane === "files" ? "block w-full" : "hidden",
+          )}
+          style={{ width: mobilePane === "files" ? undefined : draftSidebarWidth }}
+        >
           <Sidebar />
         </div>
 
@@ -155,17 +180,47 @@ export function AppShell() {
         <div
           onMouseDown={(e) => { e.preventDefault(); setIsResizingSidebar(true); }}
           className={cn(
-            "w-1 flex-shrink-0 cursor-col-resize transition-colors",
+            "mx-1 hidden w-1 flex-shrink-0 cursor-col-resize rounded-full transition-colors duration-150 md:block",
             "hover:bg-primary/30",
             isResizingSidebar && "bg-primary/50",
           )}
         />
 
         {/* Editor area */}
-        <main className="flex-1 overflow-hidden">
+        <main
+          className={cn(
+            "min-w-0 flex-1 overflow-hidden rounded-md border bg-card shadow-sm md:block",
+            mobilePane === "editor" ? "block" : "hidden",
+          )}
+        >
           <TranslationGrid />
         </main>
       </div>
+
+      <nav className="grid h-11 grid-cols-2 gap-1 border-t bg-card/95 p-1 md:hidden">
+        <button
+          type="button"
+          onClick={() => setMobilePane("files")}
+          className={cn(
+            "ft-focus inline-flex items-center justify-center gap-2 rounded-md text-xs font-medium transition-colors duration-150",
+            mobilePane === "files" ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/70",
+          )}
+        >
+          <Files className="size-3.5" />
+          {t("editor:sidebar.files")}
+        </button>
+        <button
+          type="button"
+          onClick={() => setMobilePane("editor")}
+          className={cn(
+            "ft-focus inline-flex items-center justify-center gap-2 rounded-md text-xs font-medium transition-colors duration-150",
+            mobilePane === "editor" ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/70",
+          )}
+        >
+          <TableProperties className="size-3.5" />
+          {t("editor:grid.translation")}
+        </button>
+      </nav>
 
       {/* Status bar */}
       <StatusBar />

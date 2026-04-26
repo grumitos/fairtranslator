@@ -9,10 +9,10 @@ import type { TranslationFile } from "@/types/domain";
 
 /** Returns a Tailwind color class based on translation progress percentage */
 function progressColor(percent: number): string {
-  if (percent >= 100) return "bg-green-500";
-  if (percent >= 60) return "bg-yellow-500";
-  if (percent >= 30) return "bg-orange-500";
-  return "bg-red-500";
+  if (percent >= 100) return "ft-progress-complete";
+  if (percent >= 60) return "ft-progress-good";
+  if (percent >= 30) return "ft-progress-partial";
+  return "ft-progress-blocked";
 }
 
 function fileStem(relativePath: string): string {
@@ -73,38 +73,38 @@ export function Sidebar() {
 
   return (
     <aside className="flex h-full w-full flex-col bg-sidebar text-sidebar-foreground">
-      <div className="flex items-center gap-2 border-b px-3 py-2">
-        <FolderOpen className="size-4 text-muted-foreground" />
-        <span className="text-sm font-medium truncate">{project.name}</span>
+      <div className="flex h-10 items-center gap-2 border-b border-sidebar-border px-3">
+        <FolderOpen className="size-4 shrink-0 text-muted-foreground" />
+        <span className="truncate text-sm font-semibold tracking-normal">{project.name}</span>
       </div>
 
       {/* Global progress bar */}
-      <div className="px-3 py-1.5 border-b">
-        <div className="flex items-center justify-between text-xs text-muted-foreground mb-1">
+      <div className="border-b border-sidebar-border px-3 py-2">
+        <div className="mb-1 flex items-center justify-between text-[11px] text-muted-foreground">
           <span>{t("statusBar.percentage", { percent: globalStats.percent })}</span>
-          <span>{globalStats.translated}/{globalStats.total}</span>
+          <span className="font-medium tabular-nums text-sidebar-foreground">{globalStats.translated}/{globalStats.total}</span>
         </div>
-        <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
+        <div className="h-1.5 w-full overflow-hidden rounded-full border border-sidebar-border bg-background/55">
           <div
-            className={cn("h-full rounded-full transition-all", progressColor(globalStats.percent))}
+            className={cn("h-full rounded-full transition-[width] duration-200", progressColor(globalStats.percent))}
             style={{ width: `${globalStats.percent}%` }}
           />
         </div>
       </div>
 
       <ScrollArea className="flex-1">
-        <div className="p-1">
+        <div className="p-1.5">
           {/* All entries */}
           <button
             onClick={() => setActiveFile(null)}
             className={cn(
-              "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-sidebar-accent",
-              !activeFile && "bg-sidebar-accent text-sidebar-accent-foreground font-medium",
+              "ft-focus flex h-8 w-full items-center gap-2 rounded-md border border-transparent px-2 text-left text-sm transition-[background-color,border-color,color] duration-150 hover:bg-sidebar-accent",
+              !activeFile && "border-sidebar-border bg-sidebar-accent text-sidebar-accent-foreground shadow-xs",
             )}
           >
-            <FileText className="size-3.5 text-muted-foreground" />
-            <span>{t("sidebar.allEntries")}</span>
-            <span className="ml-auto text-xs text-muted-foreground">
+            <FileText className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="truncate font-medium">{t("sidebar.allEntries")}</span>
+            <span className="ml-auto rounded bg-background/70 px-1.5 py-0.5 text-[10px] text-muted-foreground">
               {globalStats.total}
             </span>
           </button>
@@ -112,7 +112,7 @@ export function Sidebar() {
           {/* File groups */}
           {grouped.map((group) => (
             <div key={group.label} className="mt-2">
-              <div className="px-2 py-1 text-xs font-semibold uppercase text-muted-foreground tracking-wider">
+              <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-normal text-muted-foreground">
                 {group.label}
               </div>
               {group.files.map(({ file, entryCount, translatedCount, percent }) => {
@@ -123,22 +123,22 @@ export function Sidebar() {
                     key={file.relativePath}
                     onClick={() => handleFileClick(file)}
                     className={cn(
-                      "flex w-full flex-col rounded-md px-2 py-1 text-left text-sm transition-colors hover:bg-sidebar-accent",
+                      "ft-focus flex w-full flex-col rounded-md border border-transparent px-2 py-1 text-left text-sm transition-[background-color,border-color,color] duration-150 hover:bg-sidebar-accent",
                       isActive &&
-                        "bg-sidebar-accent text-sidebar-accent-foreground font-medium",
+                        "border-sidebar-border bg-sidebar-accent text-sidebar-accent-foreground shadow-xs",
                     )}
                   >
                     <div className="flex w-full items-center gap-2">
                       <FileText className="size-3.5 shrink-0 text-muted-foreground" />
-                      <span className="truncate">{fileStem(file.relativePath)}</span>
-                      <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                      <span className="truncate font-medium">{fileStem(file.relativePath)}</span>
+                      <span className="ml-auto shrink-0 tabular-nums text-[10px] text-muted-foreground">
                         {translatedCount}/{entryCount}
                       </span>
                     </div>
                     {/* Per-file mini progress bar */}
-                    <div className="mt-0.5 ml-5.5 h-1 w-[calc(100%-1.375rem)] rounded-full bg-muted overflow-hidden">
+                    <div className="mt-1 ml-5 h-1 w-[calc(100%-1.25rem)] overflow-hidden rounded-full bg-background/60">
                       <div
-                        className={cn("h-full rounded-full transition-all", progressColor(percent))}
+                        className={cn("h-full rounded-full transition-[width] duration-200", progressColor(percent))}
                         style={{ width: `${percent}%` }}
                       />
                     </div>

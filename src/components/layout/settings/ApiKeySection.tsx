@@ -75,11 +75,11 @@ export function ApiKeySection({ provider }: ApiKeySectionProps) {
     if (!codexStatus) return "";
     switch (codexStatus.state) {
       case "ready":
-        return "text-green-600 dark:text-green-400";
+        return "text-success";
       case "loginRequired":
-        return "text-amber-600 dark:text-amber-400";
+        return "text-warning";
       default:
-        return "text-red-600 dark:text-red-400";
+        return "text-destructive";
     }
   }, [codexStatus]);
 
@@ -234,7 +234,7 @@ export function ApiKeySection({ provider }: ApiKeySectionProps) {
       <div className="flex items-center justify-between">
         <Label className="text-sm font-medium">{t(`apiKeys.${providerKey}.label`)}</Label>
         {hasConfig && (
-          <span className="text-xs text-green-600 dark:text-green-400">
+          <span className="text-xs text-success">
             {t("apiKeys.configured")}
           </span>
         )}

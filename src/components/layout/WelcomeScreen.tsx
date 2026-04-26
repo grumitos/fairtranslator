@@ -30,14 +30,14 @@ export function WelcomeScreen() {
   }, [open, t]);
 
   return (
-    <div className="flex h-screen flex-col items-center justify-center bg-background text-foreground">
-      <div className="flex flex-col items-center gap-6 max-w-md text-center">
-        <div>
-          <h1 className="text-3xl font-bold">{t("welcome.title")}</h1>
-          <p className="mt-2 text-muted-foreground">{t("welcome.subtitle")}</p>
+    <div className="flex h-screen flex-col items-center justify-center bg-background p-4 text-foreground">
+      <div className="w-full max-w-md rounded-lg border bg-card p-5 text-center shadow-sm">
+        <div className="border-b pb-5">
+          <h1 className="text-2xl font-semibold tracking-normal">{t("welcome.title")}</h1>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">{t("welcome.subtitle")}</p>
         </div>
 
-        <div className="flex flex-col gap-3 w-full max-w-xs">
+        <div className="mx-auto mt-5 flex w-full max-w-xs flex-col gap-3">
           <Button
             size="lg"
             onClick={() => setShowNewDialog(true)}

@@ -120,7 +120,7 @@ export function InlineEditCell({
       onKeyDown={handleKeyDown}
       onBlur={handleBlur}
       onDoubleClick={(e) => e.stopPropagation()}
-      className="w-full resize-none rounded border border-primary/50 bg-background px-1.5 py-1 text-sm outline-none ring-1 ring-primary/30 focus:ring-primary"
+      className="w-full resize-none rounded-md border border-primary/55 bg-card px-2 py-1 text-sm shadow-sm outline-none ring-2 ring-primary/20 transition-[border-color,box-shadow] duration-150 focus:border-primary focus:ring-primary/35"
       style={wrapStyle}
       rows={1}
     />
