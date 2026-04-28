@@ -179,11 +179,26 @@ export function AppShell() {
         {/* Resize handle */}
         <div
           onMouseDown={(e) => { e.preventDefault(); setIsResizingSidebar(true); }}
+          onKeyDown={(e) => {
+            if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") {
+              return;
+            }
+            e.preventDefault();
+            const delta = e.key === "ArrowLeft" ? -24 : 24;
+            setSidebarWidth(Math.min(400, Math.max(150, sidebarWidth + delta)));
+          }}
           className={cn(
-            "mx-1 hidden w-1 flex-shrink-0 cursor-col-resize rounded-full transition-colors duration-150 md:block",
+            "ft-focus mx-1 hidden w-1 flex-shrink-0 cursor-col-resize rounded-full transition-colors duration-150 md:block",
             "hover:bg-primary/30",
             isResizingSidebar && "bg-primary/50",
           )}
+          role="separator"
+          tabIndex={0}
+          aria-label={t("editor:sidebar.resize")}
+          aria-orientation="vertical"
+          aria-valuemin={150}
+          aria-valuemax={400}
+          aria-valuenow={sidebarWidth}
         />
 
         {/* Editor area */}
@@ -205,6 +220,7 @@ export function AppShell() {
             "ft-focus inline-flex items-center justify-center gap-2 rounded-md text-xs font-medium transition-colors duration-150",
             mobilePane === "files" ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/70",
           )}
+          aria-pressed={mobilePane === "files"}
         >
           <Files className="size-3.5" />
           {t("editor:sidebar.files")}
@@ -216,6 +232,7 @@ export function AppShell() {
             "ft-focus inline-flex items-center justify-center gap-2 rounded-md text-xs font-medium transition-colors duration-150",
             mobilePane === "editor" ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/70",
           )}
+          aria-pressed={mobilePane === "editor"}
         >
           <TableProperties className="size-3.5" />
           {t("editor:grid.translation")}

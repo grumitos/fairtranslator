@@ -60,6 +60,7 @@
     "filterByStatus": "Filter by status",
     "entries": "{{count}} entries",
     "noFiles": "No files",
+    "resize": "Resize file sidebar",
     "groups": {
       "system": "System",
       "database": "Database",

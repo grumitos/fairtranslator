@@ -174,14 +174,17 @@ export function Toolbar() {
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder={t("common:search")}
               className="h-8 w-52 pl-7 text-xs"
+              disabled={!project}
+              aria-label={t("common:search")}
             />
           </div>
 
           <Select
             value={statusFilter ?? "all"}
             onValueChange={(value) => setStatusFilter(value === "all" ? null : (value as EntryStatus))}
+            disabled={!project}
           >
-            <SelectTrigger className="h-8 w-36 shrink-0 gap-1.5 px-2.5 text-xs">
+            <SelectTrigger className="h-8 w-36 shrink-0 gap-1.5 px-2.5 text-xs" aria-label={t("editor:toolbar.filter")}>
               <Filter className="size-3.5 text-muted-foreground" />
               <SelectValue />
             </SelectTrigger>

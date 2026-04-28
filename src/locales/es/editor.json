@@ -60,6 +60,7 @@
     "filterByStatus": "Filtrar por estado",
     "entries": "{{count}} entradas",
     "noFiles": "No hay archivos",
+    "resize": "Redimensionar panel de archivos",
     "groups": {
       "system": "Sistema",
       "database": "Base de datos",

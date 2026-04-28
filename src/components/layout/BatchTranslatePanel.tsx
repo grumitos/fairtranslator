@@ -1,4 +1,4 @@
-import { type CSSProperties, useCallback, useEffect, useRef, useState } from "react";
+import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Bot, CheckCircle, ClipboardCopy, Play, Upload } from "lucide-react";
 import { toast } from "sonner";
@@ -20,7 +20,7 @@ import {
 } from "@/components/ui/select";
 import { useTranslation as useTranslationHook } from "@/hooks/useTranslation";
 import * as ipc from "@/lib/ipc";
-import { isPendingTranslationEntry } from "@/lib/translationMetrics";
+import { countPendingTranslationEntries } from "@/lib/translationMetrics";
 import { useProjectStore } from "@/stores/projectStore";
 import type { AiBatchExport, ProviderType } from "@/types/domain";
 
@@ -60,10 +60,13 @@ export function BatchTranslatePanel({
   const wasTranslatingRef = useRef(false);
 
   const files = project?.files ?? [];
-  const fileSelection = allFiles ? [] : selectedFiles;
-  const untranslatedCount = files
-    .filter((f) => allFiles || selectedFiles.includes(f.relativePath))
-    .reduce((sum, f) => sum + f.entries.filter(isPendingTranslationEntry).length, 0);
+  const fileSelection = useMemo(() => (allFiles ? [] : selectedFiles), [allFiles, selectedFiles]);
+  const untranslatedCount = useMemo(
+    () => files
+      .filter((file) => allFiles || selectedFiles.includes(file.relativePath))
+      .reduce((sum, file) => sum + countPendingTranslationEntries(file.entries), 0),
+    [allFiles, files, selectedFiles],
+  );
   const instructionCandidates =
     aiBatch?.entries.filter((entry) => entry.instructionCandidate).length ?? 0;
   const providerCapabilityKey = provider
@@ -272,27 +275,35 @@ export function BatchTranslatePanel({
 
             {!allFiles && (
               <ScrollArea className="h-40 rounded-md border p-2">
-                {files.map((file) => {
-                  const untranslated = file.entries.filter(
-                    (e) => e.status === "untranslated",
-                  ).length;
-                  return (
-                    <div key={file.relativePath} className="flex items-center gap-2 py-1">
-                      <Checkbox
-                        checked={selectedFiles.includes(file.relativePath)}
-                        onCheckedChange={() => handleToggleFile(file.relativePath)}
-                      />
-                      <span className="flex-1 truncate text-xs">{file.relativePath}</span>
-                      <span className="text-[10px] text-muted-foreground">{untranslated}</span>
-                    </div>
-                  );
-                })}
+                {files.length === 0 ? (
+                  <div className="ft-empty-state px-3 py-5 text-xs text-muted-foreground">
+                    {t("editor:sidebar.noFiles")}
+                  </div>
+                ) : files.map((file) => {
+                    const untranslated = countPendingTranslationEntries(file.entries);
+                    return (
+                      <div key={file.relativePath} className="flex items-center gap-2 py-1">
+                        <Checkbox
+                          checked={selectedFiles.includes(file.relativePath)}
+                          onCheckedChange={() => handleToggleFile(file.relativePath)}
+                          aria-label={file.relativePath}
+                        />
+                        <span className="flex-1 truncate text-xs">{file.relativePath}</span>
+                        <span className="text-[10px] text-muted-foreground">{untranslated}</span>
+                      </div>
+                    );
+                  })}
               </ScrollArea>
             )}
 
             <p className="text-xs text-muted-foreground">
               {t("editor:batch.untranslatedOnly")}: {untranslatedCount}
             </p>
+            {untranslatedCount === 0 && (
+              <div className="ft-empty-state px-3 py-2 text-xs text-muted-foreground" role="status">
+                {t("editor:batch.noEntries")}
+              </div>
+            )}
           </div>
 
           <Tabs value={mode} onValueChange={(value) => setMode(value as BatchMode)}>
@@ -449,7 +460,7 @@ export function BatchTranslatePanel({
           </Tabs>
 
           {progress && (
-            <div className="space-y-2">
+            <div className="space-y-2" aria-live="polite">
               <Progress value={progressPercent} className="h-2" />
               <p className="text-xs text-muted-foreground">
                 {t("editor:batch.progress", {
@@ -525,7 +536,7 @@ export function BatchTranslatePanel({
               )}
             </div>
           )}
-          {error && <p className="text-xs text-destructive">{error}</p>}
+          {error && <p className="text-xs text-destructive" role="alert">{error}</p>}
         </div>
       </SheetContent>
     </Sheet>

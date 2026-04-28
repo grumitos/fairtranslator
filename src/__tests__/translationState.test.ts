@@ -3,6 +3,8 @@ import {
   normalizeProjectEntryUpdate,
 } from "@/lib/translationState";
 import {
+  countPendingTranslationEntries,
+  countTranslationProgress,
   isPendingTranslationEntry,
   isTranslatedEntry,
 } from "@/lib/translationMetrics";
@@ -55,5 +57,22 @@ describe("translation state normalization", () => {
 
     expect(isPendingTranslationEntry(translatedEntry)).toBe(false);
     expect(isTranslatedEntry(translatedEntry)).toBe(true);
+  });
+
+  it("counts translation progress without treating blank originals as work", () => {
+    const entries: TranslationEntry[] = [
+      baseEntry,
+      { ...baseEntry, id: "Map001:text:2", translation: "Hola", status: "draft" },
+      { ...baseEntry, id: "Map001:text:3", original: "   ", translation: "", status: "untranslated" },
+      { ...baseEntry, id: "Map001:text:4", translation: "   ", status: "reviewed" },
+    ];
+
+    expect(countTranslationProgress(entries)).toEqual({
+      total: 3,
+      translated: 1,
+      pending: 2,
+      percent: 33,
+    });
+    expect(countPendingTranslationEntries(entries)).toBe(2);
   });
 });

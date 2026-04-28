@@ -71,7 +71,7 @@ export function TranslationGridTableView({
       <div ref={parentRef} className="min-h-0 flex-1 overflow-auto bg-background/40">
         {rows.length === 0 ? (
           <div className="flex h-full items-center justify-center p-6">
-            <div className="rounded-md border bg-card px-5 py-4 text-center shadow-sm">
+            <div className="ft-empty-state" role="status">
               <p className="text-sm font-medium text-foreground">{emptyText}</p>
               <p className="mt-1 text-xs text-muted-foreground">{totalEntriesText}</p>
             </div>
@@ -139,7 +139,7 @@ export function TranslationGridTableView({
       </div>
 
       {/* Footer */}
-      <div className="flex h-7 items-center border-t bg-card/95 px-3 text-xs text-muted-foreground">
+      <div className="flex h-7 items-center border-t bg-card/95 px-3 text-xs text-muted-foreground" aria-live="polite">
         {totalEntriesText}
       </div>
     </>
