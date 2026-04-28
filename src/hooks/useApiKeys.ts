@@ -115,6 +115,28 @@ export function useApiKeys() {
     [],
   );
 
+  const loginCodex = useCallback(
+    async (
+      commandPath?: string,
+      model?: string,
+      profile?: string,
+      deviceAuth?: boolean,
+    ): Promise<CodexRuntimeStatus> => {
+      setIsLoading(true);
+      setError(null);
+      try {
+        return await ipc.codexLogin(commandPath, model, profile, deviceAuth);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setError(msg);
+        throw e;
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [],
+  );
+
   return {
     isLoading,
     error,
@@ -123,5 +145,6 @@ export function useApiKeys() {
     remove,
     validate,
     inspectCodex,
+    loginCodex,
   };
 }

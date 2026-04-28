@@ -155,6 +155,19 @@ export const codexStatus = (
     profile: profile ?? null,
   });
 
+export const codexLogin = (
+  commandPath?: string,
+  model?: string,
+  profile?: string,
+  deviceAuth?: boolean,
+) =>
+  safeInvoke<CodexRuntimeStatus>("codex_login", {
+    commandPath: commandPath ?? null,
+    model: model ?? null,
+    profile: profile ?? null,
+    deviceAuth: deviceAuth ?? null,
+  });
+
 // ── AI-assisted translation commands ────────────────────────────────
 
 export const translateAiBatchExport = (

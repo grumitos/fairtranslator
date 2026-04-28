@@ -319,6 +319,21 @@ pub async fn codex_status(
     provider.runtime_status().await
 }
 
+/// Start the official Codex CLI login flow.
+#[tauri::command]
+pub async fn codex_login(
+    app: tauri::AppHandle,
+    command_path: Option<String>,
+    model: Option<String>,
+    profile: Option<String>,
+    device_auth: Option<bool>,
+) -> Result<crate::services::codex::CodexRuntimeStatus, AppError> {
+    use crate::services::codex::CodexProvider;
+
+    let provider = CodexProvider::with_app_handle(app, command_path, model, profile, None);
+    provider.login(device_auth.unwrap_or(false)).await
+}
+
 /// Info returned by `apikey_load`
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]

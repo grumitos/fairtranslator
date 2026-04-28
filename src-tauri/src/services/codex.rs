@@ -200,7 +200,8 @@ impl CodexProvider {
             String::from_utf8_lossy(&login_output.stdout),
             String::from_utf8_lossy(&login_output.stderr)
         );
-        let is_authenticated = combined_output.to_ascii_lowercase().contains("logged in");
+        let is_authenticated = login_output.status.success()
+            || combined_output.to_ascii_lowercase().contains("logged in");
 
         let (state, message) = if is_authenticated {
             (
@@ -236,6 +237,65 @@ impl CodexProvider {
             is_authenticated,
             message,
         })
+    }
+
+    pub async fn login(&self, device_auth: bool) -> Result<CodexRuntimeStatus, AppError> {
+        let runtime = self
+            .resolve_runtime()
+            .await
+            .map_err(|failure| AppError::Api(failure.message))?;
+
+        let mut args = vec!["login".to_string()];
+        if device_auth {
+            args.push("--device-auth".to_string());
+        }
+
+        let output = self.run_login_command(&runtime.candidate, &args).await?;
+
+        if !output.status.success() {
+            return Err(command_failure(&output, "Codex login failed"));
+        }
+
+        self.runtime_status().await
+    }
+
+    async fn run_login_command(
+        &self,
+        runtime: &RuntimeCandidate,
+        args: &[String],
+    ) -> Result<std::process::Output, AppError> {
+        #[cfg(windows)]
+        {
+            return self
+                .run_login_command_in_windows_terminal(runtime, args)
+                .await;
+        }
+
+        #[cfg(not(windows))]
+        {
+            self.run_command(runtime, args.to_vec(), None, None).await
+        }
+    }
+
+    #[cfg(windows)]
+    async fn run_login_command_in_windows_terminal(
+        &self,
+        runtime: &RuntimeCandidate,
+        args: &[String],
+    ) -> Result<std::process::Output, AppError> {
+        let executable = runtime.effective_command_path.clone();
+        let args = args.to_vec();
+
+        task::spawn_blocking(move || {
+            let mut command = Command::new("cmd");
+            command.arg("/C").arg("start").arg("").arg("/WAIT");
+            command.arg(executable);
+            command.args(args);
+            command.stdout(Stdio::piped()).stderr(Stdio::piped());
+            command.output().map_err(AppError::from)
+        })
+        .await
+        .map_err(|error| AppError::Project(format!("Failed to join Codex login task: {error}")))?
     }
 
     async fn resolve_runtime(&self) -> Result<ResolvedRuntime, RuntimeResolutionFailure> {

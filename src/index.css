@@ -71,7 +71,7 @@
   --info: #2977d6;
   --info-foreground: #ffffff;
   --border: #1f1f1e26;
-  --input: #1f1f1e4d;
+  --input: #1f1f1e26;
   --ring: #2977d6;
   --chart-1: #d97757;
   --chart-2: #373734;
@@ -87,6 +87,14 @@
   --sidebar-border: #1f1f1e26;
   --sidebar-ring: #2977d6;
   --radius: 0.5rem;
+  --surface-hover: #7b797426;
+  --surface-selected: #7b797433;
+  --surface-raised: #ffffff;
+  --shadow-soft: 0 1px 2px rgb(18 18 18 / 0.06);
+  --shadow-panel: 0 1px 3px rgb(18 18 18 / 0.06), 0 0 0 1px rgb(18 18 18 / 0.02);
+  --shadow-elevated: 0 16px 34px rgb(18 18 18 / 0.12);
+  --duration-ui: 150ms;
+  --ease-ui: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .dark {
@@ -113,7 +121,7 @@
   --info: #3886e5;
   --info-foreground: #ffffff;
   --border: #e2e1da26;
-  --input: #e2e1da4d;
+  --input: #e2e1da26;
   --ring: #3886e5;
   --chart-1: #d97757;
   --chart-2: #c3c2b7;
@@ -128,6 +136,12 @@
   --sidebar-accent-foreground: #f8f8f6;
   --sidebar-border: #e2e1da26;
   --sidebar-ring: #3886e5;
+  --surface-hover: #97958c26;
+  --surface-selected: #97958c33;
+  --surface-raised: #2c2c2a;
+  --shadow-soft: 0 1px 2px rgb(0 0 0 / 0.38);
+  --shadow-panel: 0 1px 2px rgb(0 0 0 / 0.42), 0 0 0 1px rgb(248 248 246 / 0.04);
+  --shadow-elevated: 0 18px 36px rgb(0 0 0 / 0.56);
 }
 
 @layer base {
@@ -144,6 +158,23 @@
     text-rendering: geometricPrecision;
   }
 
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+
+  button:not(:disabled) {
+    cursor: pointer;
+  }
+
   ::selection {
     background: var(--accent);
     color: var(--foreground);
@@ -157,13 +188,14 @@
 
 @layer utilities {
   .ft-panel {
-    @apply border bg-card text-card-foreground shadow-sm;
-    box-shadow: 0 1px 2px var(--border);
+    @apply rounded-md border bg-card text-card-foreground;
+    box-shadow: var(--shadow-panel);
   }
 
   .ft-control {
-    @apply border bg-card/80 shadow-xs;
-    transition-duration: 140ms;
+    @apply transform-gpu rounded-md border bg-card/80 shadow-xs hover:bg-accent/45 active:scale-[0.995] disabled:pointer-events-none disabled:opacity-50;
+    transition-duration: var(--duration-ui);
+    transition-timing-function: var(--ease-ui);
     transition-property: background-color, border-color, color, opacity, transform, box-shadow;
   }
 
@@ -209,5 +241,25 @@
 
   .ft-callout-warning {
     @apply rounded-md border border-warning/30 bg-warning/10 text-foreground;
+  }
+
+  .ft-toolbar-group {
+    @apply flex shrink-0 items-center gap-1 rounded-md border border-border bg-secondary/70 p-0.5;
+    box-shadow: var(--shadow-soft);
+  }
+
+  .ft-empty-state {
+    @apply rounded-md border border-dashed bg-muted/35 px-5 py-4 text-center;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 1ms !important;
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
   }
 }

@@ -28,7 +28,7 @@ function isConfigured(info: ApiKeyInfo): boolean {
 
 export function ApiKeySection({ provider }: ApiKeySectionProps) {
   const { t } = useTranslation("settings");
-  const { load, save, remove, validate, inspectCodex, isLoading } = useApiKeys();
+  const { load, save, remove, validate, inspectCodex, loginCodex, isLoading } = useApiKeys();
   const [apiKey, setApiKey] = useState("");
   const [model, setModel] = useState("");
   const [endpoint, setEndpoint] = useState("");
@@ -226,6 +226,33 @@ export function ApiKeySection({ provider }: ApiKeySectionProps) {
     }
   }, [isCodex, provider, refreshCodexStatus, t, validate]);
 
+  const handleCodexLogin = useCallback(
+    async (deviceAuth: boolean) => {
+      try {
+        const status = await loginCodex(
+          commandPath || undefined,
+          model || undefined,
+          profile || undefined,
+          deviceAuth,
+        );
+        setCodexStatus(status);
+        setHasConfig(Boolean(model || commandPath || profile || status.isAuthenticated));
+        if (status.isAuthenticated) {
+          toast.success(t("apiKeys.codex.loginSuccess"));
+        } else {
+          toast.error(t("apiKeys.codex.loginIncomplete"), {
+            description: status.message,
+          });
+        }
+      } catch (e) {
+        toast.error(t("apiKeys.codex.loginFailed"), {
+          description: e instanceof Error ? e.message : String(e),
+        });
+      }
+    },
+    [commandPath, loginCodex, model, profile, t],
+  );
+
   const canSave = isCodex || Boolean(apiKey);
   const showValidate = isCodex || hasConfig;
 
@@ -316,6 +343,26 @@ export function ApiKeySection({ provider }: ApiKeySectionProps) {
             className="text-xs"
           />
           <p className="text-xs text-muted-foreground">{t("apiKeys.codex.authNote")}</p>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => void handleCodexLogin(false)}
+              disabled={isLoading}
+              className="text-xs"
+            >
+              {t("apiKeys.codex.login")}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => void handleCodexLogin(true)}
+              disabled={isLoading}
+              className="text-xs"
+            >
+              {t("apiKeys.codex.deviceLogin")}
+            </Button>
+          </div>
           {codexStatus && (
             <div className="rounded-md border bg-muted/30 p-3 text-xs">
               <p className={`font-medium ${codexStatusTone}`}>
