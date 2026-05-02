@@ -358,7 +358,11 @@ pub fn parse_mv_mz_game(game_dir: &Path) -> Result<Vec<TranslationFile>, AppErro
             .unwrap_or(path)
             .to_string_lossy()
             .replace('\\', "/");
-        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
         let kind = classify_relative_path(&rel_path);
 
         let content = std::fs::read_to_string(path)?;
@@ -401,19 +405,22 @@ fn extract_entries(
 }
 
 pub fn parse_plugins_js(content: &str) -> Result<Value, AppError> {
-    let start = content.find('[').ok_or_else(|| {
-        AppError::Parse("plugins.js did not contain a plugin array start".into())
-    })?;
-    let end = content.rfind(']').ok_or_else(|| {
-        AppError::Parse("plugins.js did not contain a plugin array end".into())
-    })?;
+    let start = content
+        .find('[')
+        .ok_or_else(|| AppError::Parse("plugins.js did not contain a plugin array start".into()))?;
+    let end = content
+        .rfind(']')
+        .ok_or_else(|| AppError::Parse("plugins.js did not contain a plugin array end".into()))?;
     let payload = &content[start..=end];
     serde_json::from_str(payload)
         .map_err(|error| AppError::Parse(format!("plugins.js payload was not valid JSON: {error}")))
 }
 
 pub fn render_plugins_js(json: &Value) -> Result<String, AppError> {
-    Ok(format!("var $plugins =\n{};\n", serde_json::to_string_pretty(json)?))
+    Ok(format!(
+        "var $plugins =\n{};\n",
+        serde_json::to_string_pretty(json)?
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -746,9 +753,7 @@ fn should_extract_plugin_string(key_hint: Option<&str>, text: &str) -> bool {
         return false;
     }
 
-    key_hint
-        .map(plugin_key_is_translatable)
-        .unwrap_or(false)
+    key_hint.map(plugin_key_is_translatable).unwrap_or(false)
 }
 
 fn plugin_key_is_translatable(key: &str) -> bool {

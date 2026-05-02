@@ -2,11 +2,13 @@
 ///
 /// Each provider (OpenAI, DeepL, Google) implements this trait so the batch
 /// translation system can work with any backend transparently.
+use serde::{Deserialize, Serialize};
+
 use crate::error::AppError;
 use crate::models::GlossaryTerm;
 
 /// A single text to translate with its entry ID for tracking
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranslationRequest {
     pub entry_id: String,
     pub file_context: String,
@@ -15,14 +17,14 @@ pub struct TranslationRequest {
 }
 
 /// Result of translating a single entry
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranslationResponse {
     pub entry_id: String,
     pub translated_text: String,
 }
 
 /// A protected or established term that should stay consistent across chunks.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranslationTermHint {
     pub source: String,
     pub target: Option<String>,
@@ -30,7 +32,7 @@ pub struct TranslationTermHint {
 }
 
 /// A prior translation example used as lightweight translation memory.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranslationExample {
     pub file_path: String,
     pub file_context: String,
@@ -40,7 +42,7 @@ pub struct TranslationExample {
 }
 
 /// Extra context passed to LLM-capable providers for chunk-aware translation.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TranslationBatchContext {
     pub project_name: String,
     pub file_path: String,

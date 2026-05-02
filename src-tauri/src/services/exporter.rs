@@ -1021,7 +1021,10 @@ fn apply_translations(
     }
 }
 
-fn apply_plugins(json: &mut Value, translations: &HashMap<String, String>) -> Result<usize, AppError> {
+fn apply_plugins(
+    json: &mut Value,
+    translations: &HashMap<String, String>,
+) -> Result<usize, AppError> {
     let plugins = json
         .as_array_mut()
         .ok_or_else(|| AppError::Parse("Plugins: expected JSON array".into()))?;
@@ -1041,7 +1044,10 @@ fn apply_plugins(json: &mut Value, translations: &HashMap<String, String>) -> Re
             )?;
         }
 
-        if let Some(parameters) = plugin_obj.get_mut("parameters").and_then(Value::as_object_mut) {
+        if let Some(parameters) = plugin_obj
+            .get_mut("parameters")
+            .and_then(Value::as_object_mut)
+        {
             for (key, value) in parameters.iter_mut() {
                 applied += apply_plugin_value(
                     value,
@@ -1083,8 +1089,7 @@ fn apply_plugin_value(
         Value::Object(map) => {
             let mut applied = 0;
             for (key, child) in map.iter_mut() {
-                applied +=
-                    apply_plugin_value(child, &format!("{id_prefix}:{key}"), translations)?;
+                applied += apply_plugin_value(child, &format!("{id_prefix}:{key}"), translations)?;
             }
             Ok(applied)
         }

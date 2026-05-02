@@ -331,8 +331,12 @@ fn prepare_workspace_export_dir(path: &Path) -> Result<bool, String> {
         ));
     }
 
-    std::fs::remove_dir_all(path)
-        .map_err(|error| format!("No se pudo limpiar export previo '{}': {error}", path.display()))?;
+    std::fs::remove_dir_all(path).map_err(|error| {
+        format!(
+            "No se pudo limpiar export previo '{}': {error}",
+            path.display()
+        )
+    })?;
     Ok(true)
 }
 
@@ -444,6 +448,16 @@ fn is_usage_limit_error(message: &str) -> bool {
         || normalized.contains("limit reached")
         || normalized.contains("rate limit")
         || normalized.contains("429")
+}
+
+fn is_retryable_provider_shape_error(message: &str) -> bool {
+    let normalized = message.to_ascii_lowercase();
+    normalized.contains("provider returned")
+        || normalized.contains("provider omitted")
+        || normalized.contains("unexpected local entry id")
+        || normalized.contains("duplicate local entry id")
+        || normalized.contains("unexpected entry id")
+        || normalized.contains("duplicate entry id")
 }
 
 fn snapshot_file_state(
@@ -879,8 +893,39 @@ fn main() -> ExitCode {
             ) {
                 Ok(responses) => responses,
                 Err(error) => {
-                    eprintln!("{error}");
-                    return ExitCode::from(1);
+                    if is_retryable_provider_shape_error(&error) {
+                        print_progress_line(
+                            &progress_log,
+                            &format!(
+                                "[{}] Respuesta de proveedor fuera de esquema en {} chunk {}/{} con {} | {}",
+                                format_elapsed(started_at),
+                                chunk.relative_path,
+                                chunk.context.chunk_index,
+                                file_total_chunks,
+                                run_config_label(&active_config),
+                                error
+                            ),
+                        );
+
+                        if attempts_with_active_model < MAX_RETRYABLE_CHUNK_ATTEMPTS {
+                            continue;
+                        }
+
+                        print_progress_line(
+                            &progress_log,
+                            &format!(
+                                "[{}] El chunk sigue fuera de esquema; se aislaran sus entradas una por una | {} chunk {}/{}",
+                                format_elapsed(started_at),
+                                chunk.relative_path,
+                                chunk.context.chunk_index,
+                                file_total_chunks
+                            ),
+                        );
+                        Vec::new()
+                    } else {
+                        eprintln!("{error}");
+                        return ExitCode::from(1);
+                    }
                 }
             };
             status.active_model = run_config_label(&active_config);
@@ -1414,7 +1459,23 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::prepare_workspace_export_dir;
+    use super::{is_retryable_provider_shape_error, prepare_workspace_export_dir};
+
+    #[test]
+    fn provider_shape_errors_are_retryable() {
+        assert!(is_retryable_provider_shape_error(
+            "API error: Provider returned 23 translations but expected 20"
+        ));
+        assert!(is_retryable_provider_shape_error(
+            "Provider returned an unexpected local entry ID: 25"
+        ));
+        assert!(is_retryable_provider_shape_error(
+            "Provider omitted a translation for entry ID Map001:1:0:text:0"
+        ));
+        assert!(!is_retryable_provider_shape_error(
+            "Codex CLI is installed but not authenticated"
+        ));
+    }
 
     #[test]
     fn prepare_workspace_export_dir_removes_existing_tree() {

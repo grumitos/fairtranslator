@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -28,7 +28,7 @@ enum ChunkPlanningMode {
     ExternalAi,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlannedTranslationChunk {
     pub relative_path: String,
     pub entries: Vec<TranslationRequest>,
@@ -55,6 +55,8 @@ pub struct PreparedTranslationExample {
 pub struct PlannerCacheData {
     pub fingerprint: String,
     pub prepared_examples: Vec<PreparedTranslationExample>,
+    #[serde(default)]
+    pub planned_chunks: Vec<PlannedTranslationChunk>,
 }
 
 #[derive(Debug, Clone)]
@@ -254,10 +256,29 @@ where
         .iter()
         .filter(|file| file_paths.is_empty() || file_paths.contains(&file.relative_path))
         .collect();
-    let style_guide = build_style_guide(project, &selected_files);
-    let term_hints = collect_term_hints(project, &selected_files);
     let fingerprint =
         planner_cache_fingerprint_for_mode(project, file_paths, mode, max_entries_per_chunk);
+    if let Some(cached_plan) = reuse_cached_plan(&selected_files, planner_cache, &fingerprint) {
+        progress(PlanningProgressSnapshot {
+            phase: "planning".into(),
+            files_total: selected_files.len(),
+            files_done: selected_files.len(),
+            pending_entries: cached_plan
+                .iter()
+                .map(|chunk| chunk.entries.len())
+                .sum::<usize>(),
+            planned_chunks: cached_plan.len(),
+            current_file: cached_plan.last().map(|chunk| chunk.relative_path.clone()),
+        });
+        return TranslationPlanBuildResult {
+            plan: cached_plan,
+            planner_cache: planner_cache
+                .expect("cache exists when cached plan is reused")
+                .clone(),
+        };
+    }
+    let style_guide = build_style_guide(project, &selected_files);
+    let term_hints = collect_term_hints(project, &selected_files);
     let prepared_examples = collect_prepared_translation_examples(
         project,
         &selected_files,
@@ -351,11 +372,13 @@ where
         });
     }
 
+    let cached_plan = plan.clone();
     TranslationPlanBuildResult {
         plan,
         planner_cache: PlannerCacheData {
             fingerprint,
             prepared_examples,
+            planned_chunks: cached_plan,
         },
     }
 }
@@ -546,6 +569,77 @@ fn collect_prepared_translation_examples(
     examples
 }
 
+fn reuse_cached_plan(
+    selected_files: &[&TranslationFile],
+    planner_cache: Option<&PlannerCacheData>,
+    fingerprint: &str,
+) -> Option<Vec<PlannedTranslationChunk>> {
+    let cache = planner_cache?;
+    if cache.fingerprint != fingerprint || cache.planned_chunks.is_empty() {
+        return None;
+    }
+
+    let selected_paths = selected_files
+        .iter()
+        .map(|file| file.relative_path.as_str())
+        .collect::<HashSet<_>>();
+    let pending_ids = selected_files
+        .iter()
+        .flat_map(|file| {
+            file.entries
+                .iter()
+                .filter(|entry| entry_is_pending_translation(entry))
+                .map(|entry| entry.id.as_str())
+        })
+        .collect::<HashSet<_>>();
+
+    let mut chunks = cache
+        .planned_chunks
+        .iter()
+        .filter(|chunk| selected_paths.contains(chunk.relative_path.as_str()))
+        .filter_map(|chunk| {
+            let entries = chunk
+                .entries
+                .iter()
+                .filter(|entry| pending_ids.contains(entry.entry_id.as_str()))
+                .cloned()
+                .collect::<Vec<_>>();
+            if entries.is_empty() {
+                return None;
+            }
+
+            let mut reused = chunk.clone();
+            reused.entries = entries;
+            reused.context.approximate_char_count = reused
+                .entries
+                .iter()
+                .map(|entry| entry.text.chars().count())
+                .sum();
+            reused.planner_fingerprint = Some(fingerprint.to_string());
+            Some(reused)
+        })
+        .collect::<Vec<_>>();
+
+    let mut totals_by_file = HashMap::<String, usize>::new();
+    for chunk in &chunks {
+        *totals_by_file
+            .entry(chunk.relative_path.clone())
+            .or_insert(0) += 1;
+    }
+
+    let mut indexes_by_file = HashMap::<String, usize>::new();
+    for chunk in &mut chunks {
+        let index = indexes_by_file
+            .entry(chunk.relative_path.clone())
+            .and_modify(|value| *value += 1)
+            .or_insert(1);
+        chunk.context.chunk_index = *index;
+        chunk.context.total_chunks = *totals_by_file.get(&chunk.relative_path).unwrap_or(&1);
+    }
+
+    Some(chunks)
+}
+
 fn planner_cache_fingerprint_for_mode(
     project: &Project,
     file_paths: &[String],
@@ -553,10 +647,23 @@ fn planner_cache_fingerprint_for_mode(
     max_entries_per_chunk: usize,
 ) -> String {
     #[derive(Serialize)]
+    struct SourceEntryFingerprint<'a> {
+        id: &'a str,
+        file_context: &'a str,
+        original: &'a str,
+        notes: &'a str,
+    }
+
+    #[derive(Serialize)]
+    struct SourceFileFingerprint<'a> {
+        relative_path: &'a str,
+        entries: Vec<SourceEntryFingerprint<'a>>,
+    }
+
+    #[derive(Serialize)]
     struct Fingerprint<'a> {
         version: &'a str,
         project_id: &'a str,
-        updated_at: &'a str,
         source_lang: &'a str,
         target_lang: &'a str,
         mode: &'a str,
@@ -565,6 +672,7 @@ fn planner_cache_fingerprint_for_mode(
         selected_files: Vec<&'a str>,
         style_guide: &'a [String],
         glossary: Vec<(&'a str, &'a str, bool)>,
+        source_files: Vec<SourceFileFingerprint<'a>>,
     }
 
     let mut selected_files = if file_paths.is_empty() {
@@ -595,11 +703,29 @@ fn planner_cache_fingerprint_for_mode(
             )
         })
         .collect::<Vec<_>>();
+    let selected_file_set = selected_files.iter().copied().collect::<HashSet<_>>();
+    let source_files = project
+        .files
+        .iter()
+        .filter(|file| selected_file_set.contains(file.relative_path.as_str()))
+        .map(|file| SourceFileFingerprint {
+            relative_path: file.relative_path.as_str(),
+            entries: file
+                .entries
+                .iter()
+                .map(|entry| SourceEntryFingerprint {
+                    id: entry.id.as_str(),
+                    file_context: entry.file_context.as_str(),
+                    original: entry.original.as_str(),
+                    notes: entry.notes.as_str(),
+                })
+                .collect(),
+        })
+        .collect::<Vec<_>>();
 
-    serde_json::to_string(&Fingerprint {
-        version: "planner-cache-v2-compact",
+    let fingerprint_payload = serde_json::to_string(&Fingerprint {
+        version: "planner-cache-v3-source-plan",
         project_id: project.id.as_str(),
-        updated_at: project.updated_at.as_str(),
         source_lang: project.source_lang.as_str(),
         target_lang: project.target_lang.as_str(),
         mode: mode_label,
@@ -608,8 +734,26 @@ fn planner_cache_fingerprint_for_mode(
         selected_files,
         style_guide: &project.style_guide,
         glossary,
+        source_files,
     })
-    .expect("planner fingerprint serialization should not fail")
+    .expect("planner fingerprint serialization should not fail");
+
+    format!(
+        "planner-cache-v3-source-plan:{}",
+        stable_hash_hex(fingerprint_payload.as_bytes())
+    )
+}
+
+fn stable_hash_hex(bytes: &[u8]) -> String {
+    const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x100000001b3;
+
+    let mut hash = FNV_OFFSET_BASIS;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    format!("{hash:016x}")
 }
 
 fn max_entries_for_mode(mode: ChunkPlanningMode, max_entries: Option<usize>) -> usize {
@@ -1191,6 +1335,67 @@ mod tests {
             .file_context_hints
             .iter()
             .any(|hint| hint.contains("Show Text")));
+    }
+
+    #[test]
+    fn test_planner_fingerprint_ignores_translation_progress() {
+        let mut project = make_project();
+        let initial = planner_cache_fingerprint(&project, &[], &ProviderType::Codex);
+
+        project.updated_at = "2026-01-02T00:00:00Z".into();
+        project.files[1].entries[0].translation = "Hola".into();
+        project.files[1].entries[0].status = EntryStatus::Draft;
+
+        assert_eq!(
+            initial,
+            planner_cache_fingerprint(&project, &[], &ProviderType::Codex)
+        );
+
+        project.files[1].entries[1].original = "Changed source".into();
+
+        assert_ne!(
+            initial,
+            planner_cache_fingerprint(&project, &[], &ProviderType::Codex)
+        );
+    }
+
+    #[test]
+    fn test_planner_cache_reuses_chunks_and_filters_completed_entries() {
+        let project = make_project();
+        let mut first_snapshots = Vec::new();
+        let first = build_translation_plan_with_cache_and_progress(
+            &project,
+            &[],
+            &ProviderType::Codex,
+            None,
+            &mut |snapshot| first_snapshots.push(snapshot),
+        );
+        assert!(!first.planner_cache.planned_chunks.is_empty());
+
+        let mut resumed = project.clone();
+        resumed.updated_at = "2026-01-02T00:00:00Z".into();
+        resumed.files[0].entries[0].translation = "Atacar".into();
+        resumed.files[0].entries[0].status = EntryStatus::Draft;
+
+        let mut second_snapshots = Vec::new();
+        let second = build_translation_plan_with_cache_and_progress(
+            &resumed,
+            &[],
+            &ProviderType::Codex,
+            Some(&first.planner_cache),
+            &mut |snapshot| second_snapshots.push(snapshot),
+        );
+        let planned_ids = second
+            .plan
+            .iter()
+            .flat_map(|chunk| chunk.entries.iter().map(|entry| entry.entry_id.as_str()))
+            .collect::<Vec<_>>();
+
+        assert_eq!(second_snapshots.len(), 1);
+        assert_eq!(second_snapshots[0].files_done, resumed.files.len());
+        assert!(!planned_ids.contains(&"System:terms:attack"));
+        assert!(planned_ids.contains(&"Map001:line:1"));
+        assert!(planned_ids.contains(&"Map001:line:2"));
     }
 
     #[test]

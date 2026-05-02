@@ -122,6 +122,13 @@ cargo test --manifest-path src-tauri\Cargo.toml --no-fail-fast
 npm run tauri -- build
 ```
 
+QA run hygiene for local campaign artifacts:
+
+```powershell
+.\scripts\clean-fairtranslator-runs.ps1
+.\scripts\clean-fairtranslator-runs.ps1 -Apply
+```
+
 Optional Codex sidecar preparation:
 
 ```bash
@@ -132,6 +139,8 @@ npm run tauri:build:codex-sidecar
 ## Documentation
 
 - Release/version strategy: [docs/versioning-and-roadmap.md](./docs/versioning-and-roadmap.md)
+- Run hygiene: [docs/run-hygiene.md](./docs/run-hygiene.md)
+- Latest release notes: [docs/releases/v0.9.1.md](./docs/releases/v0.9.1.md)
 - Initial release notes: [docs/releases/v0.9.0.md](./docs/releases/v0.9.0.md)
 - Changelog: [CHANGELOG.md](./CHANGELOG.md)
 

@@ -2,6 +2,8 @@ use std::env;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 #[cfg(not(test))]
@@ -22,6 +24,7 @@ const DEFAULT_COMMAND_PATH: &str = "codex";
 const SIDECAR_BASENAME: &str = "codex";
 const CODEX_RUNTIME_WRAPPER_TOKEN_OVERHEAD: usize = 160;
 const CODEX_RESPONSE_HEADROOM_TOKENS: usize = 2048;
+const CODEX_EXEC_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[cfg(not(test))]
 type RuntimeAppHandle = AppHandle;
@@ -193,6 +196,7 @@ impl CodexProvider {
                 vec!["login".to_string(), "status".to_string()],
                 None,
                 None,
+                None,
             )
             .await?;
         let combined_output = format!(
@@ -273,7 +277,8 @@ impl CodexProvider {
 
         #[cfg(not(windows))]
         {
-            self.run_command(runtime, args.to_vec(), None, None).await
+            self.run_command(runtime, args.to_vec(), None, None, None)
+                .await
         }
     }
 
@@ -358,7 +363,7 @@ impl CodexProvider {
         candidate: RuntimeCandidate,
     ) -> Result<ResolvedRuntime, RuntimeResolutionFailure> {
         let output = self
-            .run_command(&candidate, vec!["--version".to_string()], None, None)
+            .run_command(&candidate, vec!["--version".to_string()], None, None, None)
             .await
             .map_err(|error| RuntimeResolutionFailure {
                 candidate: candidate.clone(),
@@ -416,15 +421,18 @@ impl CodexProvider {
         }
         if let Some(reasoning_effort) = &self.reasoning_effort {
             args.push("-c".to_string());
-            args.push(format!(
-                "reasoning_effort={}",
-                serde_json::to_string(reasoning_effort).unwrap_or_else(|_| "\"low\"".to_string())
-            ));
+            args.push(reasoning_effort_config_arg(reasoning_effort));
         }
         args.push("--".to_string());
         args.push("-".to_string());
-        self.run_command(runtime, args, Some(&workdir), Some(prompt))
-            .await
+        self.run_command(
+            runtime,
+            args,
+            Some(&workdir),
+            Some(prompt),
+            Some(CODEX_EXEC_TIMEOUT),
+        )
+        .await
     }
 
     async fn run_command(
@@ -433,6 +441,7 @@ impl CodexProvider {
         args: Vec<String>,
         current_dir: Option<&Path>,
         stdin_text: Option<String>,
+        timeout: Option<Duration>,
     ) -> Result<std::process::Output, AppError> {
         let current_dir = current_dir.map(Path::to_path_buf);
         let mut command = self.build_command(runtime, &args, current_dir.as_deref())?;
@@ -451,7 +460,7 @@ impl CodexProvider {
                         .map_err(AppError::from)?;
                 }
             }
-            child.wait_with_output().map_err(AppError::from)
+            wait_with_optional_timeout(child, timeout)
         })
         .await
         .map_err(|error| AppError::Project(format!("Failed to join Codex task: {error}")))?
@@ -473,6 +482,32 @@ impl CodexProvider {
                 Ok(command)
             }
         }
+    }
+}
+
+fn wait_with_optional_timeout(
+    mut child: std::process::Child,
+    timeout: Option<Duration>,
+) -> Result<std::process::Output, AppError> {
+    let Some(timeout) = timeout else {
+        return child.wait_with_output().map_err(AppError::from);
+    };
+
+    let started_at = Instant::now();
+    loop {
+        if child.try_wait().map_err(AppError::from)?.is_some() {
+            return child.wait_with_output().map_err(AppError::from);
+        }
+        if started_at.elapsed() >= timeout {
+            let _ = child.kill();
+            let output = child.wait_with_output().map_err(AppError::from)?;
+            return Err(AppError::Api(format!(
+                "Codex exec timed out after {} seconds: {}",
+                timeout.as_secs(),
+                command_output_detail(&output)
+            )));
+        }
+        thread::sleep(Duration::from_millis(250));
     }
 }
 
@@ -538,6 +573,13 @@ fn login_requires_auth(output: &str) -> bool {
         || normalized.contains("run codex login")
         || normalized.contains("authentication required")
         || normalized.contains("login required")
+}
+
+fn reasoning_effort_config_arg(reasoning_effort: &str) -> String {
+    format!(
+        "model_reasoning_effort={}",
+        serde_json::to_string(reasoning_effort).unwrap_or_else(|_| "\"low\"".to_string())
+    )
 }
 
 fn resolve_command_path(command_path: &str) -> Option<PathBuf> {
@@ -769,6 +811,19 @@ mod tests {
         assert!(provider.configured_command_path.is_none());
         assert_eq!(provider.model.as_deref(), Some("gpt-5.4"));
         assert_eq!(provider.profile.as_deref(), Some("codex-default"));
+    }
+
+    #[test]
+    fn test_reasoning_effort_uses_current_codex_config_key() {
+        assert_eq!(
+            reasoning_effort_config_arg("low"),
+            "model_reasoning_effort=\"low\""
+        );
+    }
+
+    #[test]
+    fn test_codex_exec_timeout_is_bounded() {
+        assert_eq!(CODEX_EXEC_TIMEOUT.as_secs(), 300);
     }
 
     #[test]

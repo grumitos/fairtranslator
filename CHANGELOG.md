@@ -7,6 +7,21 @@ and this project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-05-02
+
+### Added
+- Added `scripts/clean-fairtranslator-runs.ps1` for safe dry-run/apply hygiene of `D:\FairTranslatorRuns`.
+- Added release notes for `v0.9.1` with the Codex QA-runner hardening scope.
+
+### Changed
+- Reused cached chunk plans across resumed provider runs when the source/context fingerprint is unchanged.
+- Updated Codex CLI reasoning-effort invocation to the current `model_reasoning_effort` config key.
+- Bounded Codex CLI provider calls with a five-minute timeout to prevent silent hangs.
+
+### Fixed
+- Retried malformed provider response shapes and isolated failing entries instead of aborting long translation campaigns.
+- Made provider batch context and planner cache structures serializable for durable checkpoint reuse.
+
 ## [0.9.0] - 2026-03-31
 
 ### Added

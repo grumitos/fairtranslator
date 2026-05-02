@@ -54,7 +54,7 @@ jobs:
           releaseName: 'FairTranslator ${{ github.ref_name }}'
           releaseBody: |
             See the [CHANGELOG](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/CHANGELOG.md) for details.
-            See the [release notes](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/releases/${{ github.ref_name }}.md) for the initial release scope and known limits.
+            See the [release notes](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/releases/${{ github.ref_name }}.md) for scope, validation notes, and known limits.
 
             ## Supported engines
             - RPG Maker MZ
@@ -65,7 +65,7 @@ jobs:
 
             ## Installation
             - Download the attached Windows NSIS installer or MSI package.
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
           includeDebug: false
           includeRelease: true
