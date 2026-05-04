@@ -716,6 +716,7 @@ fn build_system_prompt(
             "- Keep n short and optional.\n"
         ),
     };
+    let language_rules = language_pair_prompt_rules(source_lang, target_lang);
 
     format!(
         concat!(
@@ -723,15 +724,45 @@ fn build_system_prompt(
             "The user message is a compact JSON payload with metadata, context and entries.\n",
             "Preserve control codes, placeholders, escape sequences and line breaks exactly.\n",
             "Masked placeholders such as __K1_CC0__ must survive unchanged and in the same count.\n",
+            "Preserve choice/plugin condition prefixes such as if(s[12]) and en(s[20]) exactly; translate only the visible label after them.\n",
             "Use glossary/style/context when relevant, but do not add commentary or markdown.\n",
+            "{language_rules}",
             "{extra_rules}",
             "Respond ONLY with valid JSON in this exact shape: {response_shape}"
         ),
         source_lang = source_lang,
         target_lang = target_lang,
+        language_rules = language_rules,
         extra_rules = extra_rules,
         response_shape = response_shape
     )
+}
+
+fn language_pair_prompt_rules(source_lang: &str, target_lang: &str) -> &'static str {
+    if is_japanese_language(source_lang) && is_spanish_language(target_lang) {
+        concat!(
+            "For Japanese to Spanish, write natural neutral Spanish instead of literal calques.\n",
+            "Examples: 学校の帰り道 is de vuelta de la escuela, not de regreso a la escuela; 一人称 in settings is forma de referirse a si mismo, not primera persona.\n",
+            "Keep UI and choice labels short enough for RPG Maker windows; avoid sentence-length labels when a concise command works.\n",
+            "Use Spanish punctuation in Spanish text; avoid Japanese punctuation such as 。, ？, ！, 「」 unless it is part of a preserved name or source-only artifact.\n",
+            "For credits/staff rolls, translate role headings but preserve names, circles, brand names and supporter handles.\n"
+        )
+    } else {
+        ""
+    }
+}
+
+fn is_japanese_language(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    lower == "ja" || lower.contains("japanese") || lower.contains("japon")
+}
+
+fn is_spanish_language(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    lower == "es"
+        || lower.contains("spanish")
+        || lower.contains("español")
+        || lower.contains("espanol")
 }
 
 fn compact_context_label(value: &str) -> String {
@@ -976,5 +1007,51 @@ mod tests {
         assert!(bundle.user_payload.contains("__K1_CC1__"));
         assert!(!bundle.user_payload.contains("\\N[1]-kun"));
         assert!(!bundle.user_payload.contains("\\N[2]-onee-chan"));
+    }
+
+    #[test]
+    fn test_build_provider_bundle_masks_choice_condition_dsl() {
+        let bundle = build_provider_bundle(
+            "ja",
+            "es",
+            &[TranslationRequest {
+                entry_id: "Map003:25:0:choice:47:1".into(),
+                file_context: "Map003 > choice #9 option 2".into(),
+                text: "if(s[211])夫に露出していたことを打ち明ける".into(),
+                notes: String::new(),
+            }],
+            &[],
+            &sample_context(),
+        )
+        .unwrap();
+
+        assert!(bundle.user_payload.contains("__K1_CC0__"));
+        assert!(!bundle.user_payload.contains("if(s[211])"));
+        assert!(bundle
+            .system_prompt
+            .contains("Preserve choice/plugin condition prefixes"));
+    }
+
+    #[test]
+    fn test_build_provider_bundle_includes_japanese_to_spanish_rules() {
+        let bundle = build_provider_bundle(
+            "Japanese",
+            "Spanish",
+            &[TranslationRequest {
+                entry_id: "entry-1".into(),
+                file_context: "ctx".into(),
+                text: "学校の帰り道".into(),
+                notes: String::new(),
+            }],
+            &[],
+            &sample_context(),
+        )
+        .unwrap();
+
+        assert!(bundle.system_prompt.contains("natural neutral Spanish"));
+        assert!(bundle.system_prompt.contains("de vuelta de la escuela"));
+        assert!(bundle
+            .system_prompt
+            .contains("forma de referirse a si mismo"));
     }
 }

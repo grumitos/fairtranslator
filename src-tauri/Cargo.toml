@@ -1,6 +1,6 @@
 [package]
 name = "fairtranslator"
-version = "0.9.1"
+version = "0.9.2"
 description = "A desktop translation tool for RPG Maker games"
 authors = ["FairTranslator contributors"]
 license-file = "../LICENSE"

@@ -434,6 +434,12 @@ fn build_style_guide(project: &Project, selected_files: &[&TranslationFile]) -> 
                 .into(),
         );
     }
+    if is_japanese_language(&project.source_lang) && is_spanish_language(&project.target_lang) {
+        notes.push("For Japanese-to-Spanish RPG Maker text, prefer natural neutral Spanish over literal Japanese wording; e.g. render 学校の帰り道 as de vuelta de la escuela, and 一人称 UI settings as forma de referirse a si mismo.".into());
+        notes.push("Preserve RPG Maker choice/plugin condition prefixes exactly, such as if(s[12]) and en(s[20]); translate only the visible choice label after those prefixes and control codes.".into());
+        notes.push("Keep Spanish UI and choice labels concise so they fit RPG Maker windows, and avoid Japanese punctuation marks in Spanish output unless they are part of preserved names or source artifacts.".into());
+        notes.push("For credits and staff rolls, translate role headings while preserving names, circles, brand names and supporter handles.".into());
+    }
 
     let mut deduped = Vec::new();
     for note in notes {
@@ -451,6 +457,19 @@ fn build_style_guide(project: &Project, selected_files: &[&TranslationFile]) -> 
     }
 
     deduped
+}
+
+fn is_japanese_language(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    lower == "ja" || lower.contains("japanese") || lower.contains("japon")
+}
+
+fn is_spanish_language(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    lower == "es"
+        || lower.contains("spanish")
+        || lower.contains("español")
+        || lower.contains("espanol")
 }
 
 fn collect_term_hints(
@@ -1417,6 +1436,32 @@ mod tests {
             .style_guide
             .iter()
             .any(|rule| rule == "Rule 6")));
+    }
+
+    #[test]
+    fn test_build_translation_plan_adds_japanese_to_spanish_style_rules() {
+        let mut project = make_project();
+        project.source_lang = "ja".into();
+        project.target_lang = "es".into();
+        project.files[1].entries.push(make_entry(
+            "Map003:25:0:choice:47:1",
+            "Map003 > Event 25 > choice #9 option 2",
+            "if(s[211])夫に露出していたことを打ち明ける",
+            "",
+            EntryStatus::Untranslated,
+        ));
+
+        let plan = build_translation_plan(&project, &[], &ProviderType::Codex);
+        let style_blob = plan
+            .iter()
+            .flat_map(|chunk| chunk.context.style_guide.iter())
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(style_blob.contains("de vuelta de la escuela"));
+        assert!(style_blob.contains("if(s[12])"));
+        assert!(style_blob.contains("choice labels concise"));
     }
 
     #[test]

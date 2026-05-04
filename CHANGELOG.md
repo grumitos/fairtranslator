@@ -7,6 +7,31 @@ and this project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-05-04
+
+### Added
+- Added Japanese-to-Spanish prompt guidance for natural RPG Maker dialogue,
+  concise UI labels, Spanish punctuation, credits handling, and concrete
+  Japanese calque examples.
+- Added export QA hardening that restores RPG Maker asset references to the
+  exact copied filenames when translated or normalized data changes whitespace
+  width or ASCII/full-width forms.
+
+### Fixed
+- Preserved RPG Maker choice/plugin condition prefixes such as `if(s[12])` and
+  `en(s[20])` during AI prompting and integrity validation.
+- Wrapped long MV/MZ message translations into safe text-window lines and split
+  oversized text into multiple message pages.
+- Inserted a final choice prompt when wrapped multi-page dialogue would
+  otherwise let choices appear before the player finishes reading.
+- Patched exported prompt-based name-input plugins to use RPG Maker's name scene
+  instead of unsupported browser `prompt()` calls.
+- Translated visible plugin default menu fallbacks such as the game-exit command
+  when plugin parameters are empty.
+- Corrected contextual QA issues found in the RJ01568532 Spanish export,
+  including Japanese punctuation drift, literal UI wording, typo patterns,
+  compact choice labels, and malformed control characters.
+
 ## [0.9.1] - 2026-05-02
 
 ### Added

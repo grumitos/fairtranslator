@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
@@ -9,8 +9,8 @@ use serde_json::{Map, Value};
 use crate::error::AppError;
 use crate::models::{Engine, EntryStatus, Project};
 use crate::parser::rpgmaker::{
-    classify_file, classify_relative_path, parse_plugins_js, render_plugins_js, FileKind,
-    CODE_CHANGE_NAME, CODE_CHANGE_NICKNAME, CODE_CHANGE_PROFILE, CODE_SCROLL_TEXT,
+    classify_file, classify_relative_path, parse_mv_mz_game, parse_plugins_js, render_plugins_js,
+    FileKind, CODE_CHANGE_NAME, CODE_CHANGE_NICKNAME, CODE_CHANGE_PROFILE, CODE_SCROLL_TEXT,
     CODE_SHOW_CHOICES, CODE_SHOW_TEXT, DB_TEXT_FIELDS,
 };
 use crate::services::translation_integrity;
@@ -34,6 +34,10 @@ const SAFE_WEB_FONT_FALLBACKS: &[&str] = &[
     "Arial",
     "sans-serif",
 ];
+const MV_MZ_MESSAGE_LINE_LIMIT: usize = 4;
+const MV_MZ_MESSAGE_WRAP_WIDTH: usize = 48;
+const CODE_SHOW_PICTURE: i64 = 231;
+const CODE_CHANGE_ACTOR_IMAGES: i64 = 322;
 
 // ---------------------------------------------------------------------------
 // ExportResult
@@ -172,10 +176,12 @@ fn export_mv_mz_project(project: &Project, output_dir: &Path) -> Result<ExportRe
             let kind = classify_relative_path(&file.relative_path);
             let mut json = match kind {
                 FileKind::Plugins => parse_plugins_js(&content)?,
+                FileKind::Html => Value::String(content),
                 _ => serde_json::from_str(&content)?,
             };
 
-            let applied = apply_translations(&stem, &kind, &mut json, &translations)?;
+            let applied =
+                apply_translations(&stem, &kind, &mut json, &translations, &project.target_lang)?;
             entries_applied += applied;
 
             if prefer_system_fonts && stem == "System" {
@@ -184,6 +190,10 @@ fn export_mv_mz_project(project: &Project, output_dir: &Path) -> Result<ExportRe
 
             let output_content = match kind {
                 FileKind::Plugins => render_plugins_js(&json)?,
+                FileKind::Html => json
+                    .as_str()
+                    .ok_or_else(|| AppError::Parse(format!("{stem}: expected HTML content")))?
+                    .to_string(),
                 _ => serde_json::to_string_pretty(&json)?,
             };
             std::fs::write(&copied_path, output_content)?;
@@ -195,10 +205,27 @@ fn export_mv_mz_project(project: &Project, output_dir: &Path) -> Result<ExportRe
             font_fallback_applied |= patch_exported_mv_mz_system_font_file(output_dir)?;
         }
 
+        patch_exported_plugin_sources(project, output_dir)?;
+        patch_exported_unsupported_prompt_calls(output_dir)?;
+        let normalized_asset_refs = normalize_exported_mv_mz_asset_references(output_dir)?;
+
         if font_fallback_applied {
             export_warnings.push(
                 "Export forced safe system fonts for translated Latin text; the original webfont stayed in the copy, but dialogue/menu rendering now prefers a glyph-complete fallback stack.".into(),
             );
+        }
+        if normalized_asset_refs > 0 {
+            export_warnings.push(format!(
+                "Export restored {normalized_asset_refs} RPG Maker asset references to the exact copied file names."
+            ));
+        }
+
+        if let Err(error) =
+            append_visible_source_text_warnings(project, output_dir, &mut export_warnings)
+        {
+            export_warnings.push(format!(
+                "Post-export visible text QA could not run: {error}"
+            ));
         }
 
         Ok(ExportResult {
@@ -366,6 +393,299 @@ fn copy_dir_recursive(source_dir: &Path, target_dir: &Path) -> Result<(), AppErr
     Ok(())
 }
 
+#[derive(Debug, Clone, Default)]
+struct AssetNameIndex {
+    exact: HashSet<String>,
+    normalized: HashMap<String, Option<String>>,
+}
+
+impl AssetNameIndex {
+    fn from_dir(dir: &Path) -> Result<Self, AppError> {
+        let mut index = Self::default();
+        collect_asset_names(dir, &mut index)?;
+        Ok(index)
+    }
+
+    fn insert(&mut self, name: String) {
+        self.exact.insert(name.clone());
+        let key = normalized_asset_name_key(&name);
+        self.normalized
+            .entry(key)
+            .and_modify(|existing| {
+                if existing.as_deref() != Some(name.as_str()) {
+                    *existing = None;
+                }
+            })
+            .or_insert(Some(name));
+    }
+
+    fn exact_or_normalized(&self, name: &str) -> Option<String> {
+        if self.exact.contains(name) {
+            return Some(name.to_string());
+        }
+        self.normalized
+            .get(&normalized_asset_name_key(name))
+            .and_then(Clone::clone)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct MvMzAssetIndexes {
+    pictures: AssetNameIndex,
+    characters: AssetNameIndex,
+    faces: AssetNameIndex,
+    sv_actors: AssetNameIndex,
+    enemies: AssetNameIndex,
+    tilesets: AssetNameIndex,
+    parallaxes: AssetNameIndex,
+    titles1: AssetNameIndex,
+    titles2: AssetNameIndex,
+}
+
+impl MvMzAssetIndexes {
+    fn from_export_dir(output_dir: &Path) -> Result<Self, AppError> {
+        let img_dir = output_dir.join("img");
+        Ok(Self {
+            pictures: AssetNameIndex::from_dir(&img_dir.join("pictures"))?,
+            characters: AssetNameIndex::from_dir(&img_dir.join("characters"))?,
+            faces: AssetNameIndex::from_dir(&img_dir.join("faces"))?,
+            sv_actors: AssetNameIndex::from_dir(&img_dir.join("sv_actors"))?,
+            enemies: AssetNameIndex::from_dir(&img_dir.join("enemies"))?,
+            tilesets: AssetNameIndex::from_dir(&img_dir.join("tilesets"))?,
+            parallaxes: AssetNameIndex::from_dir(&img_dir.join("parallaxes"))?,
+            titles1: AssetNameIndex::from_dir(&img_dir.join("titles1"))?,
+            titles2: AssetNameIndex::from_dir(&img_dir.join("titles2"))?,
+        })
+    }
+}
+
+fn collect_asset_names(dir: &Path, index: &mut AssetNameIndex) -> Result<(), AppError> {
+    if !dir.is_dir() {
+        return Ok(());
+    }
+
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_asset_names(&path, index)?;
+            continue;
+        }
+        if !path.is_file() {
+            continue;
+        }
+        let Some(extension) = path.extension().and_then(|extension| extension.to_str()) else {
+            continue;
+        };
+        if !matches!(
+            extension.to_ascii_lowercase().as_str(),
+            "png" | "jpg" | "jpeg" | "rpgmvp" | "ogg" | "m4a" | "rpgmvo" | "webm" | "mp4"
+        ) {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            continue;
+        };
+        index.insert(stem.to_string());
+    }
+
+    Ok(())
+}
+
+fn normalized_asset_name_key(value: &str) -> String {
+    let mut output = String::new();
+    let mut previous_was_space = false;
+    for ch in value.trim().chars() {
+        let mapped = match ch {
+            '０'..='９' => char::from(b'0' + (ch as u32 - '０' as u32) as u8),
+            'Ａ'..='Ｚ' => char::from(b'a' + (ch as u32 - 'Ａ' as u32) as u8),
+            'ａ'..='ｚ' => char::from(b'a' + (ch as u32 - 'ａ' as u32) as u8),
+            '（' => '(',
+            '）' => ')',
+            _ if ch.is_ascii_alphabetic() => ch.to_ascii_lowercase(),
+            _ => ch,
+        };
+        if mapped.is_whitespace() {
+            if !previous_was_space {
+                output.push(' ');
+                previous_was_space = true;
+            }
+        } else {
+            output.push(mapped);
+            previous_was_space = false;
+        }
+    }
+    output.trim().to_string()
+}
+
+fn normalize_exported_mv_mz_asset_references(output_dir: &Path) -> Result<usize, AppError> {
+    let data_dir = output_dir.join("data");
+    if !data_dir.is_dir() {
+        return Ok(0);
+    }
+
+    let indexes = MvMzAssetIndexes::from_export_dir(output_dir)?;
+    let mut refs_fixed = 0usize;
+    for entry in std::fs::read_dir(&data_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let content = std::fs::read_to_string(&path)?;
+        let mut json: Value = serde_json::from_str(&content)?;
+        let stem = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("");
+        let before = json.clone();
+        refs_fixed += normalize_asset_references_for_file(stem, &mut json, &indexes);
+        if json != before {
+            std::fs::write(&path, serde_json::to_string_pretty(&json)?)?;
+        }
+    }
+
+    Ok(refs_fixed)
+}
+
+fn normalize_asset_references_for_file(
+    stem: &str,
+    json: &mut Value,
+    indexes: &MvMzAssetIndexes,
+) -> usize {
+    let mut refs_fixed = 0usize;
+    match stem {
+        "System" => refs_fixed += normalize_system_asset_references(json, indexes),
+        "Actors" => {
+            refs_fixed +=
+                normalize_database_asset_field(json, "characterName", &indexes.characters);
+            refs_fixed += normalize_database_asset_field(json, "faceName", &indexes.faces);
+            refs_fixed += normalize_database_asset_field(json, "battlerName", &indexes.sv_actors);
+        }
+        "Enemies" => {
+            refs_fixed += normalize_database_asset_field(json, "battlerName", &indexes.enemies)
+        }
+        "Tilesets" => refs_fixed += normalize_tileset_asset_references(json, &indexes.tilesets),
+        "MapInfos" => {}
+        "CommonEvents" | "Troops" => {
+            refs_fixed += normalize_nested_event_asset_references(json, indexes);
+        }
+        stem if stem.starts_with("Map") => {
+            refs_fixed += normalize_map_asset_references(json, indexes);
+        }
+        _ => {}
+    }
+
+    refs_fixed
+}
+
+fn normalize_system_asset_references(json: &mut Value, indexes: &MvMzAssetIndexes) -> usize {
+    let mut refs_fixed = 0usize;
+    refs_fixed += normalize_string_field(json, "title1Name", &indexes.titles1);
+    refs_fixed += normalize_string_field(json, "title2Name", &indexes.titles2);
+    for vehicle_key in ["boat", "ship", "airship"] {
+        if let Some(vehicle) = json.get_mut(vehicle_key) {
+            refs_fixed += normalize_string_field(vehicle, "characterName", &indexes.characters);
+        }
+    }
+    refs_fixed
+}
+
+fn normalize_database_asset_field(json: &mut Value, field: &str, index: &AssetNameIndex) -> usize {
+    let Some(rows) = json.as_array_mut() else {
+        return 0;
+    };
+    rows.iter_mut()
+        .map(|row| normalize_string_field(row, field, index))
+        .sum()
+}
+
+fn normalize_tileset_asset_references(json: &mut Value, index: &AssetNameIndex) -> usize {
+    let Some(rows) = json.as_array_mut() else {
+        return 0;
+    };
+    let mut refs_fixed = 0usize;
+    for row in rows {
+        let Some(names) = row.get_mut("tilesetNames").and_then(Value::as_array_mut) else {
+            continue;
+        };
+        for name in names {
+            refs_fixed += normalize_string_value(name, index);
+        }
+    }
+    refs_fixed
+}
+
+fn normalize_map_asset_references(json: &mut Value, indexes: &MvMzAssetIndexes) -> usize {
+    let mut refs_fixed = 0usize;
+    refs_fixed += normalize_string_field(json, "parallaxName", &indexes.parallaxes);
+    refs_fixed += normalize_nested_event_asset_references(json, indexes);
+    refs_fixed
+}
+
+fn normalize_nested_event_asset_references(value: &mut Value, indexes: &MvMzAssetIndexes) -> usize {
+    let mut refs_fixed = 0usize;
+    match value {
+        Value::Object(map) => {
+            if let Some(image) = map.get_mut("image") {
+                refs_fixed += normalize_string_field(image, "characterName", &indexes.characters);
+            }
+            if map.get("code").and_then(Value::as_i64) == Some(CODE_SHOW_PICTURE) {
+                refs_fixed += normalize_command_parameter_string(map, 1, &indexes.pictures);
+            }
+            if map.get("code").and_then(Value::as_i64) == Some(CODE_CHANGE_ACTOR_IMAGES) {
+                refs_fixed += normalize_command_parameter_string(map, 1, &indexes.characters);
+                refs_fixed += normalize_command_parameter_string(map, 3, &indexes.faces);
+                refs_fixed += normalize_command_parameter_string(map, 5, &indexes.sv_actors);
+            }
+            for child in map.values_mut() {
+                refs_fixed += normalize_nested_event_asset_references(child, indexes);
+            }
+        }
+        Value::Array(values) => {
+            for child in values {
+                refs_fixed += normalize_nested_event_asset_references(child, indexes);
+            }
+        }
+        _ => {}
+    }
+    refs_fixed
+}
+
+fn normalize_command_parameter_string(
+    command: &mut Map<String, Value>,
+    index: usize,
+    asset_index: &AssetNameIndex,
+) -> usize {
+    command
+        .get_mut("parameters")
+        .and_then(Value::as_array_mut)
+        .and_then(|parameters| parameters.get_mut(index))
+        .map(|value| normalize_string_value(value, asset_index))
+        .unwrap_or(0)
+}
+
+fn normalize_string_field(value: &mut Value, field: &str, index: &AssetNameIndex) -> usize {
+    value
+        .get_mut(field)
+        .map(|value| normalize_string_value(value, index))
+        .unwrap_or(0)
+}
+
+fn normalize_string_value(value: &mut Value, index: &AssetNameIndex) -> usize {
+    let Some(current) = value.as_str() else {
+        return 0;
+    };
+    let Some(canonical) = index.exact_or_normalized(current) else {
+        return 0;
+    };
+    if canonical == current {
+        return 0;
+    }
+    *value = Value::String(canonical);
+    1
+}
+
 fn is_same_or_nested(base_dir: &Path, candidate_dir: &Path) -> Result<bool, AppError> {
     let normalized_base = normalize_path(base_dir)?;
     let normalized_candidate = normalize_path(candidate_dir)?;
@@ -515,6 +835,368 @@ fn patch_exported_mv_mz_system_font_file(output_dir: &Path) -> Result<bool, AppE
     Ok(changed)
 }
 
+fn patch_exported_plugin_sources(project: &Project, output_dir: &Path) -> Result<usize, AppError> {
+    let Some(plugins_file) = project
+        .files
+        .iter()
+        .find(|file| file.relative_path.eq_ignore_ascii_case("js/plugins.js"))
+    else {
+        return Ok(0);
+    };
+
+    let plugins_path = output_dir.join("js").join("plugins.js");
+    if !plugins_path.is_file() {
+        return Ok(0);
+    }
+
+    let plugins_content = std::fs::read_to_string(&plugins_path)?;
+    let plugins_json = parse_plugins_js(&plugins_content)?;
+    let Some(plugins) = plugins_json.as_array() else {
+        return Ok(0);
+    };
+
+    let mut patches_by_plugin: HashMap<usize, Vec<PluginSourcePatch>> = HashMap::new();
+    for entry in &plugins_file.entries {
+        if entry.status == EntryStatus::Untranslated || entry.translation.trim().is_empty() {
+            continue;
+        }
+        let Some((plugin_index, parameter_name)) =
+            parse_direct_plugin_parameter_entry_id(&entry.id)
+        else {
+            continue;
+        };
+        patches_by_plugin
+            .entry(plugin_index)
+            .or_default()
+            .push(PluginSourcePatch {
+                parameter_name,
+                original: entry.original.clone(),
+                translation: entry.translation.clone(),
+            });
+    }
+
+    let mut files_changed = 0;
+    for (plugin_index, patches) in patches_by_plugin {
+        let Some(plugin_name) = plugins
+            .get(plugin_index)
+            .and_then(|plugin| plugin.get("name"))
+            .and_then(Value::as_str)
+        else {
+            continue;
+        };
+        let Some(source_path) = find_exported_plugin_source_path(output_dir, plugin_name) else {
+            continue;
+        };
+
+        let mut source = read_plugin_source_text(&source_path)?;
+        let before = source.text.clone();
+
+        for patch in &patches {
+            if !patch.original.is_empty() && patch.original != patch.translation {
+                source.text = source.text.replace(&patch.original, &patch.translation);
+            }
+        }
+
+        if patches.iter().any(|patch| {
+            source
+                .text
+                .contains(&format!("parameters['{}']", patch.parameter_name))
+        }) {
+            source.text = patch_plugin_manager_parameter_name(&source.text, plugin_name);
+        }
+
+        if source.text != before {
+            write_plugin_source_text(&source_path, &source)?;
+            files_changed += 1;
+        }
+    }
+
+    Ok(files_changed)
+}
+
+fn patch_exported_unsupported_prompt_calls(output_dir: &Path) -> Result<usize, AppError> {
+    let mut files_changed = 0usize;
+
+    if let Some(source_path) =
+        find_exported_plugin_source_path(output_dir, "Torigoya_InputNamePrompt")
+    {
+        let mut source = read_plugin_source_text(&source_path)?;
+        let before = source.text.clone();
+        source.text = patch_torigoya_input_name_prompt(&source.text);
+        if source.text != before {
+            write_plugin_source_text(&source_path, &source)?;
+            files_changed += 1;
+        }
+    }
+
+    if let Some(source_path) = find_exported_plugin_source_path(output_dir, "NobleMushroom") {
+        let mut source = read_plugin_source_text(&source_path)?;
+        let before = source.text.clone();
+        source.text = patch_noble_mushroom_name_prompt(&source.text);
+        if source.text != before {
+            write_plugin_source_text(&source_path, &source)?;
+            files_changed += 1;
+        }
+    }
+
+    if let Some(source_path) = find_exported_plugin_source_path(output_dir, "GraphicalDesignMode") {
+        let mut source = read_plugin_source_text(&source_path)?;
+        let before = source.text.clone();
+        source.text = patch_graphical_design_mode_prompt(&source.text);
+        if source.text != before {
+            write_plugin_source_text(&source_path, &source)?;
+            files_changed += 1;
+        }
+    }
+
+    Ok(files_changed)
+}
+
+fn patch_torigoya_input_name_prompt(source: &str) -> String {
+    let old = r#"    InputNamePrompt.runCommand = function (args) {
+        var actor = $gameActors.actor(~~args.shift());
+        var max = Number(args.shift());
+        if (isNaN(max)) max = InputNamePrompt.settings.maxLength;
+        var message = args.join(' ') || InputNamePrompt.settings.getMessage();
+        message += '\n' + InputNamePrompt.settings.getMaximumMessage().replace(/%1/g, '' + max);
+        var name = window.prompt(message, actor.name());
+        if (name) {
+            name = name.trim();
+            if (name.length > 0) {
+                actor.setName(name.substr(0, max));
+            }
+        }
+    };"#;
+    let new = r#"    InputNamePrompt.runCommand = function (args) {
+        var actorId = ~~args.shift();
+        var actor = $gameActors.actor(actorId);
+        var max = Number(args.shift());
+        if (isNaN(max)) max = InputNamePrompt.settings.maxLength;
+        if (!actor) return;
+        SceneManager.push(Scene_Name);
+        SceneManager.prepareNextScene(actorId, max);
+    };"#;
+    source.replace(old, new)
+}
+
+fn patch_noble_mushroom_name_prompt(source: &str) -> String {
+    let old = r#"    Game_Message.prototype.popupNameInputPrompt = function(actorId, message) {
+        var actor        = $gameActors.actor(actorId);
+        var defaultValue = actor ? actor.name() : '';
+        var result       = window.prompt(message || '', defaultValue);
+        if (Utils.isNwjs()) {
+            var gui = require('nw.gui');
+            var win = gui.Window.get();
+            win.focus();
+            Input.clear();
+        }
+        if (result) actor.setName(result);
+    };"#;
+    let new = r#"    Game_Message.prototype.popupNameInputPrompt = function(actorId, message) {
+        var actor = $gameActors.actor(actorId);
+        if (!actor) return;
+        SceneManager.push(Scene_Name);
+        SceneManager.prepareNextScene(actorId, 10);
+        Input.clear();
+    };"#;
+    source.replace(old, new)
+}
+
+fn patch_graphical_design_mode_prompt(source: &str) -> String {
+    source
+        .replace("                var result = _prompt.apply(this, arguments);", "                var result = null;")
+        .replace(
+            "                var result = window.prompt(propLabel + 'を入力してください。', this[propName].toString());",
+            "                var result = null;",
+        )
+}
+
+#[derive(Debug, Clone)]
+struct PluginSourcePatch {
+    parameter_name: String,
+    original: String,
+    translation: String,
+}
+
+fn parse_direct_plugin_parameter_entry_id(id: &str) -> Option<(usize, String)> {
+    let mut parts = id.split(':');
+    if parts.next()? != "Plugins" {
+        return None;
+    }
+    let plugin_index = parts.next()?.parse::<usize>().ok()?;
+    if parts.next()? != "parameters" {
+        return None;
+    }
+    let parameter_name = parts.next()?.to_string();
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((plugin_index, parameter_name))
+}
+
+fn find_exported_plugin_source_path(output_dir: &Path, plugin_name: &str) -> Option<PathBuf> {
+    let plugins_dir = output_dir.join("js").join("plugins");
+    let direct = plugins_dir.join(format!("{plugin_name}.js"));
+    if direct.is_file() {
+        return Some(direct);
+    }
+
+    let desired = format!("{plugin_name}.js").to_ascii_lowercase();
+    std::fs::read_dir(plugins_dir)
+        .ok()?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name.eq_ignore_ascii_case(&desired))
+                .unwrap_or(false)
+        })
+}
+
+struct PluginSourceText {
+    text: String,
+    encoding: PluginSourceEncoding,
+}
+
+enum PluginSourceEncoding {
+    Utf8,
+    Utf16Le,
+}
+
+fn read_plugin_source_text(path: &Path) -> Result<PluginSourceText, AppError> {
+    let bytes = std::fs::read(path)?;
+    if bytes.starts_with(&[0xff, 0xfe]) {
+        let units = bytes[2..]
+            .chunks_exact(2)
+            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect::<Vec<_>>();
+        let text = String::from_utf16_lossy(&units);
+        return Ok(PluginSourceText {
+            text,
+            encoding: PluginSourceEncoding::Utf16Le,
+        });
+    }
+
+    Ok(PluginSourceText {
+        text: String::from_utf8_lossy(&bytes).to_string(),
+        encoding: PluginSourceEncoding::Utf8,
+    })
+}
+
+fn write_plugin_source_text(path: &Path, source: &PluginSourceText) -> Result<(), AppError> {
+    match source.encoding {
+        PluginSourceEncoding::Utf8 => {
+            std::fs::write(path, source.text.as_bytes())?;
+        }
+        PluginSourceEncoding::Utf16Le => {
+            let mut bytes = vec![0xff, 0xfe];
+            for unit in source.text.encode_utf16() {
+                bytes.extend_from_slice(&unit.to_le_bytes());
+            }
+            std::fs::write(path, bytes)?;
+        }
+    }
+    Ok(())
+}
+
+fn patch_plugin_manager_parameter_name(source: &str, plugin_name: &str) -> String {
+    let Ok(re) = regex::Regex::new(r#"PluginManager\.parameters\((['"])([^'"]+)(['"])\)"#) else {
+        return source.to_string();
+    };
+
+    re.replace_all(source, |captures: &regex::Captures| {
+        let current = captures.get(2).map(|m| m.as_str()).unwrap_or_default();
+        if current == plugin_name {
+            captures
+                .get(0)
+                .map(|m| m.as_str())
+                .unwrap_or_default()
+                .to_string()
+        } else {
+            format!(
+                "PluginManager.parameters({quote}{plugin_name}{quote})",
+                quote = &captures[1]
+            )
+        }
+    })
+    .to_string()
+}
+
+fn append_visible_source_text_warnings(
+    project: &Project,
+    output_dir: &Path,
+    warnings: &mut Vec<String>,
+) -> Result<(), AppError> {
+    if !is_japanese_source_project(project) {
+        return Ok(());
+    }
+
+    let parsed_files = parse_mv_mz_game(output_dir)?;
+    let mut leftovers = Vec::new();
+    for file in parsed_files {
+        for entry in file.entries {
+            if contains_japanese_script(&entry.original) {
+                leftovers.push(format!(
+                    "{} :: {} = {}",
+                    file.relative_path,
+                    entry.id,
+                    truncate_for_warning(&entry.original, 64)
+                ));
+            }
+        }
+    }
+
+    if leftovers.is_empty() {
+        return Ok(());
+    }
+
+    const MAX_EXAMPLES: usize = 5;
+    let shown = leftovers
+        .iter()
+        .take(MAX_EXAMPLES)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("; ");
+    let remaining = leftovers.len().saturating_sub(MAX_EXAMPLES);
+    let suffix = if remaining > 0 {
+        format!("; and {remaining} more")
+    } else {
+        String::new()
+    };
+    warnings.push(format!(
+        "Post-export visible text QA found {} extracted entries that still contain Japanese script: {}{}",
+        leftovers.len(),
+        shown,
+        suffix
+    ));
+
+    Ok(())
+}
+
+fn is_japanese_source_project(project: &Project) -> bool {
+    let source = project.source_lang.trim().to_ascii_lowercase();
+    source == "ja" || source == "jp" || source.starts_with("ja-") || source.contains("japanese")
+}
+
+fn contains_japanese_script(text: &str) -> bool {
+    text.chars().any(|ch| {
+        matches!(
+            ch,
+            '\u{3040}'..='\u{30ff}' | '\u{3400}'..='\u{9fff}' | '\u{f900}'..='\u{faff}'
+        )
+    })
+}
+
+fn truncate_for_warning(text: &str, max_chars: usize) -> String {
+    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.chars().count() <= max_chars {
+        return normalized;
+    }
+    let mut truncated = normalized.chars().take(max_chars).collect::<String>();
+    truncated.push_str("...");
+    truncated
+}
+
 fn read_marshal_value(path: &Path) -> Result<Value, AppError> {
     let file = File::open(path)?;
     let mut reader = BufReader::new(file);
@@ -566,6 +1248,7 @@ fn apply_legacy_translations(
         FileKind::Troops => apply_vxace_troops(json, translations),
         FileKind::System => apply_vxace_system(json, translations),
         FileKind::Plugins => Ok(0),
+        FileKind::Html => Ok(0),
         FileKind::Ignored => Ok(0),
     }
 }
@@ -1009,16 +1692,73 @@ fn apply_translations(
     kind: &FileKind,
     json: &mut Value,
     translations: &HashMap<String, String>,
+    target_lang: &str,
 ) -> Result<usize, AppError> {
+    let choice_prompt = choice_prompt_guard_text(target_lang);
     match kind {
         FileKind::Database => apply_database(stem, json, translations),
-        FileKind::Map => apply_map(stem, json, translations),
-        FileKind::CommonEvents => apply_common_events(json, translations),
-        FileKind::Troops => apply_troops(json, translations),
+        FileKind::Map => apply_map(stem, json, translations, choice_prompt),
+        FileKind::CommonEvents => apply_common_events(json, translations, choice_prompt),
+        FileKind::Troops => apply_troops(json, translations, choice_prompt),
         FileKind::System => apply_system(json, translations),
         FileKind::Plugins => apply_plugins(json, translations),
+        FileKind::Html => apply_index_html(stem, json, translations),
         FileKind::Ignored => Ok(0),
     }
+}
+
+fn choice_prompt_guard_text(target_lang: &str) -> &'static str {
+    let lang = target_lang.to_ascii_lowercase();
+    if lang.starts_with("es") || lang.contains("spanish") || lang.contains("español") {
+        "Elige una opción."
+    } else if lang.starts_with("ja") || lang.starts_with("jp") || lang.contains("japanese") {
+        "選択してください。"
+    } else {
+        "Choose an option."
+    }
+}
+
+fn apply_index_html(
+    stem: &str,
+    json: &mut Value,
+    translations: &HashMap<String, String>,
+) -> Result<usize, AppError> {
+    let Some(translation) = translations.get("index.html:title") else {
+        return Ok(0);
+    };
+
+    let content = json
+        .as_str()
+        .ok_or_else(|| AppError::Parse(format!("{stem}: expected HTML content string")))?;
+    let Some(updated) = replace_html_title(content, translation) else {
+        return Ok(0);
+    };
+    if updated == content {
+        return Ok(0);
+    }
+
+    *json = Value::String(updated);
+    Ok(1)
+}
+
+fn replace_html_title(content: &str, translation: &str) -> Option<String> {
+    let re = regex::Regex::new(r"(?is)(<title[^>]*>)(.*?)(</title>)").ok()?;
+    if !re.is_match(content) {
+        return None;
+    }
+    let escaped = escape_html_text(translation);
+    Some(
+        re.replace(content, |captures: &regex::Captures| {
+            format!("{}{}{}", &captures[1], escaped, &captures[3])
+        })
+        .to_string(),
+    )
+}
+
+fn escape_html_text(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 fn apply_plugins(
@@ -1048,6 +1788,21 @@ fn apply_plugins(
             .get_mut("parameters")
             .and_then(Value::as_object_mut)
         {
+            let parameter_prefix = format!("Plugins:{plugin_index}:parameters:");
+            for (entry_id, translation) in translations {
+                let Some(parameter_name) = entry_id.strip_prefix(&parameter_prefix) else {
+                    continue;
+                };
+                if parameter_name.contains(':') || parameters.contains_key(parameter_name) {
+                    continue;
+                }
+                parameters.insert(
+                    parameter_name.to_string(),
+                    Value::String(translation.clone()),
+                );
+                applied += 1;
+            }
+
             for (key, value) in parameters.iter_mut() {
                 applied += apply_plugin_value(
                     value,
@@ -1163,6 +1918,7 @@ fn apply_map(
     stem: &str,
     json: &mut Value,
     translations: &HashMap<String, String>,
+    choice_prompt_guard: &str,
 ) -> Result<usize, AppError> {
     let obj = json
         .as_object_mut()
@@ -1196,7 +1952,12 @@ fn apply_map(
                 for (page_idx, page) in pages.iter_mut().enumerate() {
                     if let Some(Value::Array(list)) = page.get_mut("list") {
                         let id_prefix = format!("{stem}:{ev_id}:{page_idx}");
-                        applied += apply_event_commands(list, &id_prefix, translations);
+                        applied += apply_event_commands(
+                            list,
+                            &id_prefix,
+                            translations,
+                            choice_prompt_guard,
+                        );
                     }
                 }
             }
@@ -1213,6 +1974,7 @@ fn apply_map(
 fn apply_common_events(
     json: &mut Value,
     translations: &HashMap<String, String>,
+    choice_prompt_guard: &str,
 ) -> Result<usize, AppError> {
     let arr = json
         .as_array_mut()
@@ -1231,7 +1993,7 @@ fn apply_common_events(
 
         if let Some(Value::Array(list)) = item.get_mut("list") {
             let id_prefix = format!("CommonEvents:{ce_id}");
-            applied += apply_event_commands(list, &id_prefix, translations);
+            applied += apply_event_commands(list, &id_prefix, translations, choice_prompt_guard);
         }
     }
 
@@ -1245,6 +2007,7 @@ fn apply_common_events(
 fn apply_troops(
     json: &mut Value,
     translations: &HashMap<String, String>,
+    choice_prompt_guard: &str,
 ) -> Result<usize, AppError> {
     let arr = json
         .as_array_mut()
@@ -1279,7 +2042,8 @@ fn apply_troops(
             for (page_idx, page) in pages.iter_mut().enumerate() {
                 if let Some(Value::Array(list)) = page.get_mut("list") {
                     let id_prefix = format!("Troops:{troop_id}:{page_idx}");
-                    applied += apply_event_commands(list, &id_prefix, translations);
+                    applied +=
+                        apply_event_commands(list, &id_prefix, translations, choice_prompt_guard);
                 }
             }
         }
@@ -1369,6 +2133,7 @@ fn apply_event_commands(
     list: &mut Vec<Value>,
     id_prefix: &str,
     translations: &HashMap<String, String>,
+    choice_prompt_guard: &str,
 ) -> usize {
     let mut applied = 0;
     let mut i = 0;
@@ -1394,7 +2159,19 @@ fn apply_event_commands(
 
                 let entry_id = format!("{id_prefix}:text:{start}");
                 if let Some(translation) = translations.get(&entry_id) {
-                    apply_multiline_text(list, &line_indices, translation);
+                    let followed_by_choice = list
+                        .get(i)
+                        .and_then(|command| command.get("code"))
+                        .and_then(Value::as_i64)
+                        == Some(CODE_SHOW_CHOICES);
+                    let prepared = wrap_mv_mz_message_translation(translation, followed_by_choice);
+                    let inserted = apply_multiline_text(
+                        list,
+                        &line_indices,
+                        &prepared,
+                        Some(MV_MZ_MESSAGE_LINE_LIMIT),
+                    );
+                    i += inserted;
                     applied += 1;
                 }
                 continue; // i already advanced past the group
@@ -1416,12 +2193,16 @@ fn apply_event_commands(
 
                 let entry_id = format!("{id_prefix}:scroll:{start}");
                 if let Some(translation) = translations.get(&entry_id) {
-                    apply_multiline_text(list, &line_indices, translation);
+                    let inserted = apply_multiline_text(list, &line_indices, translation, None);
+                    i += inserted;
                     applied += 1;
                 }
                 continue;
             }
             CODE_SHOW_CHOICES => {
+                let inserted = ensure_choice_final_prompt(list, i, choice_prompt_guard);
+                i += inserted;
+
                 // Replace individual choice strings
                 if let Some(params) = list[i].get_mut("parameters") {
                     if let Some(arr) = params.as_array_mut() {
@@ -1466,6 +2247,122 @@ fn apply_event_commands(
     applied
 }
 
+fn ensure_choice_final_prompt(
+    list: &mut Vec<Value>,
+    choice_idx: usize,
+    choice_prompt_guard: &str,
+) -> usize {
+    if choice_prompt_guard.trim().is_empty() {
+        return 0;
+    }
+
+    let Some(group) = message_group_before(list, choice_idx) else {
+        return 0;
+    };
+    let mut group_count = 1usize;
+    let mut previous_start = group.start;
+    while let Some(previous) = message_group_before(list, previous_start) {
+        group_count += 1;
+        previous_start = previous.start;
+    }
+    if group_count <= 1 {
+        return 0;
+    }
+
+    let last_text = group.lines.join("\n");
+    if last_text.trim() == choice_prompt_guard {
+        return 0;
+    }
+
+    let message_parameters = list
+        .get(group.start)
+        .and_then(|command| command.get("parameters"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_else(|| {
+            vec![
+                Value::String(String::new()),
+                Value::from(0),
+                Value::from(2),
+                Value::from(2),
+            ]
+        });
+    let indent = list
+        .get(choice_idx)
+        .and_then(|command| command.get("indent"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+
+    list.insert(
+        choice_idx,
+        serde_json::json!({
+            "code": 101,
+            "indent": indent,
+            "parameters": message_parameters,
+        }),
+    );
+    list.insert(
+        choice_idx + 1,
+        serde_json::json!({
+            "code": CODE_SHOW_TEXT,
+            "indent": indent,
+            "parameters": [choice_prompt_guard],
+        }),
+    );
+
+    2
+}
+
+#[derive(Debug, Clone)]
+struct MessageGroup {
+    start: usize,
+    lines: Vec<String>,
+}
+
+fn message_group_before(list: &[Value], index: usize) -> Option<MessageGroup> {
+    if index == 0
+        || list.get(index - 1)?.get("code").and_then(Value::as_i64) != Some(CODE_SHOW_TEXT)
+    {
+        return None;
+    }
+
+    let mut cursor = index - 1;
+    while cursor > 0
+        && list
+            .get(cursor)
+            .and_then(|command| command.get("code"))
+            .and_then(Value::as_i64)
+            == Some(CODE_SHOW_TEXT)
+    {
+        cursor -= 1;
+    }
+    if list
+        .get(cursor)
+        .and_then(|command| command.get("code"))
+        .and_then(Value::as_i64)
+        != Some(101)
+    {
+        return None;
+    }
+
+    let lines = list[cursor + 1..index]
+        .iter()
+        .filter_map(|command| {
+            command
+                .get("parameters")
+                .and_then(Value::as_array)
+                .and_then(|parameters| parameters.first())
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .collect();
+
+    Some(MessageGroup {
+        start: cursor,
+        lines,
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -1474,20 +2371,57 @@ fn apply_event_commands(
 ///
 /// - Lines are distributed 1:1 across the commands.
 /// - If the translation has fewer lines, excess commands get empty strings.
-/// - If the translation has more lines, excess lines are joined into the
-///   last command (a limitation for MVP — Phase 6 may insert new commands).
-fn apply_multiline_text(list: &mut [Value], line_indices: &[usize], translation: &str) {
+/// - If the translation has more lines, extra 401/405 commands are inserted
+///   after the original group so RPG Maker renders them as visible lines.
+fn apply_multiline_text(
+    list: &mut Vec<Value>,
+    line_indices: &[usize],
+    translation: &str,
+    max_lines_per_message: Option<usize>,
+) -> usize {
     let lines: Vec<&str> = translation.split('\n').collect();
     let num_commands = line_indices.len();
+    let Some(&first_idx) = line_indices.first() else {
+        return 0;
+    };
+
+    if let Some(line_limit) = max_lines_per_message {
+        if lines.len() > line_limit {
+            let Some(&last_idx) = line_indices.last() else {
+                return 0;
+            };
+            if first_idx > 0
+                && list
+                    .get(first_idx - 1)
+                    .and_then(|command| command.get("code"))
+                    .and_then(Value::as_i64)
+                    == Some(101)
+            {
+                let message_template = list[first_idx - 1].clone();
+                let line_template = list[first_idx].clone();
+                let mut replacement = Vec::new();
+
+                for (page_index, chunk) in lines.chunks(line_limit).enumerate() {
+                    if page_index > 0 {
+                        replacement.push(message_template.clone());
+                    }
+                    for line in chunk {
+                        let mut command = line_template.clone();
+                        set_command_text(&mut command, line);
+                        replacement.push(command);
+                    }
+                }
+
+                let inserted = replacement.len().saturating_sub(line_indices.len());
+                list.splice(first_idx..=last_idx, replacement);
+                return inserted;
+            }
+        }
+    }
 
     for (j, &cmd_idx) in line_indices.iter().enumerate() {
         let text = if j < lines.len() {
-            if j == num_commands - 1 && lines.len() > num_commands {
-                // Last command receives all remaining lines
-                lines[j..].join("\n")
-            } else {
-                lines[j].to_string()
-            }
+            lines[j].to_string()
         } else {
             // Translation has fewer lines — empty this command
             String::new()
@@ -1501,6 +2435,134 @@ fn apply_multiline_text(list: &mut [Value], line_indices: &[usize], translation:
             }
         }
     }
+
+    let mut inserted = 0usize;
+    if lines.len() > num_commands {
+        let Some(&last_idx) = line_indices.last() else {
+            return inserted;
+        };
+        let template = list[last_idx].clone();
+        for line in lines.iter().skip(num_commands) {
+            let mut command = template.clone();
+            set_command_text(&mut command, line);
+            list.insert(last_idx + 1 + inserted, command);
+            inserted += 1;
+        }
+    }
+
+    inserted
+}
+
+fn set_command_text(command: &mut Value, text: &str) {
+    if let Some(params) = command.get_mut("parameters") {
+        if let Some(arr) = params.as_array_mut() {
+            if !arr.is_empty() {
+                arr[0] = Value::String(text.to_string());
+            }
+        }
+    }
+}
+
+fn wrap_mv_mz_message_translation(translation: &str, compact_blank_lines: bool) -> String {
+    translation
+        .split('\n')
+        .filter(|line| !compact_blank_lines || !line.trim().is_empty())
+        .flat_map(|line| wrap_mv_mz_message_line(line, MV_MZ_MESSAGE_WRAP_WIDTH))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn wrap_mv_mz_message_line(line: &str, max_visible_width: usize) -> Vec<String> {
+    if visible_message_width(line) <= max_visible_width {
+        return vec![line.to_string()];
+    }
+
+    let mut wrapped = Vec::new();
+    let mut current = String::new();
+    for word in line.split_whitespace() {
+        if current.is_empty() {
+            current.push_str(word);
+            continue;
+        }
+
+        let candidate = format!("{current} {word}");
+        if visible_message_width(&candidate) <= max_visible_width {
+            current = candidate;
+        } else {
+            wrapped.push(current);
+            current = word.to_string();
+        }
+    }
+
+    if current.is_empty() {
+        return hard_wrap_message_line(line, max_visible_width);
+    }
+
+    if visible_message_width(&current) > max_visible_width {
+        wrapped.extend(hard_wrap_message_line(&current, max_visible_width));
+    } else {
+        wrapped.push(current);
+    }
+
+    wrapped
+}
+
+fn hard_wrap_message_line(line: &str, max_visible_width: usize) -> Vec<String> {
+    let mut wrapped = Vec::new();
+    let mut current = String::new();
+    let mut current_width = 0usize;
+    let mut chars = line.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            current.push(ch);
+            while let Some(&next) = chars.peek() {
+                current.push(next);
+                chars.next();
+                if next == ']' || (!next.is_ascii_alphabetic() && next != '[') {
+                    break;
+                }
+            }
+            continue;
+        }
+
+        let width = if ch == '　' { 1 } else { 1 };
+        if current_width + width > max_visible_width && !current.is_empty() {
+            wrapped.push(current);
+            current = String::new();
+            current_width = 0;
+        }
+        current.push(ch);
+        current_width += width;
+    }
+
+    if !current.is_empty() {
+        wrapped.push(current);
+    }
+    if wrapped.is_empty() {
+        wrapped.push(String::new());
+    }
+    wrapped
+}
+
+fn visible_message_width(line: &str) -> usize {
+    let mut width = 0usize;
+    let mut chars = line.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            while let Some(&next) = chars.peek() {
+                chars.next();
+                if next == ']' || (!next.is_ascii_alphabetic() && next != '[') {
+                    break;
+                }
+            }
+            continue;
+        }
+        width += 1;
+    }
+
+    width
 }
 
 /// Set a string parameter at a specific index in a command's parameters array.
@@ -1586,7 +2648,7 @@ mod tests {
     }
 
     #[test]
-    fn test_export_project_blocks_multiline_drift() {
+    fn test_export_project_warns_on_multiline_drift() {
         let temp_dir = std::env::temp_dir().join(format!(
             "fairtl_export_block_{}",
             uuid::Uuid::new_v4().as_simple()
@@ -1628,11 +2690,76 @@ mod tests {
             "fairtl_export_block_out_{}",
             uuid::Uuid::new_v4().as_simple()
         ));
-        let error = export_project(&project, &output_dir).unwrap_err();
-        let message = error.to_string();
+        let result = export_project(&project, &output_dir).unwrap();
 
-        assert!(message.contains("Export blocked by translation integrity checks"));
-        assert!(message.contains("changed line count"));
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("changed line count")));
+
+        let _ = fs::remove_dir_all(&temp_dir);
+        let _ = fs::remove_dir_all(&output_dir);
+    }
+
+    #[test]
+    fn test_export_project_warns_about_visible_japanese_after_export() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "fairtl_export_visible_ja_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        let data_dir = temp_dir.join("data");
+        let js_dir = temp_dir.join("js");
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::create_dir_all(&js_dir).unwrap();
+        fs::write(js_dir.join("rpg_core.js"), "").unwrap();
+        fs::write(
+            data_dir.join("System.json"),
+            r#"{"gameTitle":"Game Title","terms":{}}"#,
+        )
+        .unwrap();
+        fs::write(
+            js_dir.join("plugins.js"),
+            r#"var $plugins =
+[
+  {
+    "name": "BB_CustomSaveWindow",
+    "status": true,
+    "description": "",
+    "parameters": {
+      "Item1title": "操作キャラ"
+    }
+  }
+];"#,
+        )
+        .unwrap();
+
+        let files = parse_mv_mz_game(&temp_dir).unwrap();
+        let project = Project {
+            id: "test".into(),
+            name: "Visible QA".into(),
+            source_lang: "ja".into(),
+            target_lang: "es".into(),
+            engine: Engine::Mv,
+            game_dir: temp_dir.to_string_lossy().into(),
+            files,
+            glossary: vec![],
+            style_guide: vec![],
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+
+        let output_dir = std::env::temp_dir().join(format!(
+            "fairtl_export_visible_ja_out_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        let result = export_project(&project, &output_dir).unwrap();
+        let warning = result
+            .warnings
+            .iter()
+            .find(|warning| warning.contains("Post-export visible text QA found"))
+            .expect("export should warn about untranslated visible Japanese");
+
+        assert!(warning.contains("js/plugins.js :: Plugins:0:parameters:Item1title"));
 
         let _ = fs::remove_dir_all(&temp_dir);
         let _ = fs::remove_dir_all(&output_dir);
@@ -1809,7 +2936,7 @@ mod tests {
         let mut translations = HashMap::new();
         translations.insert("Map001:displayName".into(), "Bosque de Pruebas".into());
 
-        let applied = apply_map("Map001", &mut json, &translations).unwrap();
+        let applied = apply_map("Map001", &mut json, &translations, "Choose an option.").unwrap();
         assert_eq!(applied, 1);
         assert_eq!(json["displayName"], "Bosque de Pruebas");
     }
@@ -1832,10 +2959,122 @@ mod tests {
         );
 
         let list = json.as_array_mut().unwrap();
-        let applied = apply_event_commands(list, "Map001:1:0", &translations);
+        let applied = apply_event_commands(list, "Map001:1:0", &translations, "Choose an option.");
         assert_eq!(applied, 1);
         assert_eq!(list[0]["parameters"][0], "¡Hola, viajero!");
         assert_eq!(list[1]["parameters"][0], "Bienvenido a nuestro pueblo.");
+    }
+
+    #[test]
+    fn test_apply_event_commands_wraps_long_show_text_lines() {
+        let mut json: Value = serde_json::from_str(
+            r#"[
+                {"code": 101, "parameters": ["", 0, 2, 2]},
+                {"code": 401, "parameters": ["\\C[27]\\N[1]\\C[0]"]},
+                {"code": 401, "parameters": ["Original"]},
+                {"code": 0, "parameters": []}
+            ]"#,
+        )
+        .unwrap();
+
+        let mut translations = HashMap::new();
+        translations.insert(
+            "Map001:1:0:text:1".into(),
+            "\\C[27]\\N[1]\\C[0]\nUna chica de secundaria de pelo corto vuelve caminando tranquilamente de la escuela.".into(),
+        );
+
+        let list = json.as_array_mut().unwrap();
+        let applied = apply_event_commands(list, "Map001:1:0", &translations, "Choose an option.");
+        assert_eq!(applied, 1);
+        assert_eq!(list[1]["parameters"][0], "\\C[27]\\N[1]\\C[0]");
+        assert_eq!(
+            list[2]["parameters"][0],
+            "Una chica de secundaria de pelo corto vuelve"
+        );
+        assert_eq!(
+            list[3]["parameters"][0],
+            "caminando tranquilamente de la escuela."
+        );
+    }
+
+    #[test]
+    fn test_apply_event_commands_splits_oversized_show_text_pages() {
+        let mut json: Value = serde_json::from_str(
+            r#"[
+                {"code": 101, "parameters": ["", 0, 2, 2]},
+                {"code": 401, "parameters": ["Line 1"]},
+                {"code": 401, "parameters": ["Line 2"]},
+                {"code": 0, "parameters": []}
+            ]"#,
+        )
+        .unwrap();
+
+        let mut translations = HashMap::new();
+        translations.insert(
+            "Map001:1:0:text:1".into(),
+            "Linea 1\nLinea 2\nLinea 3\nLinea 4\nLinea 5".into(),
+        );
+
+        let list = json.as_array_mut().unwrap();
+        let applied = apply_event_commands(list, "Map001:1:0", &translations, "Choose an option.");
+        assert_eq!(applied, 1);
+        assert_eq!(list[0]["code"], 101);
+        assert_eq!(list[1]["parameters"][0], "Linea 1");
+        assert_eq!(list[4]["parameters"][0], "Linea 4");
+        assert_eq!(list[5]["code"], 101);
+        assert_eq!(list[6]["parameters"][0], "Linea 5");
+    }
+
+    #[test]
+    fn test_apply_event_commands_compacts_blank_lines_before_choices() {
+        let mut json: Value = serde_json::from_str(
+            r#"[
+                {"code": 101, "parameters": ["", 0, 2, 2]},
+                {"code": 401, "parameters": ["Original"]},
+                {"code": 102, "parameters": [["Yes", "No"]]},
+                {"code": 0, "parameters": []}
+            ]"#,
+        )
+        .unwrap();
+
+        let mut translations = HashMap::new();
+        translations.insert(
+            "Map001:1:0:text:1".into(),
+            "Selecciona la cantidad de vello púbico.\n\n※Estado actual: Normal.".into(),
+        );
+
+        let list = json.as_array_mut().unwrap();
+        let applied = apply_event_commands(list, "Map001:1:0", &translations, "Elige una opción.");
+        assert_eq!(applied, 1);
+        assert_eq!(
+            list[1]["parameters"][0],
+            "Selecciona la cantidad de vello púbico."
+        );
+        assert_eq!(list[2]["parameters"][0], "※Estado actual: Normal.");
+        assert_eq!(list[3]["code"], 102);
+    }
+
+    #[test]
+    fn test_apply_event_commands_adds_final_prompt_before_split_choice() {
+        let mut json: Value = serde_json::from_str(
+            r#"[
+                {"code": 101, "parameters": ["", 0, 2, 2]},
+                {"code": 401, "parameters": ["Primera explicación."]},
+                {"code": 101, "parameters": ["", 0, 2, 2]},
+                {"code": 401, "parameters": ["Segunda explicación."]},
+                {"code": 102, "parameters": [["Sí", "No"]]},
+                {"code": 0, "parameters": []}
+            ]"#,
+        )
+        .unwrap();
+
+        let translations = HashMap::new();
+        let list = json.as_array_mut().unwrap();
+        let applied = apply_event_commands(list, "Map001:1:0", &translations, "Elige una opción.");
+        assert_eq!(applied, 0);
+        assert_eq!(list[4]["code"], 101);
+        assert_eq!(list[5]["parameters"][0], "Elige una opción.");
+        assert_eq!(list[6]["code"], 102);
     }
 
     #[test]
@@ -1853,7 +3092,7 @@ mod tests {
         translations.insert("Map001:2:0:choice:0:1".into(), "No".into());
 
         let list = json.as_array_mut().unwrap();
-        let applied = apply_event_commands(list, "Map001:2:0", &translations);
+        let applied = apply_event_commands(list, "Map001:2:0", &translations, "Choose an option.");
         assert_eq!(applied, 2);
         assert_eq!(list[0]["parameters"][0][0], "Sí");
         assert_eq!(list[0]["parameters"][0][1], "No");
@@ -1909,7 +3148,7 @@ mod tests {
         translations.insert("test:text:0".into(), "Línea 1".into());
 
         let list = json.as_array_mut().unwrap();
-        let applied = apply_event_commands(list, "test", &translations);
+        let applied = apply_event_commands(list, "test", &translations, "Choose an option.");
         assert_eq!(applied, 1);
         assert_eq!(list[0]["parameters"][0], "Línea 1");
         assert_eq!(list[1]["parameters"][0], ""); // emptied
@@ -1930,10 +3169,11 @@ mod tests {
         translations.insert("test:text:0".into(), "Línea 1\nLínea 2\nLínea 3".into());
 
         let list = json.as_array_mut().unwrap();
-        let applied = apply_event_commands(list, "test", &translations);
+        let applied = apply_event_commands(list, "test", &translations, "Choose an option.");
         assert_eq!(applied, 1);
-        // All excess lines joined into the single command
-        assert_eq!(list[0]["parameters"][0], "Línea 1\nLínea 2\nLínea 3");
+        assert_eq!(list[0]["parameters"][0], "Línea 1");
+        assert_eq!(list[1]["parameters"][0], "Línea 2");
+        assert_eq!(list[2]["parameters"][0], "Línea 3");
     }
 
     #[test]
@@ -1950,7 +3190,7 @@ mod tests {
         translations.insert("test:changeName:0".into(), "Haroldo".into());
 
         let list = json.as_array_mut().unwrap();
-        let applied = apply_event_commands(list, "test", &translations);
+        let applied = apply_event_commands(list, "test", &translations, "Choose an option.");
         assert_eq!(applied, 1);
         assert_eq!(list[0]["parameters"][1], "Haroldo");
     }
@@ -1969,7 +3209,7 @@ mod tests {
         translations.insert("test:changeNickname:0".into(), "El Valiente".into());
 
         let list = json.as_array_mut().unwrap();
-        let applied = apply_event_commands(list, "test", &translations);
+        let applied = apply_event_commands(list, "test", &translations, "Choose an option.");
         assert_eq!(applied, 1);
         assert_eq!(list[0]["parameters"][1], "El Valiente");
     }
@@ -1991,7 +3231,7 @@ mod tests {
         );
 
         let list = json.as_array_mut().unwrap();
-        let applied = apply_event_commands(list, "test", &translations);
+        let applied = apply_event_commands(list, "test", &translations, "Choose an option.");
         assert_eq!(applied, 1);
         assert_eq!(list[0]["parameters"][1], "Un guerrero valiente del norte.");
     }
@@ -2032,6 +3272,287 @@ mod tests {
     }
 
     #[test]
+    fn test_apply_plugins_inserts_missing_direct_parameter() {
+        let mut json = parse_plugins_js(
+            r#"var $plugins =
+[
+  {
+    "name": "gamEnd",
+    "status": true,
+    "description": "",
+    "parameters": {}
+  }
+];"#,
+        )
+        .unwrap();
+
+        let mut translations = HashMap::new();
+        translations.insert("Plugins:0:parameters:endName".into(), "Salir".into());
+
+        let applied = apply_plugins(&mut json, &translations).unwrap();
+        assert_eq!(applied, 1);
+        assert_eq!(json[0]["parameters"]["endName"], "Salir");
+    }
+
+    #[test]
+    fn test_export_project_patches_plugin_source_fallbacks() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "fairtl_export_plugin_source_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        let data_dir = temp_dir.join("data");
+        let js_dir = temp_dir.join("js");
+        let plugins_dir = js_dir.join("plugins");
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::create_dir_all(&plugins_dir).unwrap();
+        fs::write(js_dir.join("rpg_core.js"), "").unwrap();
+        fs::write(
+            data_dir.join("System.json"),
+            r#"{"gameTitle":"Game Title","terms":{}}"#,
+        )
+        .unwrap();
+        fs::write(
+            js_dir.join("plugins.js"),
+            r#"var $plugins =
+[
+  {
+    "name": "gamEnd",
+    "status": true,
+    "description": "",
+    "parameters": {}
+  }
+];"#,
+        )
+        .unwrap();
+        fs::write(
+            plugins_dir.join("gamEnd.js"),
+            "var parameters = PluginManager.parameters('gameEnd');\nvar EndName = String(parameters['endName'] || 'ゲーム終了');\n",
+        )
+        .unwrap();
+
+        let project = Project {
+            id: "test".into(),
+            name: "Plugin Source".into(),
+            source_lang: "ja".into(),
+            target_lang: "es".into(),
+            engine: Engine::Mv,
+            game_dir: temp_dir.to_string_lossy().into(),
+            files: vec![
+                TranslationFile {
+                    relative_path: "data/System.json".into(),
+                    entries: vec![],
+                },
+                TranslationFile {
+                    relative_path: "js/plugins.js".into(),
+                    entries: vec![make_entry(
+                        "Plugins:0:parameters:endName",
+                        "ゲーム終了",
+                        "Salir",
+                        EntryStatus::Reviewed,
+                    )],
+                },
+            ],
+            glossary: vec![],
+            style_guide: vec![],
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+
+        let output_dir = std::env::temp_dir().join(format!(
+            "fairtl_export_plugin_source_out_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        let result = export_project(&project, &output_dir).unwrap();
+        assert_eq!(result.entries_applied, 1);
+
+        let plugins_output = fs::read_to_string(output_dir.join("js").join("plugins.js")).unwrap();
+        assert!(plugins_output.contains(r#""endName": "Salir""#));
+
+        let source_output =
+            fs::read_to_string(output_dir.join("js").join("plugins").join("gamEnd.js")).unwrap();
+        assert!(source_output.contains("PluginManager.parameters('gamEnd')"));
+        assert!(source_output.contains("parameters['endName'] || 'Salir'"));
+        assert!(!source_output.contains("ゲーム終了"));
+
+        let _ = fs::remove_dir_all(&temp_dir);
+        let _ = fs::remove_dir_all(&output_dir);
+    }
+
+    #[test]
+    fn test_export_project_patches_prompt_based_name_input_plugins() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "fairtl_export_prompt_plugin_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        let data_dir = temp_dir.join("data");
+        let js_dir = temp_dir.join("js");
+        let plugins_dir = js_dir.join("plugins");
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::create_dir_all(&plugins_dir).unwrap();
+        fs::write(js_dir.join("rpg_core.js"), "").unwrap();
+        fs::write(
+            data_dir.join("System.json"),
+            r#"{"gameTitle":"Game Title","terms":{}}"#,
+        )
+        .unwrap();
+        fs::write(
+            js_dir.join("plugins.js"),
+            r#"var $plugins =
+[
+  {
+    "name": "Torigoya_InputNamePrompt",
+    "status": true,
+    "description": "",
+    "parameters": {}
+  }
+];"#,
+        )
+        .unwrap();
+        fs::write(
+            plugins_dir.join("Torigoya_InputNamePrompt.js"),
+            r#"    InputNamePrompt.runCommand = function (args) {
+        var actor = $gameActors.actor(~~args.shift());
+        var max = Number(args.shift());
+        if (isNaN(max)) max = InputNamePrompt.settings.maxLength;
+        var message = args.join(' ') || InputNamePrompt.settings.getMessage();
+        message += '\n' + InputNamePrompt.settings.getMaximumMessage().replace(/%1/g, '' + max);
+        var name = window.prompt(message, actor.name());
+        if (name) {
+            name = name.trim();
+            if (name.length > 0) {
+                actor.setName(name.substr(0, max));
+            }
+        }
+    };"#,
+        )
+        .unwrap();
+
+        let project = Project {
+            id: "test".into(),
+            name: "Prompt Plugin".into(),
+            source_lang: "ja".into(),
+            target_lang: "es".into(),
+            engine: Engine::Mv,
+            game_dir: temp_dir.to_string_lossy().into(),
+            files: vec![TranslationFile {
+                relative_path: "data/System.json".into(),
+                entries: vec![],
+            }],
+            glossary: vec![],
+            style_guide: vec![],
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+
+        let output_dir = std::env::temp_dir().join(format!(
+            "fairtl_export_prompt_plugin_out_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        export_project(&project, &output_dir).unwrap();
+
+        let source_output = fs::read_to_string(
+            output_dir
+                .join("js")
+                .join("plugins")
+                .join("Torigoya_InputNamePrompt.js"),
+        )
+        .unwrap();
+        assert!(!source_output.contains("window.prompt"));
+        assert!(source_output.contains("SceneManager.push(Scene_Name)"));
+        assert!(source_output.contains("SceneManager.prepareNextScene(actorId, max)"));
+
+        let _ = fs::remove_dir_all(&temp_dir);
+        let _ = fs::remove_dir_all(&output_dir);
+    }
+
+    #[test]
+    fn test_export_project_normalizes_asset_references_to_copied_file_names() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "fairtl_export_asset_refs_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        let data_dir = temp_dir.join("data");
+        let pictures_dir = temp_dir.join("img").join("pictures");
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::create_dir_all(&pictures_dir).unwrap();
+        fs::write(
+            data_dir.join("System.json"),
+            r#"{"gameTitle":"Game Title","terms":{}}"#,
+        )
+        .unwrap();
+        fs::write(
+            data_dir.join("CommonEvents.json"),
+            r#"[null,{"id":1,"list":[{"code":231,"parameters":[1,"保乃花 立ち絵 眉１",0,0,0,0,100,100,255,0]},{"code":0,"parameters":[]}]}]"#,
+        )
+        .unwrap();
+        fs::write(pictures_dir.join("保乃花　立ち絵　眉１.rpgmvp"), "asset").unwrap();
+
+        let project = Project {
+            id: "test".into(),
+            name: "Asset Refs".into(),
+            source_lang: "ja".into(),
+            target_lang: "es".into(),
+            engine: Engine::Mv,
+            game_dir: temp_dir.to_string_lossy().into(),
+            files: vec![
+                TranslationFile {
+                    relative_path: "data/System.json".into(),
+                    entries: vec![],
+                },
+                TranslationFile {
+                    relative_path: "data/CommonEvents.json".into(),
+                    entries: vec![],
+                },
+            ],
+            glossary: vec![],
+            style_guide: vec![],
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+
+        let output_dir = std::env::temp_dir().join(format!(
+            "fairtl_export_asset_refs_out_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        let result = export_project(&project, &output_dir).unwrap();
+        let common_events: Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("data").join("CommonEvents.json")).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            common_events[1]["list"][0]["parameters"][1],
+            "保乃花　立ち絵　眉１"
+        );
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("restored 1 RPG Maker asset references")));
+
+        let _ = fs::remove_dir_all(&temp_dir);
+        let _ = fs::remove_dir_all(&output_dir);
+    }
+
+    #[test]
+    fn test_apply_index_html_rewrites_title() {
+        let mut json = Value::String(
+            r#"<!doctype html><html><head><title>露出に目覚めた人妻は寝取られる ver1.02</title></head></html>"#
+                .into(),
+        );
+        let mut translations = HashMap::new();
+        translations.insert(
+            "index.html:title".into(),
+            "La esposa & el secreto ver1.02".into(),
+        );
+
+        let applied = apply_index_html("index", &mut json, &translations).unwrap();
+        assert_eq!(applied, 1);
+        let output = json.as_str().unwrap();
+        assert!(output.contains("<title>La esposa &amp; el secreto ver1.02</title>"));
+        assert!(!output.contains("露出に目覚めた人妻は寝取られる"));
+    }
+
+    #[test]
     fn test_apply_scroll_text() {
         let mut json: Value = serde_json::from_str(
             r#"[
@@ -2050,7 +3571,7 @@ mod tests {
         );
 
         let list = json.as_array_mut().unwrap();
-        let applied = apply_event_commands(list, "test", &translations);
+        let applied = apply_event_commands(list, "test", &translations, "Choose an option.");
         assert_eq!(applied, 1);
         assert_eq!(list[0]["parameters"][0], "En un reino lejano...");
         assert_eq!(list[1]["parameters"][0], "Nació un héroe.");

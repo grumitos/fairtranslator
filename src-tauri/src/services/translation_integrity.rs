@@ -86,10 +86,8 @@ pub fn validate_translation(
     let original_line_count = line_count(&entry.original);
     let translated_line_count = line_count(translation);
     if original_line_count != translated_line_count {
-        let is_multiline_command = entry.id.contains(":text:") || entry.id.contains(":scroll:");
         let severity = match mode {
             IntegrityMode::AutomatedApply => IntegritySeverity::Error,
-            IntegrityMode::Export if is_multiline_command => IntegritySeverity::Error,
             IntegrityMode::Export => IntegritySeverity::Warning,
         };
         issues.push(IntegrityIssue {
@@ -249,6 +247,16 @@ pub fn collect_special_token_spans(text: &str) -> Vec<SpecialTokenSpan> {
     let byte_offsets = char_byte_offsets(text);
 
     while index < chars.len() {
+        if let Some(length) = match_choice_control_dsl(&chars[index..]) {
+            spans.push(SpecialTokenSpan {
+                start: byte_offsets[index],
+                end: byte_offsets[index + length],
+                token: chars[index..index + length].iter().collect(),
+            });
+            index += length;
+            continue;
+        }
+
         if let Some(length) = match_name_compound(&chars[index..]) {
             spans.push(SpecialTokenSpan {
                 start: byte_offsets[index],
@@ -401,6 +409,54 @@ fn match_named_placeholder(slice: &[char]) -> Option<usize> {
     None
 }
 
+fn match_choice_control_dsl(slice: &[char]) -> Option<usize> {
+    let name_len = slice
+        .iter()
+        .take_while(|ch| ch.is_ascii_alphabetic())
+        .count();
+    if !(2..=12).contains(&name_len) || slice.get(name_len) != Some(&'(') {
+        return None;
+    }
+
+    let name = slice[..name_len]
+        .iter()
+        .collect::<String>()
+        .to_ascii_lowercase();
+    if !matches!(
+        name.as_str(),
+        "if" | "en" | "enable" | "disable" | "show" | "hide" | "dis"
+    ) {
+        return None;
+    }
+
+    let mut cursor = name_len + 1;
+    let mut saw_bracketed_operand = false;
+    while cursor < slice.len() {
+        let ch = slice[cursor];
+        if ch == '\n' || ch == '\r' {
+            return None;
+        }
+        if ch == '[' {
+            saw_bracketed_operand = true;
+        }
+        if ch == ')' {
+            return saw_bracketed_operand.then_some(cursor + 1);
+        }
+        if ch.is_ascii_alphanumeric()
+            || matches!(
+                ch,
+                '[' | ']' | '_' | '-' | '+' | '!' | '=' | '<' | '>' | '&' | '|' | ' '
+            )
+        {
+            cursor += 1;
+            continue;
+        }
+        return None;
+    }
+
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -432,6 +488,23 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_translation_detects_choice_dsl_mismatch() {
+        let entry = make_entry(
+            "Map003:25:0:choice:47:1",
+            "if(s[211])夫に露出していたことを打ち明ける",
+        );
+        let report = validate_translation(
+            "data/Map003.json",
+            &entry,
+            "si(s[211])Confesarlo",
+            IntegrityMode::AutomatedApply,
+        );
+
+        assert!(report.has_errors());
+        assert!(report.errors[0].contains("control codes or placeholders"));
+    }
+
+    #[test]
     fn test_validate_translation_blocks_line_break_drift_for_automated_apply() {
         let entry = make_entry("Map001:1:0:text:0", "Line 1\nLine 2");
         let report = validate_translation(
@@ -443,6 +516,21 @@ mod tests {
 
         assert!(report.has_errors());
         assert!(report.errors[0].contains("changed line count"));
+    }
+
+    #[test]
+    fn test_validate_translation_warns_line_break_drift_for_export() {
+        let entry = make_entry("Map001:1:0:text:0", "Line 1\nLine 2");
+        let report = validate_translation(
+            "data/Map001.json",
+            &entry,
+            "Linea 1\nLinea 2\nLinea 3",
+            IntegrityMode::Export,
+        );
+
+        assert!(report.errors.is_empty());
+        assert_eq!(report.warnings.len(), 1);
+        assert!(report.warnings[0].contains("changed line count"));
     }
 
     #[test]

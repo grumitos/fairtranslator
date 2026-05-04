@@ -50,6 +50,7 @@ pub enum FileKind {
     Troops,
     System,
     Plugins,
+    Html,
     Ignored,
 }
 
@@ -80,6 +81,8 @@ pub fn classify_relative_path(path: &str) -> FileKind {
     let normalized = path.replace('\\', "/");
     if normalized.eq_ignore_ascii_case("js/plugins.js") {
         FileKind::Plugins
+    } else if normalized.eq_ignore_ascii_case("index.html") {
+        FileKind::Html
     } else {
         let stem = Path::new(&normalized)
             .file_stem()
@@ -287,6 +290,9 @@ pub fn scan_game_dir(game_dir: &Path) -> Result<Vec<PathBuf>, AppError> {
     if let Some(plugins_path) = mv_mz_plugins_path(game_dir) {
         files.push(plugins_path);
     }
+    if let Some(index_path) = mv_mz_index_path(game_dir) {
+        files.push(index_path);
+    }
 
     files.sort_by(|a, b| {
         let rel_a = a
@@ -333,6 +339,7 @@ fn scan_data_dir(data_dir: &Path) -> Result<Vec<PathBuf>, AppError> {
                 FileKind::CommonEvents => 3,
                 FileKind::Troops => 4,
                 FileKind::Map => 5,
+                FileKind::Html => 6,
                 FileKind::Ignored => 6,
             }
         };
@@ -366,10 +373,15 @@ pub fn parse_mv_mz_game(game_dir: &Path) -> Result<Vec<TranslationFile>, AppErro
         let kind = classify_relative_path(&rel_path);
 
         let content = std::fs::read_to_string(path)?;
-        let json = match kind {
+        let mut json = match kind {
             FileKind::Plugins => parse_plugins_js(&content)?,
+            FileKind::Html => Value::String(content),
             _ => serde_json::from_str(&content)?,
         };
+
+        if kind == FileKind::Plugins {
+            inject_plugin_source_defaults(&mut json, game_dir)?;
+        }
 
         let entries = extract_entries(&stem, &kind, &json)?;
 
@@ -400,6 +412,7 @@ fn extract_entries(
         FileKind::Troops => extract_troops_entries(json),
         FileKind::System => extract_system_entries(json),
         FileKind::Plugins => extract_plugins_entries(json),
+        FileKind::Html => extract_index_html_entries(stem, json),
         FileKind::Ignored => Ok(Vec::new()),
     }
 }
@@ -749,27 +762,83 @@ fn parse_embedded_plugin_json(text: &str) -> Option<Value> {
 }
 
 fn should_extract_plugin_string(key_hint: Option<&str>, text: &str) -> bool {
-    if text.trim().is_empty() {
+    if !plugin_string_is_translatable_candidate(text) {
         return false;
     }
 
     key_hint.map(plugin_key_is_translatable).unwrap_or(false)
 }
 
+fn plugin_string_is_translatable_candidate(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+    if matches!(lower.as_str(), "true" | "false" | "on" | "off") {
+        return false;
+    }
+    if trimmed.parse::<f64>().is_ok() {
+        return false;
+    }
+
+    true
+}
+
 fn plugin_key_is_translatable(key: &str) -> bool {
+    let trimmed = key.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    let compact = lower
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .collect::<String>();
+
     matches!(
-        key.trim().to_ascii_lowercase().as_str(),
+        compact.as_str(),
         "description"
             | "name"
             | "parentname"
+            | "endname"
+            | "commandname"
+            | "displayname"
+            | "buttonname"
             | "text"
             | "helptext"
             | "commonhelptext"
             | "title"
             | "label"
+            | "caption"
+            | "message"
+            | "maximummessage"
+            | "completemessage"
+            | "categoryhelp"
+            | "confirmhelp"
+            | "usinghelp"
+            | "confirmuse"
+            | "confirmnouse"
             | "optiontext"
             | "optionname"
-    )
+    ) || compact.ends_with("title")
+        || compact.ends_with("label")
+        || compact.ends_with("caption")
+        || compact.ends_with("help")
+        || compact.ends_with("helptext")
+        || compact.ends_with("message")
+        || plugin_key_has_translatable_japanese_terms(trimmed)
+}
+
+fn plugin_key_has_translatable_japanese_terms(key: &str) -> bool {
+    [
+        "名称",
+        "名前",
+        "タイトル",
+        "メッセージ",
+        "テキスト",
+        "ヘルプ",
+    ]
+    .iter()
+    .any(|term| key.contains(term))
 }
 
 fn mv_mz_plugins_path(game_dir: &Path) -> Option<PathBuf> {
@@ -779,16 +848,138 @@ fn mv_mz_plugins_path(game_dir: &Path) -> Option<PathBuf> {
         .find(|path| path.is_file())
 }
 
+fn inject_plugin_source_defaults(json: &mut Value, game_dir: &Path) -> Result<(), AppError> {
+    let Some(plugins) = json.as_array_mut() else {
+        return Ok(());
+    };
+
+    for plugin in plugins {
+        let Some(plugin_obj) = plugin.as_object_mut() else {
+            continue;
+        };
+        let Some(plugin_name) = plugin_obj.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(source_path) = find_plugin_source_path(game_dir, plugin_name) else {
+            continue;
+        };
+
+        let source_bytes = std::fs::read(&source_path)?;
+        let source_content = String::from_utf8_lossy(&source_bytes);
+        let defaults = extract_plugin_source_defaults(&source_content);
+        if defaults.is_empty() {
+            continue;
+        }
+
+        let parameters = plugin_obj
+            .entry("parameters")
+            .or_insert_with(|| Value::Object(serde_json::Map::new()));
+        let Some(parameters) = parameters.as_object_mut() else {
+            continue;
+        };
+
+        for (key, default_value) in defaults {
+            if !parameters.contains_key(&key)
+                && plugin_key_is_translatable(&key)
+                && plugin_string_is_translatable_candidate(&default_value)
+            {
+                parameters.insert(key, Value::String(default_value));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn find_plugin_source_path(game_dir: &Path, plugin_name: &str) -> Option<PathBuf> {
+    let plugins_dir = game_dir.join("js").join("plugins");
+    let direct = plugins_dir.join(format!("{plugin_name}.js"));
+    if direct.is_file() {
+        return Some(direct);
+    }
+
+    let desired = format!("{}.js", plugin_name).to_ascii_lowercase();
+    std::fs::read_dir(plugins_dir)
+        .ok()?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name.eq_ignore_ascii_case(&desired))
+                .unwrap_or(false)
+        })
+}
+
+fn extract_plugin_source_defaults(content: &str) -> Vec<(String, String)> {
+    let mut defaults = Vec::new();
+    let mut current_param: Option<String> = None;
+
+    for line in content.lines() {
+        let Some(tag) = parse_plugin_doc_tag(line) else {
+            continue;
+        };
+
+        if let Some(param) = tag.strip_prefix("param ") {
+            current_param = Some(param.trim().to_string());
+        } else if let Some(default_value) = tag.strip_prefix("default ") {
+            if let Some(param) = current_param.take() {
+                defaults.push((param, default_value.trim().to_string()));
+            }
+        } else if tag.starts_with("param") {
+            current_param = None;
+        }
+    }
+
+    defaults
+}
+
+fn parse_plugin_doc_tag(line: &str) -> Option<&str> {
+    let trimmed = line.trim();
+    let stripped = trimmed.strip_prefix('*')?.trim_start();
+    stripped.strip_prefix('@')
+}
+
+fn mv_mz_index_path(game_dir: &Path) -> Option<PathBuf> {
+    let path = game_dir.join("index.html");
+    path.is_file().then_some(path)
+}
+
 fn file_kind_sort_order(kind: &FileKind) -> u8 {
     match kind {
         FileKind::System => 0,
         FileKind::Plugins => 1,
-        FileKind::Database => 2,
-        FileKind::CommonEvents => 3,
-        FileKind::Troops => 4,
-        FileKind::Map => 5,
+        FileKind::Html => 2,
+        FileKind::Database => 3,
+        FileKind::CommonEvents => 4,
+        FileKind::Troops => 5,
+        FileKind::Map => 6,
         FileKind::Ignored => 6,
     }
+}
+
+fn extract_index_html_entries(stem: &str, json: &Value) -> Result<Vec<TranslationEntry>, AppError> {
+    let content = json
+        .as_str()
+        .ok_or_else(|| AppError::Parse(format!("{stem}: expected HTML content string")))?;
+    let Some(title) = extract_html_title(content) else {
+        return Ok(Vec::new());
+    };
+    if title.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+
+    Ok(vec![make_entry(
+        "index.html:title",
+        "index.html > title",
+        title,
+    )])
+}
+
+fn extract_html_title(content: &str) -> Option<String> {
+    let re = regex::Regex::new(r"(?is)<title[^>]*>(.*?)</title>").ok()?;
+    re.captures(content)
+        .and_then(|captures| captures.get(1))
+        .map(|title| title.as_str().to_string())
 }
 
 /// Recursively extract string values from the terms object.
@@ -1258,6 +1449,174 @@ mod tests {
             "Plugins:0:parameters:help:json:CommandList:json:0:json:Text".to_string(),
             "Yes.".to_string()
         )));
+    }
+
+    #[test]
+    fn test_extract_plugins_entries_from_visible_menu_parameters() {
+        let json = parse_plugins_js(
+            r#"var $plugins =
+[
+  {
+    "name": "MessageWindowHidden",
+    "status": true,
+    "description": "",
+    "parameters": {
+      "ボタン名称": "右クリック",
+      "連動ピクチャ番号": "50,52,53"
+    }
+  },
+  {
+    "name": "BB_CustomSaveWindow",
+    "status": true,
+    "description": "",
+    "parameters": {
+      "Item1title": "保乃花の陰毛",
+      "Item2title": "操作キャラ",
+      "Item3title": "現在地",
+      "Item4title": "プレイ時間"
+    }
+  },
+  {
+    "name": "SceneGlossary",
+    "status": true,
+    "description": "",
+    "parameters": {
+      "GlossaryInfo": "[\"{\\\"CommandName\\\":\\\"その他\\\",\\\"BackPicture\\\":\\\"その他背景\\\",\\\"ConfirmUse\\\":\\\"使う\\\",\\\"ConfirmNoUse\\\":\\\"やめる\\\",\\\"CompleteMessage\\\":\\\"収集率 \\\\\\\\c[2]%1\\\\\\\\c[0] ％\\\",\\\"CategoryHelp\\\":\\\"カテゴリを選択してください。\\\"}\"]"
+    }
+  }
+];"#,
+        )
+        .unwrap();
+
+        let entries = extract_plugins_entries(&json).unwrap();
+        let ids = entries
+            .iter()
+            .map(|entry| (entry.id.clone(), entry.original.clone()))
+            .collect::<Vec<_>>();
+
+        assert!(ids.contains(&(
+            "Plugins:0:parameters:ボタン名称".to_string(),
+            "右クリック".to_string()
+        )));
+        assert!(ids.contains(&(
+            "Plugins:1:parameters:Item1title".to_string(),
+            "保乃花の陰毛".to_string()
+        )));
+        assert!(ids.contains(&(
+            "Plugins:2:parameters:GlossaryInfo:json:0:json:CommandName".to_string(),
+            "その他".to_string()
+        )));
+        assert!(ids.contains(&(
+            "Plugins:2:parameters:GlossaryInfo:json:0:json:ConfirmUse".to_string(),
+            "使う".to_string()
+        )));
+        assert!(ids.contains(&(
+            "Plugins:2:parameters:GlossaryInfo:json:0:json:CompleteMessage".to_string(),
+            "収集率 \\c[2]%1\\c[0] ％".to_string()
+        )));
+        assert!(ids.contains(&(
+            "Plugins:2:parameters:GlossaryInfo:json:0:json:CategoryHelp".to_string(),
+            "カテゴリを選択してください。".to_string()
+        )));
+        assert!(!ids.iter().any(|(id, _)| id.ends_with(":BackPicture")));
+    }
+
+    #[test]
+    fn test_parse_mv_mz_game_extracts_index_html_title() {
+        let root = std::env::temp_dir().join(format!(
+            "fairtl_index_title_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        fs::create_dir_all(root.join("data")).unwrap();
+        fs::create_dir_all(root.join("js")).unwrap();
+        fs::write(root.join("js").join("rpg_core.js"), "// mv marker").unwrap();
+        fs::write(
+            root.join("data").join("System.json"),
+            r#"{"gameTitle":"Game Title","terms":{}}"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("index.html"),
+            r#"<!doctype html><html><head><title>露出に目覚めた人妻は寝取られる ver1.02</title></head></html>"#,
+        )
+        .unwrap();
+
+        let files = parse_mv_mz_game(&root).unwrap();
+        let index_file = files
+            .iter()
+            .find(|file| file.relative_path == "index.html")
+            .expect("index.html should be included when it has a title");
+
+        assert_eq!(index_file.entries.len(), 1);
+        assert_eq!(index_file.entries[0].id, "index.html:title");
+        assert_eq!(
+            index_file.entries[0].original,
+            "露出に目覚めた人妻は寝取られる ver1.02"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_parse_mv_mz_game_extracts_visible_plugin_default_parameters() {
+        let root = std::env::temp_dir().join(format!(
+            "fairtl_plugin_default_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        fs::create_dir_all(root.join("data")).unwrap();
+        fs::create_dir_all(root.join("js").join("plugins")).unwrap();
+        fs::write(root.join("js").join("rpg_core.js"), "// mv marker").unwrap();
+        fs::write(
+            root.join("data").join("System.json"),
+            r#"{"gameTitle":"Game Title","terms":{}}"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("js").join("plugins.js"),
+            r#"var $plugins =
+[
+  {
+    "name": "gamEnd",
+    "status": true,
+    "description": "",
+    "parameters": {}
+  }
+];"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("js").join("plugins").join("gamEnd.js"),
+            r#"/*:ja
+ * @param endName
+ * @desc ゲーム終了の表記です
+ * @default ゲーム終了
+ *
+ * @param fileName
+ * @default タイトル画像
+ */"#,
+        )
+        .unwrap();
+
+        let files = parse_mv_mz_game(&root).unwrap();
+        let plugins_file = files
+            .iter()
+            .find(|file| file.relative_path == "js/plugins.js")
+            .expect("plugins.js should be included");
+        let ids = plugins_file
+            .entries
+            .iter()
+            .map(|entry| (entry.id.clone(), entry.original.clone()))
+            .collect::<Vec<_>>();
+
+        assert!(ids.contains(&(
+            "Plugins:0:parameters:endName".to_string(),
+            "ゲーム終了".to_string()
+        )));
+        assert!(!ids
+            .iter()
+            .any(|(id, original)| id.ends_with(":fileName") || original == "タイトル画像"));
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
