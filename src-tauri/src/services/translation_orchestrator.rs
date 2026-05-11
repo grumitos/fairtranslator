@@ -437,6 +437,8 @@ fn build_style_guide(project: &Project, selected_files: &[&TranslationFile]) -> 
     if is_japanese_language(&project.source_lang) && is_spanish_language(&project.target_lang) {
         notes.push("For Japanese-to-Spanish RPG Maker text, prefer natural neutral Spanish over literal Japanese wording; e.g. render 学校の帰り道 as de vuelta de la escuela, and 一人称 UI settings as forma de referirse a si mismo.".into());
         notes.push("Preserve RPG Maker choice/plugin condition prefixes exactly, such as if(s[12]) and en(s[20]); translate only the visible choice label after those prefixes and control codes.".into());
+        notes.push("Adapt dialogue like dubbing or subtitles: keep Spanish compact enough for the original RPG Maker text timing/window, condense instead of expanding literally, and do not add extra dialogue lines.".into());
+        notes.push("Do not change RPG Maker script commands, scene logic, variables, tags or formatting; preserve structure and only translate visible text.".into());
         notes.push("Keep Spanish UI and choice labels concise so they fit RPG Maker windows, and avoid Japanese punctuation marks in Spanish output unless they are part of preserved names or source artifacts.".into());
         notes.push("For credits and staff rolls, translate role headings while preserving names, circles, brand names and supporter handles.".into());
     }

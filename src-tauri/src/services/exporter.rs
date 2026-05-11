@@ -34,10 +34,19 @@ const SAFE_WEB_FONT_FALLBACKS: &[&str] = &[
     "Arial",
     "sans-serif",
 ];
-const MV_MZ_MESSAGE_LINE_LIMIT: usize = 4;
 const MV_MZ_MESSAGE_WRAP_WIDTH: usize = 48;
 const CODE_SHOW_PICTURE: i64 = 231;
 const CODE_CHANGE_ACTOR_IMAGES: i64 = 322;
+const CODE_SCRIPT: i64 = 355;
+const CODE_SCRIPT_CONTINUATION: i64 = 655;
+const MOVEMENT_CODE_CHANGE_IMAGE: i64 = 41;
+const CODE_CHANGE_BATTLE_BGM: i64 = 132;
+const CODE_CHANGE_VICTORY_ME: i64 = 133;
+const CODE_CHANGE_DEFEAT_ME: i64 = 139;
+const CODE_PLAY_BGM: i64 = 241;
+const CODE_PLAY_BGS: i64 = 245;
+const CODE_PLAY_ME: i64 = 249;
+const CODE_PLAY_SE: i64 = 250;
 
 // ---------------------------------------------------------------------------
 // ExportResult
@@ -440,11 +449,16 @@ struct MvMzAssetIndexes {
     parallaxes: AssetNameIndex,
     titles1: AssetNameIndex,
     titles2: AssetNameIndex,
+    bgm: AssetNameIndex,
+    bgs: AssetNameIndex,
+    me: AssetNameIndex,
+    se: AssetNameIndex,
 }
 
 impl MvMzAssetIndexes {
     fn from_export_dir(output_dir: &Path) -> Result<Self, AppError> {
         let img_dir = output_dir.join("img");
+        let audio_dir = output_dir.join("audio");
         Ok(Self {
             pictures: AssetNameIndex::from_dir(&img_dir.join("pictures"))?,
             characters: AssetNameIndex::from_dir(&img_dir.join("characters"))?,
@@ -455,6 +469,10 @@ impl MvMzAssetIndexes {
             parallaxes: AssetNameIndex::from_dir(&img_dir.join("parallaxes"))?,
             titles1: AssetNameIndex::from_dir(&img_dir.join("titles1"))?,
             titles2: AssetNameIndex::from_dir(&img_dir.join("titles2"))?,
+            bgm: AssetNameIndex::from_dir(&audio_dir.join("bgm"))?,
+            bgs: AssetNameIndex::from_dir(&audio_dir.join("bgs"))?,
+            me: AssetNameIndex::from_dir(&audio_dir.join("me"))?,
+            se: AssetNameIndex::from_dir(&audio_dir.join("se"))?,
         })
     }
 }
@@ -554,6 +572,7 @@ fn normalize_asset_references_for_file(
     indexes: &MvMzAssetIndexes,
 ) -> usize {
     let mut refs_fixed = 0usize;
+    refs_fixed += normalize_nested_note_picture_references(json, &indexes.pictures);
     match stem {
         "System" => refs_fixed += normalize_system_asset_references(json, indexes),
         "Actors" => {
@@ -583,6 +602,16 @@ fn normalize_system_asset_references(json: &mut Value, indexes: &MvMzAssetIndexe
     let mut refs_fixed = 0usize;
     refs_fixed += normalize_string_field(json, "title1Name", &indexes.titles1);
     refs_fixed += normalize_string_field(json, "title2Name", &indexes.titles2);
+    refs_fixed += normalize_audio_object_field(json, "titleBgm", &indexes.bgm);
+    refs_fixed += normalize_audio_object_field(json, "battleBgm", &indexes.bgm);
+    refs_fixed += normalize_audio_object_field(json, "victoryMe", &indexes.me);
+    refs_fixed += normalize_audio_object_field(json, "defeatMe", &indexes.me);
+    refs_fixed += normalize_audio_object_field(json, "gameoverMe", &indexes.me);
+    if let Some(sounds) = json.get_mut("sounds").and_then(Value::as_array_mut) {
+        for sound in sounds {
+            refs_fixed += normalize_audio_object(sound, &indexes.se);
+        }
+    }
     for vehicle_key in ["boat", "ship", "airship"] {
         if let Some(vehicle) = json.get_mut(vehicle_key) {
             refs_fixed += normalize_string_field(vehicle, "characterName", &indexes.characters);
@@ -619,6 +648,8 @@ fn normalize_tileset_asset_references(json: &mut Value, index: &AssetNameIndex) 
 fn normalize_map_asset_references(json: &mut Value, indexes: &MvMzAssetIndexes) -> usize {
     let mut refs_fixed = 0usize;
     refs_fixed += normalize_string_field(json, "parallaxName", &indexes.parallaxes);
+    refs_fixed += normalize_audio_object_field(json, "bgm", &indexes.bgm);
+    refs_fixed += normalize_audio_object_field(json, "bgs", &indexes.bgs);
     refs_fixed += normalize_nested_event_asset_references(json, indexes);
     refs_fixed
 }
@@ -637,6 +668,30 @@ fn normalize_nested_event_asset_references(value: &mut Value, indexes: &MvMzAsse
                 refs_fixed += normalize_command_parameter_string(map, 1, &indexes.characters);
                 refs_fixed += normalize_command_parameter_string(map, 3, &indexes.faces);
                 refs_fixed += normalize_command_parameter_string(map, 5, &indexes.sv_actors);
+            }
+            if matches!(
+                map.get("code").and_then(Value::as_i64),
+                Some(CODE_SCRIPT | CODE_SCRIPT_CONTINUATION)
+            ) {
+                refs_fixed += normalize_script_asset_references(map, indexes);
+            }
+            if map.get("code").and_then(Value::as_i64) == Some(MOVEMENT_CODE_CHANGE_IMAGE) {
+                refs_fixed += normalize_command_parameter_string(map, 0, &indexes.characters);
+            }
+            match map.get("code").and_then(Value::as_i64) {
+                Some(CODE_CHANGE_BATTLE_BGM | CODE_PLAY_BGM) => {
+                    refs_fixed += normalize_command_parameter_audio(map, &indexes.bgm);
+                }
+                Some(CODE_PLAY_BGS) => {
+                    refs_fixed += normalize_command_parameter_audio(map, &indexes.bgs);
+                }
+                Some(CODE_CHANGE_VICTORY_ME | CODE_CHANGE_DEFEAT_ME | CODE_PLAY_ME) => {
+                    refs_fixed += normalize_command_parameter_audio(map, &indexes.me);
+                }
+                Some(CODE_PLAY_SE) => {
+                    refs_fixed += normalize_command_parameter_audio(map, &indexes.se);
+                }
+                _ => {}
             }
             for child in map.values_mut() {
                 refs_fixed += normalize_nested_event_asset_references(child, indexes);
@@ -665,11 +720,34 @@ fn normalize_command_parameter_string(
         .unwrap_or(0)
 }
 
+fn normalize_command_parameter_audio(
+    command: &mut Map<String, Value>,
+    asset_index: &AssetNameIndex,
+) -> usize {
+    command
+        .get_mut("parameters")
+        .and_then(Value::as_array_mut)
+        .and_then(|parameters| parameters.get_mut(0))
+        .map(|value| normalize_audio_object(value, asset_index))
+        .unwrap_or(0)
+}
+
 fn normalize_string_field(value: &mut Value, field: &str, index: &AssetNameIndex) -> usize {
     value
         .get_mut(field)
         .map(|value| normalize_string_value(value, index))
         .unwrap_or(0)
+}
+
+fn normalize_audio_object_field(value: &mut Value, field: &str, index: &AssetNameIndex) -> usize {
+    value
+        .get_mut(field)
+        .map(|value| normalize_audio_object(value, index))
+        .unwrap_or(0)
+}
+
+fn normalize_audio_object(value: &mut Value, index: &AssetNameIndex) -> usize {
+    normalize_string_field(value, "name", index)
 }
 
 fn normalize_string_value(value: &mut Value, index: &AssetNameIndex) -> usize {
@@ -684,6 +762,259 @@ fn normalize_string_value(value: &mut Value, index: &AssetNameIndex) -> usize {
     }
     *value = Value::String(canonical);
     1
+}
+
+fn normalize_script_asset_references(
+    command: &mut Map<String, Value>,
+    indexes: &MvMzAssetIndexes,
+) -> usize {
+    command
+        .get_mut("parameters")
+        .and_then(Value::as_array_mut)
+        .and_then(|parameters| parameters.get_mut(0))
+        .map(|value| normalize_script_asset_reference_value(value, indexes))
+        .unwrap_or(0)
+}
+
+fn normalize_script_asset_reference_value(value: &mut Value, indexes: &MvMzAssetIndexes) -> usize {
+    let Some(script) = value.as_str() else {
+        return 0;
+    };
+    let (updated, refs_fixed) = normalize_script_asset_reference_text(script, indexes);
+    if refs_fixed == 0 {
+        return 0;
+    }
+    *value = Value::String(updated);
+    refs_fixed
+}
+
+fn normalize_script_asset_reference_text(
+    script: &str,
+    indexes: &MvMzAssetIndexes,
+) -> (String, usize) {
+    let mut updated = script.to_string();
+    let mut refs_fixed = 0usize;
+    for (method, index) in [
+        ("setCharacterImage", &indexes.characters),
+        ("setImage", &indexes.characters),
+        ("setFaceImage", &indexes.faces),
+        ("setBattlerImage", &indexes.sv_actors),
+    ] {
+        let (next, fixed) = normalize_js_method_first_string_arg(&updated, method, index);
+        updated = next;
+        refs_fixed += fixed;
+    }
+    (updated, refs_fixed)
+}
+
+fn normalize_js_method_first_string_arg(
+    script: &str,
+    method: &str,
+    index: &AssetNameIndex,
+) -> (String, usize) {
+    let marker = format!(".{method}");
+    let bytes = script.as_bytes();
+    let mut output = String::with_capacity(script.len());
+    let mut cursor = 0usize;
+    let mut refs_fixed = 0usize;
+
+    while let Some(relative_start) = script[cursor..].find(&marker) {
+        let method_start = cursor + relative_start;
+        let after_method = method_start + marker.len();
+        let mut pos = skip_ascii_whitespace(bytes, after_method);
+        if bytes.get(pos) != Some(&b'(') {
+            output.push_str(&script[cursor..after_method]);
+            cursor = after_method;
+            continue;
+        }
+        pos = skip_ascii_whitespace(bytes, pos + 1);
+        let Some(&quote) = bytes.get(pos) else {
+            output.push_str(&script[cursor..after_method]);
+            cursor = after_method;
+            continue;
+        };
+        if quote != b'"' && quote != b'\'' {
+            output.push_str(&script[cursor..after_method]);
+            cursor = after_method;
+            continue;
+        }
+
+        let name_start = pos + 1;
+        let Some(name_end) = find_js_string_literal_end(bytes, name_start, quote) else {
+            output.push_str(&script[cursor..after_method]);
+            cursor = after_method;
+            continue;
+        };
+        let raw_name = &script[name_start..name_end];
+        if raw_name.contains('\\') {
+            output.push_str(&script[cursor..name_end]);
+            cursor = name_end;
+            continue;
+        }
+        let Some(canonical) = index.exact_or_normalized(raw_name) else {
+            output.push_str(&script[cursor..name_end]);
+            cursor = name_end;
+            continue;
+        };
+        if canonical == raw_name {
+            output.push_str(&script[cursor..name_end]);
+            cursor = name_end;
+            continue;
+        }
+
+        output.push_str(&script[cursor..name_start]);
+        output.push_str(&escape_js_string_literal(&canonical, quote));
+        cursor = name_end;
+        refs_fixed += 1;
+    }
+
+    output.push_str(&script[cursor..]);
+    (output, refs_fixed)
+}
+
+fn skip_ascii_whitespace(bytes: &[u8], mut index: usize) -> usize {
+    while matches!(bytes.get(index), Some(b' ' | b'\t' | b'\r' | b'\n')) {
+        index += 1;
+    }
+    index
+}
+
+fn find_js_string_literal_end(bytes: &[u8], start: usize, quote: u8) -> Option<usize> {
+    let mut index = start;
+    let mut escaped = false;
+    while let Some(&byte) = bytes.get(index) {
+        if escaped {
+            escaped = false;
+        } else if byte == b'\\' {
+            escaped = true;
+        } else if byte == quote {
+            return Some(index);
+        }
+        index += 1;
+    }
+    None
+}
+
+fn escape_js_string_literal(value: &str, quote: u8) -> String {
+    let quote = quote as char;
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        if ch == '\\' || ch == quote {
+            escaped.push('\\');
+        }
+        escaped.push(ch);
+    }
+    escaped
+}
+
+fn normalize_nested_note_picture_references(value: &mut Value, index: &AssetNameIndex) -> usize {
+    match value {
+        Value::Object(map) => {
+            let mut refs_fixed = 0usize;
+            if let Some(note) = map.get_mut("note") {
+                refs_fixed += normalize_note_picture_reference_value(note, index);
+            }
+            for child in map.values_mut() {
+                refs_fixed += normalize_nested_note_picture_references(child, index);
+            }
+            refs_fixed
+        }
+        Value::Array(values) => values
+            .iter_mut()
+            .map(|child| normalize_nested_note_picture_references(child, index))
+            .sum(),
+        _ => 0,
+    }
+}
+
+fn normalize_note_picture_reference_value(value: &mut Value, index: &AssetNameIndex) -> usize {
+    let Some(note) = value.as_str() else {
+        return 0;
+    };
+    let (updated, refs_fixed) = normalize_note_picture_reference_text(note, index);
+    if refs_fixed == 0 {
+        return 0;
+    }
+    *value = Value::String(updated);
+    refs_fixed
+}
+
+fn normalize_note_picture_reference_text(note: &str, index: &AssetNameIndex) -> (String, usize) {
+    let mut output = String::with_capacity(note.len());
+    let mut cursor = 0usize;
+    let mut refs_fixed = 0usize;
+
+    while let Some(relative_tag_start) = note[cursor..].find('<') {
+        let tag_start = cursor + relative_tag_start;
+        let Some(relative_tag_end) = note[tag_start..].find('>') else {
+            break;
+        };
+        let tag_end = tag_start + relative_tag_end;
+        let tag_body = &note[tag_start + 1..tag_end];
+        let Some(relative_colon) = tag_body.find(':') else {
+            output.push_str(&note[cursor..tag_end + 1]);
+            cursor = tag_end + 1;
+            continue;
+        };
+        let tag_name = &tag_body[..relative_colon];
+        if !is_picture_note_tag(tag_name) {
+            output.push_str(&note[cursor..tag_end + 1]);
+            cursor = tag_end + 1;
+            continue;
+        }
+
+        let value_start = tag_start + 1 + relative_colon + 1;
+        let value_end = note[value_start..tag_end]
+            .find(',')
+            .map(|relative_comma| value_start + relative_comma)
+            .unwrap_or(tag_end);
+        let (trimmed_start, trimmed_end) =
+            trim_ascii_whitespace_range(note, value_start, value_end);
+        let current = &note[trimmed_start..trimmed_end];
+        let Some(canonical) = index.exact_or_normalized(current) else {
+            output.push_str(&note[cursor..tag_end + 1]);
+            cursor = tag_end + 1;
+            continue;
+        };
+        if canonical == current {
+            output.push_str(&note[cursor..tag_end + 1]);
+            cursor = tag_end + 1;
+            continue;
+        }
+
+        output.push_str(&note[cursor..trimmed_start]);
+        output.push_str(&canonical);
+        output.push_str(&note[trimmed_end..tag_end + 1]);
+        cursor = tag_end + 1;
+        refs_fixed += 1;
+    }
+
+    output.push_str(&note[cursor..]);
+    (output, refs_fixed)
+}
+
+fn is_picture_note_tag(tag_name: &str) -> bool {
+    tag_name.contains("ピクチャ") || tag_name.to_ascii_lowercase().contains("picture")
+}
+
+fn trim_ascii_whitespace_range(text: &str, start: usize, end: usize) -> (usize, usize) {
+    let bytes = text.as_bytes();
+    let mut trimmed_start = start;
+    let mut trimmed_end = end;
+    while matches!(bytes.get(trimmed_start), Some(b' ' | b'\t' | b'\r' | b'\n'))
+        && trimmed_start < trimmed_end
+    {
+        trimmed_start += 1;
+    }
+    while trimmed_end > trimmed_start
+        && matches!(
+            bytes.get(trimmed_end - 1),
+            Some(b' ' | b'\t' | b'\r' | b'\n')
+        )
+    {
+        trimmed_end -= 1;
+    }
+    (trimmed_start, trimmed_end)
 }
 
 fn is_same_or_nested(base_dir: &Path, candidate_dir: &Path) -> Result<bool, AppError> {
@@ -2133,7 +2464,7 @@ fn apply_event_commands(
     list: &mut Vec<Value>,
     id_prefix: &str,
     translations: &HashMap<String, String>,
-    choice_prompt_guard: &str,
+    _choice_prompt_guard: &str,
 ) -> usize {
     let mut applied = 0;
     let mut i = 0;
@@ -2164,14 +2495,12 @@ fn apply_event_commands(
                         .and_then(|command| command.get("code"))
                         .and_then(Value::as_i64)
                         == Some(CODE_SHOW_CHOICES);
-                    let prepared = wrap_mv_mz_message_translation(translation, followed_by_choice);
-                    let inserted = apply_multiline_text(
-                        list,
-                        &line_indices,
-                        &prepared,
-                        Some(MV_MZ_MESSAGE_LINE_LIMIT),
+                    let prepared = wrap_mv_mz_message_translation(
+                        translation,
+                        followed_by_choice,
+                        line_indices.len(),
                     );
-                    i += inserted;
+                    apply_multiline_text(list, &line_indices, &prepared);
                     applied += 1;
                 }
                 continue; // i already advanced past the group
@@ -2193,16 +2522,12 @@ fn apply_event_commands(
 
                 let entry_id = format!("{id_prefix}:scroll:{start}");
                 if let Some(translation) = translations.get(&entry_id) {
-                    let inserted = apply_multiline_text(list, &line_indices, translation, None);
-                    i += inserted;
+                    apply_multiline_text(list, &line_indices, translation);
                     applied += 1;
                 }
                 continue;
             }
             CODE_SHOW_CHOICES => {
-                let inserted = ensure_choice_final_prompt(list, i, choice_prompt_guard);
-                i += inserted;
-
                 // Replace individual choice strings
                 if let Some(params) = list[i].get_mut("parameters") {
                     if let Some(arr) = params.as_array_mut() {
@@ -2247,122 +2572,6 @@ fn apply_event_commands(
     applied
 }
 
-fn ensure_choice_final_prompt(
-    list: &mut Vec<Value>,
-    choice_idx: usize,
-    choice_prompt_guard: &str,
-) -> usize {
-    if choice_prompt_guard.trim().is_empty() {
-        return 0;
-    }
-
-    let Some(group) = message_group_before(list, choice_idx) else {
-        return 0;
-    };
-    let mut group_count = 1usize;
-    let mut previous_start = group.start;
-    while let Some(previous) = message_group_before(list, previous_start) {
-        group_count += 1;
-        previous_start = previous.start;
-    }
-    if group_count <= 1 {
-        return 0;
-    }
-
-    let last_text = group.lines.join("\n");
-    if last_text.trim() == choice_prompt_guard {
-        return 0;
-    }
-
-    let message_parameters = list
-        .get(group.start)
-        .and_then(|command| command.get("parameters"))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_else(|| {
-            vec![
-                Value::String(String::new()),
-                Value::from(0),
-                Value::from(2),
-                Value::from(2),
-            ]
-        });
-    let indent = list
-        .get(choice_idx)
-        .and_then(|command| command.get("indent"))
-        .and_then(Value::as_i64)
-        .unwrap_or(0);
-
-    list.insert(
-        choice_idx,
-        serde_json::json!({
-            "code": 101,
-            "indent": indent,
-            "parameters": message_parameters,
-        }),
-    );
-    list.insert(
-        choice_idx + 1,
-        serde_json::json!({
-            "code": CODE_SHOW_TEXT,
-            "indent": indent,
-            "parameters": [choice_prompt_guard],
-        }),
-    );
-
-    2
-}
-
-#[derive(Debug, Clone)]
-struct MessageGroup {
-    start: usize,
-    lines: Vec<String>,
-}
-
-fn message_group_before(list: &[Value], index: usize) -> Option<MessageGroup> {
-    if index == 0
-        || list.get(index - 1)?.get("code").and_then(Value::as_i64) != Some(CODE_SHOW_TEXT)
-    {
-        return None;
-    }
-
-    let mut cursor = index - 1;
-    while cursor > 0
-        && list
-            .get(cursor)
-            .and_then(|command| command.get("code"))
-            .and_then(Value::as_i64)
-            == Some(CODE_SHOW_TEXT)
-    {
-        cursor -= 1;
-    }
-    if list
-        .get(cursor)
-        .and_then(|command| command.get("code"))
-        .and_then(Value::as_i64)
-        != Some(101)
-    {
-        return None;
-    }
-
-    let lines = list[cursor + 1..index]
-        .iter()
-        .filter_map(|command| {
-            command
-                .get("parameters")
-                .and_then(Value::as_array)
-                .and_then(|parameters| parameters.first())
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-        })
-        .collect();
-
-    Some(MessageGroup {
-        start: cursor,
-        lines,
-    })
-}
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -2371,56 +2580,19 @@ fn message_group_before(list: &[Value], index: usize) -> Option<MessageGroup> {
 ///
 /// - Lines are distributed 1:1 across the commands.
 /// - If the translation has fewer lines, excess commands get empty strings.
-/// - If the translation has more lines, extra 401/405 commands are inserted
-///   after the original group so RPG Maker renders them as visible lines.
-fn apply_multiline_text(
-    list: &mut Vec<Value>,
-    line_indices: &[usize],
-    translation: &str,
-    max_lines_per_message: Option<usize>,
-) -> usize {
+/// - If the translation has more lines, overflow is compacted into the last
+///   existing command so scene/event command structure is left unchanged.
+fn apply_multiline_text(list: &mut Vec<Value>, line_indices: &[usize], translation: &str) {
     let lines: Vec<&str> = translation.split('\n').collect();
     let num_commands = line_indices.len();
-    let Some(&first_idx) = line_indices.first() else {
-        return 0;
-    };
-
-    if let Some(line_limit) = max_lines_per_message {
-        if lines.len() > line_limit {
-            let Some(&last_idx) = line_indices.last() else {
-                return 0;
-            };
-            if first_idx > 0
-                && list
-                    .get(first_idx - 1)
-                    .and_then(|command| command.get("code"))
-                    .and_then(Value::as_i64)
-                    == Some(101)
-            {
-                let message_template = list[first_idx - 1].clone();
-                let line_template = list[first_idx].clone();
-                let mut replacement = Vec::new();
-
-                for (page_index, chunk) in lines.chunks(line_limit).enumerate() {
-                    if page_index > 0 {
-                        replacement.push(message_template.clone());
-                    }
-                    for line in chunk {
-                        let mut command = line_template.clone();
-                        set_command_text(&mut command, line);
-                        replacement.push(command);
-                    }
-                }
-
-                let inserted = replacement.len().saturating_sub(line_indices.len());
-                list.splice(first_idx..=last_idx, replacement);
-                return inserted;
-            }
-        }
+    if num_commands == 0 {
+        return;
     }
 
     for (j, &cmd_idx) in line_indices.iter().enumerate() {
-        let text = if j < lines.len() {
+        let text = if j + 1 == num_commands && lines.len() > num_commands {
+            join_overflow_message_lines(&lines[j..])
+        } else if j < lines.len() {
             lines[j].to_string()
         } else {
             // Translation has fewer lines — empty this command
@@ -2435,41 +2607,91 @@ fn apply_multiline_text(
             }
         }
     }
-
-    let mut inserted = 0usize;
-    if lines.len() > num_commands {
-        let Some(&last_idx) = line_indices.last() else {
-            return inserted;
-        };
-        let template = list[last_idx].clone();
-        for line in lines.iter().skip(num_commands) {
-            let mut command = template.clone();
-            set_command_text(&mut command, line);
-            list.insert(last_idx + 1 + inserted, command);
-            inserted += 1;
-        }
-    }
-
-    inserted
 }
 
-fn set_command_text(command: &mut Value, text: &str) {
-    if let Some(params) = command.get_mut("parameters") {
-        if let Some(arr) = params.as_array_mut() {
-            if !arr.is_empty() {
-                arr[0] = Value::String(text.to_string());
-            }
-        }
-    }
-}
-
-fn wrap_mv_mz_message_translation(translation: &str, compact_blank_lines: bool) -> String {
-    translation
-        .split('\n')
+fn wrap_mv_mz_message_translation(
+    translation: &str,
+    compact_blank_lines: bool,
+    max_lines: usize,
+) -> String {
+    let lines = reflow_mv_mz_message_lines(translation, compact_blank_lines)
+        .into_iter()
         .filter(|line| !compact_blank_lines || !line.trim().is_empty())
-        .flat_map(|line| wrap_mv_mz_message_line(line, MV_MZ_MESSAGE_WRAP_WIDTH))
+        .flat_map(|line| wrap_mv_mz_message_line(&line, MV_MZ_MESSAGE_WRAP_WIDTH))
+        .collect::<Vec<_>>();
+    fit_message_lines_to_existing_slots(lines, max_lines).join("\n")
+}
+
+fn fit_message_lines_to_existing_slots(lines: Vec<String>, max_lines: usize) -> Vec<String> {
+    if max_lines == 0 || lines.is_empty() {
+        return Vec::new();
+    }
+    if lines.len() <= max_lines {
+        return lines;
+    }
+
+    let mut fitted = lines[..max_lines.saturating_sub(1)].to_vec();
+    let overflow = lines[max_lines.saturating_sub(1)..]
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    fitted.push(join_overflow_message_lines(&overflow));
+    fitted
+}
+
+fn join_overflow_message_lines(lines: &[&str]) -> String {
+    lines
+        .iter()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
-        .join("\n")
+        .join(" ")
+}
+
+fn reflow_mv_mz_message_lines(translation: &str, compact_blank_lines: bool) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut paragraph = String::new();
+
+    for raw_line in translation.split('\n') {
+        let line = raw_line.trim();
+        if line.is_empty() {
+            flush_reflowed_message_paragraph(&mut paragraph, &mut lines);
+            if !compact_blank_lines {
+                lines.push(String::new());
+            }
+            continue;
+        }
+
+        if is_structural_message_line(line) {
+            flush_reflowed_message_paragraph(&mut paragraph, &mut lines);
+            lines.push(line.to_string());
+            continue;
+        }
+
+        let normalized = line.split_whitespace().collect::<Vec<_>>().join(" ");
+        if paragraph.is_empty() {
+            paragraph = normalized;
+        } else {
+            paragraph.push(' ');
+            paragraph.push_str(&normalized);
+        }
+    }
+
+    flush_reflowed_message_paragraph(&mut paragraph, &mut lines);
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
+}
+
+fn flush_reflowed_message_paragraph(paragraph: &mut String, lines: &mut Vec<String>) {
+    if !paragraph.is_empty() {
+        lines.push(std::mem::take(paragraph));
+    }
+}
+
+fn is_structural_message_line(line: &str) -> bool {
+    line.contains('\\') && visible_message_width(line) == 0
 }
 
 fn wrap_mv_mz_message_line(line: &str, max_visible_width: usize) -> Vec<String> {
@@ -2511,21 +2733,19 @@ fn hard_wrap_message_line(line: &str, max_visible_width: usize) -> Vec<String> {
     let mut wrapped = Vec::new();
     let mut current = String::new();
     let mut current_width = 0usize;
-    let mut chars = line.chars().peekable();
+    let chars = line.chars().collect::<Vec<_>>();
+    let mut index = 0usize;
 
-    while let Some(ch) = chars.next() {
-        if ch == '\\' {
-            current.push(ch);
-            while let Some(&next) = chars.peek() {
-                current.push(next);
-                chars.next();
-                if next == ']' || (!next.is_ascii_alphabetic() && next != '[') {
-                    break;
-                }
+    while index < chars.len() {
+        if let Some(end) = message_escape_code_end(&chars, index) {
+            for ch in &chars[index..end] {
+                current.push(*ch);
             }
+            index = end;
             continue;
         }
 
+        let ch = chars[index];
         let width = if ch == '　' { 1 } else { 1 };
         if current_width + width > max_visible_width && !current.is_empty() {
             wrapped.push(current);
@@ -2534,6 +2754,7 @@ fn hard_wrap_message_line(line: &str, max_visible_width: usize) -> Vec<String> {
         }
         current.push(ch);
         current_width += width;
+        index += 1;
     }
 
     if !current.is_empty() {
@@ -2547,22 +2768,48 @@ fn hard_wrap_message_line(line: &str, max_visible_width: usize) -> Vec<String> {
 
 fn visible_message_width(line: &str) -> usize {
     let mut width = 0usize;
-    let mut chars = line.chars().peekable();
+    let chars = line.chars().collect::<Vec<_>>();
+    let mut index = 0usize;
 
-    while let Some(ch) = chars.next() {
-        if ch == '\\' {
-            while let Some(&next) = chars.peek() {
-                chars.next();
-                if next == ']' || (!next.is_ascii_alphabetic() && next != '[') {
-                    break;
-                }
-            }
+    while index < chars.len() {
+        if let Some(end) = message_escape_code_end(&chars, index) {
+            index = end;
             continue;
         }
         width += 1;
+        index += 1;
     }
 
     width
+}
+
+fn message_escape_code_end(chars: &[char], start: usize) -> Option<usize> {
+    if chars.get(start) != Some(&'\\') {
+        return None;
+    }
+
+    let mut index = start + 1;
+    let Some(&next) = chars.get(index) else {
+        return Some(index);
+    };
+
+    if next.is_ascii_alphabetic() {
+        while chars.get(index).is_some_and(|ch| ch.is_ascii_alphabetic()) {
+            index += 1;
+        }
+        if chars.get(index) == Some(&'[') {
+            index += 1;
+            while chars.get(index).is_some_and(|ch| *ch != ']') {
+                index += 1;
+            }
+            if chars.get(index) == Some(&']') {
+                index += 1;
+            }
+        }
+        return Some(index);
+    }
+
+    Some(index + 1)
 }
 
 /// Set a string parameter at a specific index in a command's parameters array.
@@ -2961,8 +3208,11 @@ mod tests {
         let list = json.as_array_mut().unwrap();
         let applied = apply_event_commands(list, "Map001:1:0", &translations, "Choose an option.");
         assert_eq!(applied, 1);
-        assert_eq!(list[0]["parameters"][0], "¡Hola, viajero!");
-        assert_eq!(list[1]["parameters"][0], "Bienvenido a nuestro pueblo.");
+        assert_eq!(
+            list[0]["parameters"][0],
+            "¡Hola, viajero! Bienvenido a nuestro pueblo."
+        );
+        assert_eq!(list[1]["parameters"][0], "");
     }
 
     #[test]
@@ -2989,16 +3239,13 @@ mod tests {
         assert_eq!(list[1]["parameters"][0], "\\C[27]\\N[1]\\C[0]");
         assert_eq!(
             list[2]["parameters"][0],
-            "Una chica de secundaria de pelo corto vuelve"
+            "Una chica de secundaria de pelo corto vuelve caminando tranquilamente de la escuela."
         );
-        assert_eq!(
-            list[3]["parameters"][0],
-            "caminando tranquilamente de la escuela."
-        );
+        assert_eq!(list[3]["code"], 0);
     }
 
     #[test]
-    fn test_apply_event_commands_splits_oversized_show_text_pages() {
+    fn test_apply_event_commands_does_not_insert_oversized_show_text_pages() {
         let mut json: Value = serde_json::from_str(
             r#"[
                 {"code": 101, "parameters": ["", 0, 2, 2]},
@@ -3012,17 +3259,32 @@ mod tests {
         let mut translations = HashMap::new();
         translations.insert(
             "Map001:1:0:text:1".into(),
-            "Linea 1\nLinea 2\nLinea 3\nLinea 4\nLinea 5".into(),
+            "Esta es una explicación larga que debería ocupar varias líneas completas de la caja de diálogo antes de pasar a una segunda página del mismo mensaje porque no cabe en cuatro líneas. La frase continúa con más detalles para comprobar que el exportador divide el texto por ancho real y no por saltos previos del proveedor.".into(),
         );
 
         let list = json.as_array_mut().unwrap();
         let applied = apply_event_commands(list, "Map001:1:0", &translations, "Choose an option.");
         assert_eq!(applied, 1);
-        assert_eq!(list[0]["code"], 101);
-        assert_eq!(list[1]["parameters"][0], "Linea 1");
-        assert_eq!(list[4]["parameters"][0], "Linea 4");
-        assert_eq!(list[5]["code"], 101);
-        assert_eq!(list[6]["parameters"][0], "Linea 5");
+        let message_count = list
+            .iter()
+            .filter(|command| command.get("code").and_then(Value::as_i64) == Some(101))
+            .count();
+        let lines = list
+            .iter()
+            .filter(|command| command.get("code").and_then(Value::as_i64) == Some(CODE_SHOW_TEXT))
+            .filter_map(|command| {
+                command
+                    .get("parameters")
+                    .and_then(Value::as_array)
+                    .and_then(|parameters| parameters.first())
+                    .and_then(Value::as_str)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(message_count, 1);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(list[3]["code"], 0);
+        assert!(lines[0].contains("Esta es una explicación larga"));
+        assert!(lines[1].contains("proveedor"));
     }
 
     #[test]
@@ -3048,14 +3310,13 @@ mod tests {
         assert_eq!(applied, 1);
         assert_eq!(
             list[1]["parameters"][0],
-            "Selecciona la cantidad de vello púbico."
+            "Selecciona la cantidad de vello púbico. ※Estado actual: Normal."
         );
-        assert_eq!(list[2]["parameters"][0], "※Estado actual: Normal.");
-        assert_eq!(list[3]["code"], 102);
+        assert_eq!(list[2]["code"], 102);
     }
 
     #[test]
-    fn test_apply_event_commands_adds_final_prompt_before_split_choice() {
+    fn test_apply_event_commands_does_not_add_final_prompt_before_split_choice() {
         let mut json: Value = serde_json::from_str(
             r#"[
                 {"code": 101, "parameters": ["", 0, 2, 2]},
@@ -3072,9 +3333,16 @@ mod tests {
         let list = json.as_array_mut().unwrap();
         let applied = apply_event_commands(list, "Map001:1:0", &translations, "Elige una opción.");
         assert_eq!(applied, 0);
-        assert_eq!(list[4]["code"], 101);
-        assert_eq!(list[5]["parameters"][0], "Elige una opción.");
-        assert_eq!(list[6]["code"], 102);
+        assert_eq!(list.len(), 6);
+        assert_eq!(list[4]["code"], 102);
+        assert!(list.iter().all(|command| {
+            command
+                .get("parameters")
+                .and_then(Value::as_array)
+                .and_then(|parameters| parameters.first())
+                .and_then(Value::as_str)
+                != Some("Elige una opción.")
+        }));
     }
 
     #[test]
@@ -3171,9 +3439,8 @@ mod tests {
         let list = json.as_array_mut().unwrap();
         let applied = apply_event_commands(list, "test", &translations, "Choose an option.");
         assert_eq!(applied, 1);
-        assert_eq!(list[0]["parameters"][0], "Línea 1");
-        assert_eq!(list[1]["parameters"][0], "Línea 2");
-        assert_eq!(list[2]["parameters"][0], "Línea 3");
+        assert_eq!(list[0]["parameters"][0], "Línea 1 Línea 2 Línea 3");
+        assert_eq!(list[1]["code"], 0);
     }
 
     #[test]
@@ -3528,6 +3795,301 @@ mod tests {
             .warnings
             .iter()
             .any(|warning| warning.contains("restored 1 RPG Maker asset references")));
+
+        let _ = fs::remove_dir_all(&temp_dir);
+        let _ = fs::remove_dir_all(&output_dir);
+    }
+
+    #[test]
+    fn test_export_project_normalizes_script_actor_image_references() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "fairtl_export_script_asset_refs_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        let data_dir = temp_dir.join("data");
+        let characters_dir = temp_dir.join("img").join("characters");
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::create_dir_all(&characters_dir).unwrap();
+        fs::write(
+            data_dir.join("System.json"),
+            r#"{"gameTitle":"Game Title","terms":{}}"#,
+        )
+        .unwrap();
+        fs::write(
+            data_dir.join("CommonEvents.json"),
+            r#"[null,{"id":1,"list":[{"code":355,"parameters":["$gameActors.actor(5).setCharacterImage(\"主人公 男１\", 0)"]},{"code":0,"parameters":[]}]}]"#,
+        )
+        .unwrap();
+        fs::write(characters_dir.join("主人公　男１.rpgmvp"), "asset").unwrap();
+
+        let project = Project {
+            id: "test".into(),
+            name: "Script Asset Refs".into(),
+            source_lang: "ja".into(),
+            target_lang: "es".into(),
+            engine: Engine::Mv,
+            game_dir: temp_dir.to_string_lossy().into(),
+            files: vec![
+                TranslationFile {
+                    relative_path: "data/System.json".into(),
+                    entries: vec![],
+                },
+                TranslationFile {
+                    relative_path: "data/CommonEvents.json".into(),
+                    entries: vec![],
+                },
+            ],
+            glossary: vec![],
+            style_guide: vec![],
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+
+        let output_dir = std::env::temp_dir().join(format!(
+            "fairtl_export_script_asset_refs_out_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        let result = export_project(&project, &output_dir).unwrap();
+        let common_events: Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("data").join("CommonEvents.json")).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            common_events[1]["list"][0]["parameters"][0],
+            "$gameActors.actor(5).setCharacterImage(\"主人公　男１\", 0)"
+        );
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("restored 1 RPG Maker asset references")));
+
+        let _ = fs::remove_dir_all(&temp_dir);
+        let _ = fs::remove_dir_all(&output_dir);
+    }
+
+    #[test]
+    fn test_export_project_normalizes_movement_route_image_references() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "fairtl_export_movement_asset_refs_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        let data_dir = temp_dir.join("data");
+        let characters_dir = temp_dir.join("img").join("characters");
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::create_dir_all(&characters_dir).unwrap();
+        fs::write(
+            data_dir.join("System.json"),
+            r#"{"gameTitle":"Game Title","terms":{}}"#,
+        )
+        .unwrap();
+        fs::write(
+            data_dir.join("Map001.json"),
+            r#"{"displayName":"","events":[null,{"id":1,"pages":[{"image":{"characterName":"","characterIndex":0},"list":[{"code":205,"parameters":[1,{"list":[{"code":41,"parameters":["主人公 女１",0]},{"code":0}],"repeat":false,"skippable":false,"wait":true}]},{"code":505,"parameters":[{"code":41,"parameters":["主人公 女１",0]}]},{"code":0,"parameters":[]}]}]}]}"#,
+        )
+        .unwrap();
+        fs::write(characters_dir.join("主人公　女１.rpgmvp"), "asset").unwrap();
+
+        let project = Project {
+            id: "test".into(),
+            name: "Movement Asset Refs".into(),
+            source_lang: "ja".into(),
+            target_lang: "es".into(),
+            engine: Engine::Mv,
+            game_dir: temp_dir.to_string_lossy().into(),
+            files: vec![
+                TranslationFile {
+                    relative_path: "data/System.json".into(),
+                    entries: vec![],
+                },
+                TranslationFile {
+                    relative_path: "data/Map001.json".into(),
+                    entries: vec![],
+                },
+            ],
+            glossary: vec![],
+            style_guide: vec![],
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+
+        let output_dir = std::env::temp_dir().join(format!(
+            "fairtl_export_movement_asset_refs_out_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        let result = export_project(&project, &output_dir).unwrap();
+        let map: Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("data").join("Map001.json")).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            map["events"][1]["pages"][0]["list"][0]["parameters"][1]["list"][0]["parameters"][0],
+            "主人公　女１"
+        );
+        assert_eq!(
+            map["events"][1]["pages"][0]["list"][1]["parameters"][0]["parameters"][0],
+            "主人公　女１"
+        );
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("restored 2 RPG Maker asset references")));
+
+        let _ = fs::remove_dir_all(&temp_dir);
+        let _ = fs::remove_dir_all(&output_dir);
+    }
+
+    #[test]
+    fn test_export_project_normalizes_note_picture_references() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "fairtl_export_note_asset_refs_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        let data_dir = temp_dir.join("data");
+        let pictures_dir = temp_dir.join("img").join("pictures");
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::create_dir_all(&pictures_dir).unwrap();
+        fs::write(
+            data_dir.join("System.json"),
+            r#"{"gameTitle":"Game Title","terms":{}}"#,
+        )
+        .unwrap();
+        fs::write(
+            data_dir.join("Items.json"),
+            r#"[null,{"id":1,"name":"Gallery","note":"<SG追加1ピクチャ:サムネ １,8,60>"}]"#,
+        )
+        .unwrap();
+        fs::write(pictures_dir.join("サムネ　１.rpgmvp"), "asset").unwrap();
+
+        let project = Project {
+            id: "test".into(),
+            name: "Note Asset Refs".into(),
+            source_lang: "ja".into(),
+            target_lang: "es".into(),
+            engine: Engine::Mv,
+            game_dir: temp_dir.to_string_lossy().into(),
+            files: vec![
+                TranslationFile {
+                    relative_path: "data/System.json".into(),
+                    entries: vec![],
+                },
+                TranslationFile {
+                    relative_path: "data/Items.json".into(),
+                    entries: vec![],
+                },
+            ],
+            glossary: vec![],
+            style_guide: vec![],
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+
+        let output_dir = std::env::temp_dir().join(format!(
+            "fairtl_export_note_asset_refs_out_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        let result = export_project(&project, &output_dir).unwrap();
+        let items: Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("data").join("Items.json")).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(items[1]["note"], "<SG追加1ピクチャ:サムネ　１,8,60>");
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("restored 1 RPG Maker asset references")));
+
+        let _ = fs::remove_dir_all(&temp_dir);
+        let _ = fs::remove_dir_all(&output_dir);
+    }
+
+    #[test]
+    fn test_export_project_normalizes_audio_references() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "fairtl_export_audio_refs_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        let data_dir = temp_dir.join("data");
+        let bgm_dir = temp_dir.join("audio").join("bgm");
+        let bgs_dir = temp_dir.join("audio").join("bgs");
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::create_dir_all(&bgm_dir).unwrap();
+        fs::create_dir_all(&bgs_dir).unwrap();
+        fs::write(
+            data_dir.join("System.json"),
+            r#"{"gameTitle":"Game Title","terms":{},"titleBgm":{"name":"テーマ(通常)","volume":90,"pitch":100,"pan":0}}"#,
+        )
+        .unwrap();
+        fs::write(
+            data_dir.join("Map001.json"),
+            r#"{"displayName":"","bgm":{"name":"","volume":90,"pitch":100,"pan":0},"bgs":{"name":"ピストン(中速10秒)","volume":90,"pitch":80,"pan":0},"events":[]}"#,
+        )
+        .unwrap();
+        fs::write(
+            data_dir.join("CommonEvents.json"),
+            r#"[null,{"id":1,"list":[{"code":245,"parameters":[{"name":"ピストン(中速10秒)","volume":90,"pitch":80,"pan":0}]},{"code":0,"parameters":[]}]}]"#,
+        )
+        .unwrap();
+        fs::write(bgm_dir.join("テーマ（通常）.rpgmvo"), "asset").unwrap();
+        fs::write(bgs_dir.join("ピストン（中速10秒）.rpgmvo"), "asset").unwrap();
+
+        let project = Project {
+            id: "test".into(),
+            name: "Audio Refs".into(),
+            source_lang: "ja".into(),
+            target_lang: "es".into(),
+            engine: Engine::Mv,
+            game_dir: temp_dir.to_string_lossy().into(),
+            files: vec![
+                TranslationFile {
+                    relative_path: "data/System.json".into(),
+                    entries: vec![],
+                },
+                TranslationFile {
+                    relative_path: "data/Map001.json".into(),
+                    entries: vec![],
+                },
+                TranslationFile {
+                    relative_path: "data/CommonEvents.json".into(),
+                    entries: vec![],
+                },
+            ],
+            glossary: vec![],
+            style_guide: vec![],
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+
+        let output_dir = std::env::temp_dir().join(format!(
+            "fairtl_export_audio_refs_out_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        let result = export_project(&project, &output_dir).unwrap();
+        let system: Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("data").join("System.json")).unwrap(),
+        )
+        .unwrap();
+        let map: Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("data").join("Map001.json")).unwrap(),
+        )
+        .unwrap();
+        let common_events: Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("data").join("CommonEvents.json")).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(system["titleBgm"]["name"], "テーマ（通常）");
+        assert_eq!(map["bgs"]["name"], "ピストン（中速10秒）");
+        assert_eq!(
+            common_events[1]["list"][0]["parameters"][0]["name"],
+            "ピストン（中速10秒）"
+        );
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("restored 3 RPG Maker asset references")));
 
         let _ = fs::remove_dir_all(&temp_dir);
         let _ = fs::remove_dir_all(&output_dir);

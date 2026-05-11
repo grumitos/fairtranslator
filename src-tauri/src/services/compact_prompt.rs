@@ -139,6 +139,12 @@ pub struct CompactPromptEntry {
     pub context: String,
     #[serde(rename = "t")]
     pub text: String,
+    #[serde(rename = "oc")]
+    pub original_visible_chars: usize,
+    #[serde(rename = "ol")]
+    pub original_line_count: usize,
+    #[serde(rename = "tb")]
+    pub target_visible_budget: usize,
     #[serde(rename = "n", skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
     #[serde(rename = "ct", skip_serializing_if = "Option::is_none")]
@@ -653,6 +659,7 @@ fn build_bundle(
             .current_translation
             .filter(|text| !text.trim().is_empty())
             .map(|text| mask_text_with_tag(text, &format!("CT{local_id}")).text);
+        let metrics = compact_length_metrics(entry.original);
 
         entry_refs.push(ChunkEntryRef {
             local_id,
@@ -665,6 +672,9 @@ fn build_bundle(
             local_id,
             context: compact_context_label(entry.file_context),
             text: masked_original.text,
+            original_visible_chars: metrics.visible_chars,
+            original_line_count: metrics.line_count,
+            target_visible_budget: metrics.target_budget,
             notes: entry.notes.and_then(non_empty),
             current_translation: masked_current_translation,
             instruction_candidate: entry.instruction_candidate.filter(|flag| *flag),
@@ -722,9 +732,12 @@ fn build_system_prompt(
         concat!(
             "You are translating RPG Maker game text from {source_lang} to {target_lang}.\n",
             "The user message is a compact JSON payload with metadata, context and entries.\n",
-            "Preserve control codes, placeholders, escape sequences and line breaks exactly.\n",
+            "Preserve control codes, placeholders and escape sequences exactly.\n",
             "Masked placeholders such as __K1_CC0__ must survive unchanged and in the same count.\n",
             "Preserve choice/plugin condition prefixes such as if(s[12]) and en(s[20]) exactly; translate only the visible label after them.\n",
+            "Do not add, remove or rename RPG Maker script commands, tags, variables, event logic or decorative formatting; return translated text only.\n",
+            "Each entry includes oc=original visible chars, ol=original line count and tb=target visible character budget with cushion. Stay near or below tb for dialogue/UI by adapting and condensing instead of literal expansion.\n",
+            "Keep line breaks only when they are structural or necessary; do not add extra dialogue lines, extra boxes or explanatory text.\n",
             "Use glossary/style/context when relevant, but do not add commentary or markdown.\n",
             "{language_rules}",
             "{extra_rules}",
@@ -743,6 +756,7 @@ fn language_pair_prompt_rules(source_lang: &str, target_lang: &str) -> &'static 
         concat!(
             "For Japanese to Spanish, write natural neutral Spanish instead of literal calques.\n",
             "Examples: 学校の帰り道 is de vuelta de la escuela, not de regreso a la escuela; 一人称 in settings is forma de referirse a si mismo, not primera persona.\n",
+            "Adapt dialogue like dubbing or subtitles: preserve intent and timing, prefer compact Spanish that fits the original text box/window over word-for-word completeness.\n",
             "Keep UI and choice labels short enough for RPG Maker windows; avoid sentence-length labels when a concise command works.\n",
             "Use Spanish punctuation in Spanish text; avoid Japanese punctuation such as 。, ？, ！, 「」 unless it is part of a preserved name or source-only artifact.\n",
             "For credits/staff rolls, translate role headings but preserve names, circles, brand names and supporter handles.\n"
@@ -776,6 +790,55 @@ fn compact_context_label(value: &str) -> String {
     }
 
     parts[parts.len().saturating_sub(2)..].join(" > ")
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CompactLengthMetrics {
+    visible_chars: usize,
+    line_count: usize,
+    target_budget: usize,
+}
+
+fn compact_length_metrics(text: &str) -> CompactLengthMetrics {
+    const SAFE_RPG_CHARS_PER_LINE: usize = 42;
+    const JA_TO_ES_LENGTH_NUMERATOR: usize = 18;
+    const JA_TO_ES_LENGTH_DENOMINATOR: usize = 10;
+    const SHORT_TEXT_PADDING: usize = 8;
+
+    let visible_chars = visible_prompt_char_count(text);
+    let line_count = text.split('\n').count().max(1);
+    let box_budget = line_count.saturating_mul(SAFE_RPG_CHARS_PER_LINE).max(8);
+    let proportional_budget =
+        visible_chars.saturating_mul(JA_TO_ES_LENGTH_NUMERATOR) / JA_TO_ES_LENGTH_DENOMINATOR;
+    let padded_budget = visible_chars.saturating_add(SHORT_TEXT_PADDING);
+    let target_budget = proportional_budget
+        .max(padded_budget)
+        .min(box_budget)
+        .max(visible_chars.min(box_budget))
+        .max(8);
+
+    CompactLengthMetrics {
+        visible_chars,
+        line_count,
+        target_budget,
+    }
+}
+
+fn visible_prompt_char_count(text: &str) -> usize {
+    let spans = collect_special_token_spans(text);
+    let mut total = 0usize;
+    let mut last_index = 0usize;
+    for span in spans {
+        total += count_visible_chars(&text[last_index..span.start]);
+        last_index = span.end;
+    }
+    total + count_visible_chars(&text[last_index..])
+}
+
+fn count_visible_chars(text: &str) -> usize {
+    text.chars()
+        .filter(|ch| !matches!(ch, '\n' | '\r' | '\t'))
+        .count()
 }
 
 fn finalize_model_text(text: &str, entry_ref: &ChunkEntryRef) -> String {
@@ -903,8 +966,13 @@ mod tests {
 
         assert!(bundle.user_payload.contains("\"k\":1"));
         assert!(bundle.user_payload.contains("__K1_CC0__"));
+        assert!(bundle.user_payload.contains("\"ol\":2"));
+        assert!(bundle.user_payload.contains("\"tb\":"));
         assert!(!bundle.user_payload.contains("entry-1"));
         assert!(bundle.system_prompt.contains("\"k\":1"));
+        assert!(bundle
+            .system_prompt
+            .contains("tb=target visible character budget"));
     }
 
     #[test]
@@ -1049,6 +1117,7 @@ mod tests {
         .unwrap();
 
         assert!(bundle.system_prompt.contains("natural neutral Spanish"));
+        assert!(bundle.system_prompt.contains("dubbing or subtitles"));
         assert!(bundle.system_prompt.contains("de vuelta de la escuela"));
         assert!(bundle
             .system_prompt
