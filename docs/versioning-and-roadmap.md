@@ -49,6 +49,16 @@ Use this versioning path:
 - `1.1+`: Incremental quality improvements, performance, UI polish, release automation
 - `2.0.0` or a later major: Only if the product scope expands materially beyond RPG Maker and changes the support model
 
+## Current Release Position
+
+The repository is currently aligned on `0.9.2` across `package.json`,
+`src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`.
+
+`0.9.2` is still part of the `0.9.x` hardening line. It adds focused RPG Maker
+MV/MZ export correctness and Japanese-to-Spanish QA hardening, including
+choice/plugin condition preservation, message wrapping, name-input plugin
+patching, asset-reference restoration, and visible plugin fallback translation.
+
 ## Current 0.9.x Hardening Baseline
 
 As of 2026-04-25, the local hardening baseline includes:

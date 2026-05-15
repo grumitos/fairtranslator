@@ -6,10 +6,10 @@ FairTranslator is a desktop app for translating RPG Maker games. The current sup
 
 ## Tech Stack
 
-- **Runtime:** Tauri 2.x, Rust edition 2021 (1.77+). Frontend served by Vite 6.
-- **Frontend:** React 19, TypeScript 5.5+, Zustand 5 (state), TanStack Table v8 (grid), react-i18next (i18n).
+- **Runtime:** Tauri 2.x, Rust edition 2021 (`rust-version = 1.77.2`). Frontend served by Vite 6.
+- **Frontend:** React 19, TypeScript 5.6, Zustand 5 (state), TanStack Table v8 (grid), react-i18next (i18n).
 - **UI:** shadcn/ui (Radix primitives) + Tailwind CSS 4. Install components via `npx shadcn@latest add <component>`.
-- **Testing:** Vitest + @testing-library/react (frontend), `cargo test` (Rust).
+- **Testing:** Vitest + @testing-library/react (frontend), `cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast` (Rust).
 
 ## Project Structure
 
@@ -18,10 +18,10 @@ src-tauri/
   src/
     lib.rs                  # tauri::Builder, command registration, state init
     main.rs                 # Desktop entry — calls lib::run(). Do not modify.
-    commands/               # One file per domain: project.rs, translation.rs, glossary.rs, export.rs
+    commands/               # One file per domain: project.rs, translation.rs, glossary.rs, style_guide.rs, export.rs
     models/                 # Serde structs for IPC + persistence
     parser/                 # rpgmaker.rs + rpgmaker_vxace.rs — detect/read supported RPG Maker data
-    services/               # provider.rs, openai.rs, deepl.rs, google.rs, codex.rs, ai_batch.rs, persistence.rs, exporter.rs
+    services/               # providers, compact prompts, persistence, secrets, integrity/apply, exporter
     error.rs                # AppError enum (thiserror + Serialize)
   capabilities/default.json # Tauri v2 permissions — only built-in plugin perms go here
   tauri.conf.json
@@ -31,8 +31,8 @@ src/
     editor/                 # TranslationGrid.tsx, EditEntryDialog.tsx, StatusBadge.tsx,
                             # FindReplaceBar.tsx, HighlightedText.tsx
     layout/                 # AppShell.tsx, Sidebar.tsx, Toolbar.tsx, StatusBar.tsx, WelcomeScreen.tsx,
-                            # NewProjectDialog.tsx, SettingsPanel.tsx, GlossaryPanel.tsx, BatchTranslatePanel.tsx
-  hooks/                    # useProject.ts, useApiKeys.ts, useGlossary.ts, useTranslation.ts
+                            # NewProjectDialog.tsx, SettingsPanel.tsx, GlossaryPanel.tsx, StyleGuidePanel.tsx, BatchTranslatePanel.tsx
+  hooks/                    # useProject.ts, useApiKeys.ts, useGlossary.ts, useStyleGuide.ts, useTranslation.ts
   stores/                   # projectStore.ts, editorStore.ts, settingsStore.ts
   lib/
     ipc.ts                  # Typed invoke() wrappers — ALL Tauri calls go through here
@@ -56,7 +56,7 @@ src/
 - **HTTP/runtime integrations:** `reqwest` (with `json` feature) + `tokio` (with `fs`, `sync`, `time` features) + `async-trait` for async provider integration. Built-in providers include OpenAI, DeepL, Google Translate, and Codex.
 - **Translation providers:** `services/provider.rs` defines the async translation trait around batched requests. Provider selection lives in `commands/translation.rs`, and external AI batch export/apply is supported alongside direct providers.
 - **Batch translation:** `translate_batch_start` command spawns an async task, processes entries in chunks, and emits `translation:progress` / `translation:complete` events via `tauri::Emitter`. Frontend listens with `@tauri-apps/api/event`.
-- **API key storage:** Uses `tauri-plugin-store` v2 — `app.store("api-keys.json")` with `.set()/.get()/.delete()/.save()`. Keys stored as `serde_json::Value`. Validation hits the provider's API with a minimal request.
+- **API key storage:** Provider API keys are stored in the operating-system secure credential store on Windows through `services/secrets.rs` (`keyring`). `tauri-plugin-store` keeps only non-secret provider settings in `api-keys.json` and migrates legacy JSON API keys into secure storage on load.
 
 ## Frontend
 
@@ -89,7 +89,8 @@ type ProviderType = "openai" | "deepl" | "google" | "codex";
 interface Project {
   id: string; name: string; sourceLang: string; targetLang: string;
   engine: Engine; gameDir: string; files: TranslationFile[];
-  glossary: GlossaryTerm[]; createdAt: string; updatedAt: string;
+  glossary: GlossaryTerm[]; styleGuide: string[];
+  createdAt: string; updatedAt: string;
 }
 interface TranslationFile { relativePath: string; entries: TranslationEntry[]; }
 interface TranslationEntry {
@@ -97,21 +98,23 @@ interface TranslationEntry {
   translation: string; status: EntryStatus; notes: string;
 }
 interface GlossaryTerm { source: string; target: string; caseSensitive: boolean; }
-interface ProviderConfig {
-  type: ProviderType; apiKey: string; model?: string;
-  endpoint?: string;                              // Custom/self-hosted LLM URL
-  rateLimit?: { requestsPerMinute: number };      // Per-provider throttling
+interface ApiKeyInfo {
+  provider: ProviderType; apiKey: string; model?: string;
+  endpoint?: string; organization?: string; project?: string;
+  commandPath?: string; profile?: string;
+  authMode?: "apiKey" | "codexManaged";
+  isConfigured?: boolean;
 }
 ```
 
-Mirror these as Rust structs in `src-tauri/src/models/` with identical field names (camelCase via serde).
+Keep these interfaces aligned with the Rust models and command DTOs, using camelCase via serde for IPC payloads.
 
 ## Project Persistence
 
 - Projects are saved as a `.fairtl` directory:
   ```
   MyGame.fairtl/
-    project.json        # Metadata: name, engine, languages, glossary, timestamps
+    project.json        # Metadata: name, engine, languages, glossary, styleGuide, timestamps
     entries/
       Map001.json       # TranslationEntry[] for each source game file
       Actors.json
@@ -119,24 +122,26 @@ Mirror these as Rust structs in `src-tauri/src/models/` with identical field nam
   ```
 - Directory-based (not zipped) for git-friendliness and easy diffing.
 - `project_save` writes atomically: write to a temp directory first, then rename. Never write directly to the live project path.
-- Include `schemaVersion: number` in `project.json` for forward compatibility.
+- Current on-disk `schemaVersion` is `2`; schema `1` projects without `styleGuide` still load with an empty style guide.
 
 ## Export (Phase 4)
 
-- **Exporter** (`services/exporter.rs`): Reads original game JSON from `project.game_dir`, injects translations into a copy written to `output_dir`. Original files are never modified.
-- Translations are applied only when `status != Untranslated` and `translation` is non-empty.
-- Multiline text (codes 401/405) distributes translated lines 1:1 across commands. Excess lines are joined into the last command; fewer lines clear excess commands.
+- **Exporter** (`services/exporter.rs`): Reads original RPG Maker data from `project.game_dir`, injects translations into a copy written to `output_dir`. Original files are never modified.
+- Translations are applied only when `status != Untranslated` and `translation.trim()` is non-empty.
+- Export runs the shared translation-integrity preflight before copying output, blocking control-code, placeholder, or unsafe multiline drift and returning non-blocking warnings for review heuristics.
+- MV/MZ export also preserves translated `js/plugins.js` values and restores asset references to the copied filenames when normalization changes ASCII/full-width or whitespace forms.
 - The exporter imports parser constants (`DB_TEXT_FIELDS`, event command codes) to avoid duplication.
-- `export_project` Tauri command takes `output_dir` string and returns `ExportResult { filesExported, entriesApplied, totalEntries }`.
+- `export_project` Tauri command takes `output_dir` string and returns `ExportResult { filesExported, entriesApplied, totalEntries, warnings }`.
 - Frontend shows a directory picker dialog then displays a success toast with export stats.
 
 ## AI Translation (Phase 5)
 
 - **Provider trait:** `TranslationProvider` in `services/provider.rs` handles batched translation requests and provider-specific validation.
-- **OpenAI** (`services/openai.rs`): Uses Chat Completions API (`/v1/chat/completions`). Default model: `gpt-4o-mini`. System prompt instructs JSON output with RPG Maker control code preservation. Processes entries in chunks (50 per request). Handles markdown fence stripping from responses. Supports custom `model` and `endpoint` for self-hosted LLMs.
-- **DeepL** (`services/deepl.rs`): Uses v2 translate API. Auto-detects free vs pro keys (`:fx` suffix). Language code normalization (e.g., `en` → `EN`, `pt` → `PT-BR`). Sends entries as batch texts.
-- **Google** (`services/google.rs`): Uses Cloud Translation v2 API. Sends entries as individual `q` parameters. Language codes used as-is.
-- **Batch translation flow:** `translate_batch_start` spawns `tokio::spawn` task. Processes selected files sequentially, entries in provider-appropriate chunks. Emits `translation:progress` events with `{ filesProcessed, totalFiles, entriesTranslated, totalEntries, currentFile }`. Emits `translation:complete` when done. Glossary terms are passed to the provider for context-aware translation.
+- **OpenAI** (`services/openai.rs`): Uses Chat Completions API (`/v1/chat/completions`). Default model: `gpt-4o-mini`. Provider batches are capped at `24` entries and use the shared compact prompt serializer, prompt-budget estimator, local response IDs, and integrity validation path.
+- **Codex** (`services/codex.rs`): Uses the Codex CLI runtime resolved as sidecar, configured command path, then `codex` from `PATH`. CLI invocation passes `model_reasoning_effort` when configured and times out long `codex exec` calls.
+- **DeepL** (`services/deepl.rs`): Uses v2 translate API. It receives best-effort glossary/style-guide help, but not the full chunk-memory orchestration used by OpenAI/Codex.
+- **Google** (`services/google.rs`): Uses Cloud Translation v2 API with boundary-aware glossary and literal placeholder/control-code protection. It remains a basic MT path, not full contextual memory.
+- **Batch translation flow:** `translate_batch_start` spawns `tokio::spawn`, plans prompt-budgeted chunks through `translation_orchestrator`, skips blank-source entries, applies responses through `translation_apply`, and emits `translation:progress` with file, chunk, entry, failed-entry, failed-batch, and warning counters before `translation:complete`.
 - **API key commands:** `apikey_save`, `apikey_load`, `apikey_delete`, `apikey_validate`. Validation sends a minimal API request to verify the key works.
 - **Glossary commands:** `glossary_add`, `glossary_update`, `glossary_remove`, `glossary_list`. Stored in the project's glossary array. Glossary terms are included in OpenAI system prompts and as context hints for other providers.
 - **Frontend panels:** Settings (Sheet + Tabs for API keys and appearance), Glossary (Sheet with CRUD table), BatchTranslate (Sheet with provider selector, file checkboxes, progress bar). All in `src/components/layout/`.
@@ -162,8 +167,8 @@ Mirror these as Rust structs in `src-tauri/src/models/` with identical field nam
 - **License:** Proprietary source license in `LICENSE`; commercial binary distributions use `EULA.md` and must preserve `THIRD_PARTY_NOTICES.md`.
 - **CI/CD:** Two GitHub Actions workflows in `.github/workflows/`:
   - `ci.yml` — runs on push/PR to `master` and `main`: frontend tsc check (ubuntu) + Rust check + Rust tests (windows).
-  - `release.yml` — runs on `v*` tag push: full build via `tauri-apps/tauri-action`, creates a draft GitHub Release with NSIS + MSI artifacts.
-- **Build command:** `npm run tauri build` runs `tsc -b && vite build` then Rust release compilation + bundling.
+  - `release.yml` — runs on `v*` tag push: frontend checks, Rust tests, then full Windows build via `tauri-apps/tauri-action`; releases are published, not left as drafts.
+- **Build command:** `npm run tauri -- build` runs `tsc -b && vite build` then Rust release compilation + bundling.
 - **tsconfig.node.json:** Required `emitDeclarationOnly: true` alongside `composite: true` for `tsc -b` to work with `allowImportingTsExtensions`.
 - **@types/node:** Added as devDependency for `vite.config.ts` (uses `path`, `process`, `__dirname`).
 
@@ -175,10 +180,10 @@ Mirror these as Rust structs in `src-tauri/src/models/` with identical field nam
 
 ## API Key Storage
 
-- Use `tauri-plugin-store` for local storage in the app's config directory.
-- This is convenience storage, not OS keychain-backed encryption.
-- Keys are stored per-provider — never inside project files (projects must be shareable without leaking keys).
-- Keys must never be logged, included in error reports, or sent to any endpoint other than the provider's own API.
+- Store provider API keys with `services/secrets.rs` in the Windows secure credential store via `keyring`.
+- Keep only non-secret provider settings in `tauri-plugin-store` (`model`, `endpoint`, OpenAI organization/project, Codex command path/profile).
+- Legacy JSON-backed API keys are migrated into secure storage on load and then removed from `api-keys.json`.
+- Keys are stored per-provider, never inside project files, and must never be logged, included in error reports, or sent to unsafe endpoint overrides.
 
 ## Testing
 
@@ -189,8 +194,8 @@ Mirror these as Rust structs in `src-tauri/src/models/` with identical field nam
 
 ```bash
 npm run tauri dev              # Dev server with hot reload
-npm run tauri build            # Production build
-npm run test                   # Vitest (frontend)
-cd src-tauri && cargo test     # Rust tests
+npm run build                  # TypeScript project build + Vite production build
+npm run test:run               # Vitest frontend suite
+cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast
 npx shadcn@latest add <name>  # Install shadcn component
 ```

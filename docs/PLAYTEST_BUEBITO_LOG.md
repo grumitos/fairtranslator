@@ -353,4 +353,4 @@
 ## Blockers
 - No hay bloqueos técnicos duros para seguir jugando la exportación.
 - Limitación operativa actual: el input de canvas vía Playwright/MCP no es fiable como teclado puro; la sesión usa `window.Input.virtualClick('ok')` y pathfinding asistido del runtime para acercarse a NPCs sin teletransporte.
-- Limitación de sesión actual: el objetivo de `1 hora` real no está completado todavía; la cobertura documentada acumulada va en `~39 min`.
+- Limitación de sesión actual: el objetivo de `1 hora` real no está completado todavía; la cobertura documentada acumulada va en `~49 min`.

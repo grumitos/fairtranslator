@@ -101,7 +101,7 @@ Common commands:
 npm install
 npm run tauri dev
 npm run test:run
-cargo test
+cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast
 ```
 
 On Windows, if `cargo` cannot find `link.exe`, run Rust/Tauri validation from a Visual Studio developer environment:
@@ -140,7 +140,8 @@ npm run tauri:build:codex-sidecar
 
 - Release/version strategy: [docs/versioning-and-roadmap.md](./docs/versioning-and-roadmap.md)
 - Run hygiene: [docs/run-hygiene.md](./docs/run-hygiene.md)
-- Latest release notes: [docs/releases/v0.9.1.md](./docs/releases/v0.9.1.md)
+- Latest release notes: [docs/releases/v0.9.2.md](./docs/releases/v0.9.2.md)
+- Previous release notes: [docs/releases/v0.9.1.md](./docs/releases/v0.9.1.md)
 - Initial release notes: [docs/releases/v0.9.0.md](./docs/releases/v0.9.0.md)
 - Changelog: [CHANGELOG.md](./CHANGELOG.md)
 

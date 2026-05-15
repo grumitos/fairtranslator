@@ -20,8 +20,10 @@ artifacts needed for resume/review and pruning generated caches or aborted probe
 - `before-*` checkpoint logs/status snapshots
 - `runner.*.log`
 - `run-jpleft-*.ps1`
+- recursive `debug.log` files inside run folders
 - temporary `stdout`/`stderr` logs from final review reruns
-- aborted/probe run folders with no export, no playable copy, and no completed status
+- aborted/probe run folders older than the retention window with no export, no
+  playable copy, and no completed status
 
 ## Script
 
@@ -35,6 +37,12 @@ Apply the default cleanup:
 
 ```powershell
 .\scripts\clean-fairtranslator-runs.ps1 -Apply
+```
+
+Use a different runs root or retention window:
+
+```powershell
+.\scripts\clean-fairtranslator-runs.ps1 -Root D:\FairTranslatorRuns -RetainDays 30
 ```
 
 Remove known superseded runs while keeping a specific final run:
