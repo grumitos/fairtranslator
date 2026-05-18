@@ -211,6 +211,10 @@ mod typescript_bindings {
         append_type::<AiBatchTranslation>(&mut output);
         append_type::<AiBatchApplyResult>(&mut output);
 
+        if output.ends_with("\n\n") {
+            output.pop();
+        }
+
         output
     }
 
@@ -228,6 +232,7 @@ mod typescript_bindings {
         let path = generated_domain_path();
         let expected = generated_domain_types();
         let current = fs::read_to_string(&path).unwrap_or_default();
+        let current = current.replace("\r\n", "\n");
 
         assert_eq!(
             current, expected,
