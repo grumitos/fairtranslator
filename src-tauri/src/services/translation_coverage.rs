@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use serde::Serialize;
 
 use crate::models::{EntryStatus, Project, TranslationEntry};
+use crate::services::translation_text::is_japanese_language;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -452,11 +453,6 @@ fn contains_japanese_script(value: &str) -> bool {
                 | 0xFF66..=0xFF9D
         )
     })
-}
-
-fn is_japanese_language(value: &str) -> bool {
-    let normalized = value.trim().to_ascii_lowercase();
-    normalized == "ja" || normalized == "jp" || normalized.contains("japanese")
 }
 
 fn preview(value: &str) -> String {

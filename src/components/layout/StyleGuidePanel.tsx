@@ -14,27 +14,11 @@ import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { useStyleGuide } from "@/hooks/useStyleGuide";
+import { normalizeStyleGuideRules } from "@/lib/styleGuideRules";
 
 interface StyleGuidePanelProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-}
-
-function normalizeRules(items: string[]): string[] {
-  const seen = new Set<string>();
-  const normalized: string[] = [];
-
-  for (const value of items) {
-    const text = value.trim();
-    if (!text || seen.has(text)) {
-      continue;
-    }
-
-    seen.add(text);
-    normalized.push(text);
-  }
-
-  return normalized;
 }
 
 export function StyleGuidePanel({ open, onOpenChange }: StyleGuidePanelProps) {
@@ -55,7 +39,7 @@ export function StyleGuidePanel({ open, onOpenChange }: StyleGuidePanelProps) {
     }
   }, [open, refresh]);
 
-  const normalizedDraft = useMemo(() => normalizeRules(draftRules), [draftRules]);
+  const normalizedDraft = useMemo(() => normalizeStyleGuideRules(draftRules), [draftRules]);
   const hasChanges = useMemo(
     () => JSON.stringify(normalizedDraft) !== JSON.stringify(styleGuide),
     [normalizedDraft, styleGuide],
@@ -67,24 +51,26 @@ export function StyleGuidePanel({ open, onOpenChange }: StyleGuidePanelProps) {
       return;
     }
 
-    setDraftRules((prev) => normalizeRules([...prev, next]));
+    setDraftRules((prev) => normalizeStyleGuideRules([...prev, next]));
     setNewRule("");
   }, [newRule]);
 
   const handleRuleChange = useCallback((index: number, next: string) => {
     setDraftRules((prev) => {
-      const updated = normalizeRules(prev);
+      const updated = normalizeStyleGuideRules(prev);
       updated[index] = next;
       return updated;
     });
   }, []);
 
   const handleRemoveRule = useCallback((index: number) => {
-    setDraftRules((prev) => normalizeRules(prev).filter((_, currentIndex) => currentIndex !== index));
+    setDraftRules((prev) =>
+      normalizeStyleGuideRules(prev).filter((_, currentIndex) => currentIndex !== index),
+    );
   }, []);
 
   const handleSave = useCallback(async () => {
-    const normalized = normalizeRules(normalizedDraft);
+    const normalized = normalizeStyleGuideRules(normalizedDraft);
     setLocalError(null);
 
     try {

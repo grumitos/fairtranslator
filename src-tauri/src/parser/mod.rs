@@ -94,6 +94,95 @@ mod tests {
         conv_write(value, Format::Marshal, &mut writer).unwrap();
     }
 
+    fn write_json(path: &Path, json_value: serde_json::Value) {
+        let content = serde_json::to_string_pretty(&json_value).unwrap();
+        fs::write(path, content).unwrap();
+    }
+
+    fn assert_parsed_contains_ids(parsed: &ParsedGame, expected_ids: &[&str]) {
+        let mut ids = parsed
+            .files
+            .iter()
+            .flat_map(|file| file.entries.iter().map(|entry| entry.id.clone()))
+            .collect::<Vec<_>>();
+        ids.sort();
+
+        for expected_id in expected_ids {
+            assert!(
+                ids.iter().any(|id| id == expected_id),
+                "Expected parsed IDs to include {expected_id}, got {ids:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_game_mv_fixture_pack() {
+        let root = std::env::temp_dir().join(format!(
+            "fairtl_parser_mv_fixture_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        fs::create_dir_all(root.join("data")).unwrap();
+        fs::create_dir_all(root.join("js")).unwrap();
+        fs::write(root.join("js").join("rpg_core.js"), "RPG Maker MV").unwrap();
+
+        write_json(
+            &root.join("data").join("Actors.json"),
+            json!([
+                null,
+                {
+                    "id": 1,
+                    "name": "Harold",
+                    "description": "A brave actor",
+                    "nickname": "Hero"
+                }
+            ]),
+        );
+
+        let parsed = parse_game(&root).unwrap();
+        assert_eq!(parsed.engine, Engine::Mv);
+        assert!(parsed
+            .files
+            .iter()
+            .any(|file| file.relative_path == "data/Actors.json"));
+        assert_parsed_contains_ids(
+            &parsed,
+            &["Actors:name:1", "Actors:description:1", "Actors:nickname:1"],
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_parse_game_mz_fixture_pack() {
+        let root = std::env::temp_dir().join(format!(
+            "fairtl_parser_mz_fixture_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        fs::create_dir_all(root.join("data")).unwrap();
+        fs::create_dir_all(root.join("js")).unwrap();
+        fs::write(root.join("js").join("rmmz_core.js"), "RPG Maker MZ").unwrap();
+
+        write_json(
+            &root.join("data").join("System.json"),
+            json!({
+                "gameTitle": "MZ Fixture",
+                "terms": {
+                    "basic": ["", "Level"]
+                }
+            }),
+        );
+
+        let parsed = parse_game(&root).unwrap();
+        assert_eq!(parsed.engine, Engine::Mz);
+        assert!(parsed
+            .files
+            .iter()
+            .any(|file| file.relative_path == "data/System.json"));
+        assert_parsed_contains_ids(&parsed, &["System:gameTitle", "System:terms.basic.1"]);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn test_parse_game_vxace_basic_entries() {
         let root = std::env::temp_dir().join(format!(

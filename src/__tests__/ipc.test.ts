@@ -1,5 +1,16 @@
-import { describe, expect, it } from "vitest";
-import { toErrorMessage } from "@/lib/ipc";
+import { invoke } from "@tauri-apps/api/core";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { apikeySave, projectCreate, projectGet, toErrorMessage } from "@/lib/ipc";
+
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(),
+}));
+
+const invokeMock = vi.mocked(invoke);
+
+beforeEach(() => {
+  invokeMock.mockReset();
+});
 
 describe("toErrorMessage", () => {
   it("returns message from Error instances", () => {
@@ -18,5 +29,58 @@ describe("toErrorMessage", () => {
   it("extracts nested error message", () => {
     const err = { error: { message: "Nested failure" } };
     expect(toErrorMessage(err)).toBe("Nested failure");
+  });
+});
+
+describe("ipc command payloads", () => {
+  it("invokes project_create with the documented payload shape", async () => {
+    invokeMock.mockResolvedValue({
+      id: "project-1",
+      name: "Demo",
+      sourceLang: "ja",
+      targetLang: "es",
+      engine: "mv",
+      gameDir: "C:/Games/Demo",
+      files: [],
+      glossary: [],
+      styleGuide: [],
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+    });
+
+    await projectCreate("C:/Games/Demo", "Demo", "ja", "es");
+
+    expect(invokeMock).toHaveBeenCalledWith("project_create", {
+      gameDir: "C:/Games/Demo",
+      name: "Demo",
+      sourceLang: "ja",
+      targetLang: "es",
+    });
+  });
+
+  it("invokes no-payload commands without an empty object", async () => {
+    invokeMock.mockResolvedValue(null);
+
+    await projectGet();
+
+    expect(invokeMock).toHaveBeenCalledWith("project_get", undefined);
+  });
+
+  it("normalizes optional API key settings to null for IPC", async () => {
+    invokeMock.mockResolvedValue(undefined);
+
+    await apikeySave("codex", "", undefined, undefined, undefined, undefined, "codex", undefined);
+
+    expect(invokeMock).toHaveBeenCalledWith("apikey_save", {
+      provider: "codex",
+      apiKey: "",
+      model: null,
+      endpoint: null,
+      organization: null,
+      project: null,
+      commandPath: "codex",
+      profile: null,
+      authMode: null,
+    });
   });
 });

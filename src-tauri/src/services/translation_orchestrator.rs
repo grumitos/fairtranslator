@@ -10,6 +10,11 @@ use crate::services::openai::OpenAiProvider;
 use crate::services::provider::{
     TranslationBatchContext, TranslationExample, TranslationRequest, TranslationTermHint,
 };
+use crate::services::translation_text::{
+    compact_context_hint, compact_text_preview, contains_ascii_words, contains_honorific_hint,
+    contains_non_ascii, file_kind_for_path, is_japanese_language, is_spanish_language,
+    lexical_terms_set, lexical_terms_vec, looks_like_term_entry, normalize_key, overlap_score_vec,
+};
 
 const DEFAULT_MAX_ENTRIES_PER_CHUNK: usize = 20;
 const LLM_MAX_ENTRIES_PER_CHUNK: usize = 24;
@@ -467,19 +472,6 @@ fn build_style_guide(project: &Project, selected_files: &[&TranslationFile]) -> 
     }
 
     deduped
-}
-
-fn is_japanese_language(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
-    lower == "ja" || lower.contains("japanese") || lower.contains("japon")
-}
-
-fn is_spanish_language(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
-    lower == "es"
-        || lower.contains("spanish")
-        || lower.contains("español")
-        || lower.contains("espanol")
 }
 
 fn collect_term_hints(
@@ -1136,104 +1128,6 @@ fn status_priority(status: &EntryStatus) -> usize {
         EntryStatus::Reviewed => 1,
         EntryStatus::Draft => 2,
         EntryStatus::Untranslated => 3,
-    }
-}
-
-fn normalize_key(value: &str) -> String {
-    value.trim().to_ascii_lowercase()
-}
-
-fn looks_like_term_entry(entry_id: &str, file_context: &str) -> bool {
-    let id = entry_id.to_ascii_lowercase();
-    let context = file_context.to_ascii_lowercase();
-    id.contains(":name:")
-        || id.contains(":nickname:")
-        || id.contains("displayname")
-        || context.contains("> name")
-        || context.contains("displayname")
-        || context.contains("nickname")
-}
-
-fn file_kind_for_path(path: &str) -> &'static str {
-    let lower = path.to_ascii_lowercase();
-    if lower.ends_with("system.json") {
-        "System"
-    } else if lower.ends_with("js/plugins.js") {
-        "Plugins"
-    } else if lower.contains("commonevents") || lower.contains("troops") {
-        "Events"
-    } else if lower.contains("\\map") || lower.contains("/map") || lower.contains("map") {
-        "Maps"
-    } else if lower.ends_with(".json") {
-        "Database"
-    } else {
-        "Other"
-    }
-}
-
-fn contains_honorific_hint(text: &str) -> bool {
-    let normalized = text.to_ascii_lowercase();
-    normalized.contains("-san")
-        || normalized.contains("-chan")
-        || normalized.contains("-kun")
-        || text.contains("お姉")
-        || text.contains("兄")
-        || text.contains("姉")
-}
-
-fn contains_ascii_words(text: &str) -> bool {
-    text.split_whitespace()
-        .any(|token| token.chars().all(|ch| ch.is_ascii_alphabetic()) && token.len() > 2)
-}
-
-fn contains_non_ascii(text: &str) -> bool {
-    text.chars().any(|ch| !ch.is_ascii())
-}
-
-fn lexical_terms_vec(text: &str) -> Vec<String> {
-    text.split(|ch: char| !ch.is_alphanumeric())
-        .filter_map(|token| {
-            let trimmed = token.trim();
-            if trimmed.len() < 3 {
-                return None;
-            }
-            Some(trimmed.to_ascii_lowercase())
-        })
-        .collect()
-}
-
-fn lexical_terms_set(text: &str) -> HashSet<String> {
-    lexical_terms_vec(text).into_iter().collect()
-}
-
-fn overlap_score_vec(left: &HashSet<String>, right: &[String]) -> usize {
-    right
-        .iter()
-        .filter(|token| left.contains(token.as_str()))
-        .count()
-}
-
-fn compact_context_hint(value: &str) -> String {
-    let parts = value
-        .split('>')
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>();
-    if parts.len() <= 2 {
-        return parts.join(" > ");
-    }
-    parts[parts.len().saturating_sub(2)..].join(" > ")
-}
-
-fn compact_text_preview(value: &str, max_chars: usize) -> String {
-    let normalized = value.replace('\n', " / ").replace('\r', "");
-    let compact = normalized.split_whitespace().collect::<Vec<_>>().join(" ");
-    let mut chars = compact.chars();
-    let preview = chars.by_ref().take(max_chars).collect::<String>();
-    if chars.next().is_some() {
-        format!("{preview}...")
-    } else {
-        preview
     }
 }
 

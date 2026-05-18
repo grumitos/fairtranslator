@@ -7,6 +7,7 @@ use crate::error::AppError;
 use crate::models::{AiBatchEntry, AiBatchResponseRef, AiBatchTranslation, GlossaryTerm, Project};
 use crate::services::provider::{TranslationBatchContext, TranslationRequest, TranslationResponse};
 use crate::services::translation_integrity::collect_special_token_spans;
+use crate::services::translation_text::{is_japanese_language, is_spanish_language};
 
 #[derive(Debug, Clone)]
 pub struct CompactPromptBundle {
@@ -784,19 +785,6 @@ fn language_pair_prompt_rules(source_lang: &str, target_lang: &str) -> &'static 
     } else {
         ""
     }
-}
-
-fn is_japanese_language(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
-    lower == "ja" || lower.contains("japanese") || lower.contains("japon")
-}
-
-fn is_spanish_language(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
-    lower == "es"
-        || lower.contains("spanish")
-        || lower.contains("español")
-        || lower.contains("espanol")
 }
 
 fn compact_context_label(value: &str) -> String {

@@ -1,4 +1,5 @@
-use std::path::{Path, PathBuf};
+use std::collections::HashSet;
+use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -45,6 +46,8 @@ struct ProjectMeta {
 /// Uses atomic write strategy: writes to a temp directory first, then renames.
 /// If `project_path` already exists, the old directory is replaced atomically.
 pub fn save_project(project: &Project, project_path: &Path) -> Result<(), AppError> {
+    validate_project(project)?;
+
     let parent = project_path
         .parent()
         .ok_or_else(|| AppError::Io("Cannot determine parent directory".into()))?;
@@ -145,15 +148,8 @@ pub fn load_project(project_path: &Path) -> Result<Project, AppError> {
     }
 
     let meta_content = std::fs::read_to_string(&meta_path)?;
-    let meta: ProjectMeta = serde_json::from_str(&meta_content)?;
-
-    // Version check
-    if meta.schema_version > SCHEMA_VERSION {
-        return Err(AppError::Parse(format!(
-            "Project was saved with schema version {} but this app only supports up to version {}. Please update FairTranslator.",
-            meta.schema_version, SCHEMA_VERSION
-        )));
-    }
+    let meta: ProjectMeta = migrate_project_meta(serde_json::from_str(&meta_content)?)?;
+    validate_project_meta(&meta)?;
 
     // Read entry files
     let entries_dir = project_path.join("entries");
@@ -186,7 +182,7 @@ pub fn load_project(project_path: &Path) -> Result<Project, AppError> {
         )));
     }
 
-    Ok(Project {
+    let project = Project {
         id: meta.id,
         name: meta.name,
         source_lang: meta.source_lang,
@@ -198,12 +194,120 @@ pub fn load_project(project_path: &Path) -> Result<Project, AppError> {
         style_guide: meta.style_guide,
         created_at: meta.created_at,
         updated_at: meta.updated_at,
-    })
+    };
+    validate_project(&project)?;
+
+    Ok(project)
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+fn migrate_project_meta(mut meta: ProjectMeta) -> Result<ProjectMeta, AppError> {
+    match meta.schema_version {
+        1 => {
+            meta.schema_version = SCHEMA_VERSION;
+            Ok(meta)
+        }
+        SCHEMA_VERSION => Ok(meta),
+        version if version > SCHEMA_VERSION => Err(AppError::Parse(format!(
+            "Project was saved with schema version {} but this app only supports up to version {}. Please update FairTranslator.",
+            version, SCHEMA_VERSION
+        ))),
+        version => Err(AppError::Parse(format!(
+            "Unsupported project schema version {version}."
+        ))),
+    }
+}
+
+fn validate_project_meta(meta: &ProjectMeta) -> Result<(), AppError> {
+    validate_relative_paths(&meta.file_list)?;
+    validate_entry_filename_collisions(&meta.file_list)
+}
+
+fn validate_project(project: &Project) -> Result<(), AppError> {
+    let file_list = project
+        .files
+        .iter()
+        .map(|file| file.relative_path.clone())
+        .collect::<Vec<_>>();
+    validate_relative_paths(&file_list)?;
+    validate_entry_filename_collisions(&file_list)?;
+    validate_translation_files(&project.files)
+}
+
+fn validate_relative_paths(paths: &[String]) -> Result<(), AppError> {
+    let mut seen = HashSet::new();
+
+    for path in paths {
+        let trimmed = path.trim();
+        if trimmed.is_empty() {
+            return Err(AppError::Project(
+                "Project file list contains an empty relative path.".to_string(),
+            ));
+        }
+        if !seen.insert(trimmed.to_string()) {
+            return Err(AppError::Project(format!(
+                "Project file list contains duplicate path: {trimmed}"
+            )));
+        }
+
+        let path = Path::new(trimmed);
+        if path.is_absolute()
+            || path.components().any(|component| {
+                matches!(
+                    component,
+                    Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                )
+            })
+        {
+            return Err(AppError::Project(format!(
+                "Project file list contains unsafe relative path: {trimmed}"
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_entry_filename_collisions(paths: &[String]) -> Result<(), AppError> {
+    let mut entry_filenames = HashSet::new();
+
+    for relative_path in paths {
+        let entry_filename = entries_filename(relative_path);
+        let collision_key = entry_filename.to_lowercase();
+        if !entry_filenames.insert(collision_key) {
+            return Err(AppError::Project(format!(
+                "Project file list maps multiple files to entries/{entry_filename}"
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_translation_files(files: &[TranslationFile]) -> Result<(), AppError> {
+    for file in files {
+        let mut entry_ids = HashSet::new();
+        for entry in &file.entries {
+            if entry.id.trim().is_empty() {
+                return Err(AppError::Project(format!(
+                    "Project file '{}' contains an entry with an empty ID.",
+                    file.relative_path
+                )));
+            }
+            if !entry_ids.insert(entry.id.as_str()) {
+                return Err(AppError::Project(format!(
+                    "Project file '{}' contains duplicate entry ID: {}",
+                    file.relative_path, entry.id
+                )));
+            }
+        }
+    }
+
+    Ok(())
+}
 
 /// Convert a relative path like "data/Map001.json" into an entries filename "Map001.json".
 /// If it already has no directory component, returns as-is.
@@ -518,6 +622,143 @@ mod tests {
         let loaded = load_project(&temp).unwrap();
         assert!(loaded.style_guide.is_empty());
         assert_eq!(loaded.name, "Legacy");
+
+        let _ = fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn test_load_rejects_unsafe_file_list_path() {
+        let temp = std::env::temp_dir().join(format!(
+            "fairtl_test_unsafe_path_{}.fairtl",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        if temp.exists() {
+            fs::remove_dir_all(&temp).unwrap();
+        }
+        fs::create_dir_all(temp.join("entries")).unwrap();
+
+        let meta_json = serde_json::json!({
+            "schemaVersion": 2,
+            "id": "test-id",
+            "name": "Test",
+            "sourceLang": "ja",
+            "targetLang": "es",
+            "engine": "mv",
+            "gameDir": "C:\\Games\\Test",
+            "fileList": ["../Actors.json"],
+            "glossary": [],
+            "styleGuide": [],
+            "createdAt": "2026-01-01T00:00:00Z",
+            "updatedAt": "2026-01-01T00:00:00Z"
+        });
+        fs::write(temp.join("project.json"), meta_json.to_string()).unwrap();
+
+        let result = load_project(&temp);
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("unsafe relative path"),
+            "Expected unsafe path error, got: {err_msg}"
+        );
+
+        let _ = fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn test_load_rejects_duplicate_file_list_paths() {
+        let temp = std::env::temp_dir().join(format!(
+            "fairtl_test_duplicate_paths_{}.fairtl",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        if temp.exists() {
+            fs::remove_dir_all(&temp).unwrap();
+        }
+        fs::create_dir_all(temp.join("entries")).unwrap();
+
+        let meta_json = serde_json::json!({
+            "schemaVersion": 2,
+            "id": "test-id",
+            "name": "Test",
+            "sourceLang": "ja",
+            "targetLang": "es",
+            "engine": "mv",
+            "gameDir": "C:\\Games\\Test",
+            "fileList": ["data/Actors.json", "data/Actors.json"],
+            "glossary": [],
+            "styleGuide": [],
+            "createdAt": "2026-01-01T00:00:00Z",
+            "updatedAt": "2026-01-01T00:00:00Z"
+        });
+        fs::write(temp.join("project.json"), meta_json.to_string()).unwrap();
+        fs::write(temp.join("entries").join("Actors.json"), "[]").unwrap();
+
+        let result = load_project(&temp);
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("duplicate path"),
+            "Expected duplicate path error, got: {err_msg}"
+        );
+
+        let _ = fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn test_save_rejects_duplicate_entry_ids() {
+        let mut project = make_test_project();
+        project.files[0].entries[1].id = project.files[0].entries[0].id.clone();
+        let temp = std::env::temp_dir().join(format!(
+            "fairtl_test_duplicate_entries_{}.fairtl",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+
+        let result = save_project(&project, &temp);
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("duplicate entry ID"),
+            "Expected duplicate entry ID error, got: {err_msg}"
+        );
+
+        let _ = fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn test_save_rejects_entry_filename_collisions() {
+        let mut project = make_test_project();
+        project.files[1].relative_path = "other/Actors.json".to_string();
+        let temp = std::env::temp_dir().join(format!(
+            "fairtl_test_entry_filename_collision_{}.fairtl",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+
+        let result = save_project(&project, &temp);
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("maps multiple files"),
+            "Expected entry filename collision error, got: {err_msg}"
+        );
+
+        let _ = fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn test_save_rejects_case_insensitive_entry_filename_collisions() {
+        let mut project = make_test_project();
+        project.files[1].relative_path = "other/actors.json".to_string();
+        let temp = std::env::temp_dir().join(format!(
+            "fairtl_test_entry_filename_case_collision_{}.fairtl",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+
+        let result = save_project(&project, &temp);
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("maps multiple files"),
+            "Expected case-insensitive entry filename collision error, got: {err_msg}"
+        );
 
         let _ = fs::remove_dir_all(&temp);
     }
