@@ -1,6 +1,6 @@
 {
   "appName": "FairTranslator",
-  "loading": "Loading...",
+  "loading": "Loading…",
   "error": "Error",
   "save": "Save",
   "saveAs": "Save As",
@@ -15,10 +15,11 @@
   "new": "New",
   "newProject": "New Project",
   "openProject": "Open Project",
+  "openProjectFolder": "Select .fairtl project",
   "unsavedChanges": {
-    "openProject": "You have unsaved project changes. Open another project and discard them?",
-    "createProject": "You have unsaved project changes. Create a new project and discard them?",
-    "closeApp": "You have unsaved project changes. Close the app and discard them?",
+    "openProject": "You have unsaved changes in this project. Open another project and discard them?",
+    "createProject": "You have unsaved changes in this project. Create a new project and discard them?",
+    "closeApp": "You have unsaved changes in this project. Close the app and discard them?",
     "badge": "Unsaved"
   },
   "project": "Project",
@@ -45,31 +46,31 @@
     "newProject": "Create new project",
     "openProject": "Open existing project",
     "newProjectDesc": "Select an RPG Maker game folder to start translating",
-    "openProjectDesc": "Open a previously saved .fairtl project"
+    "openProjectDesc": "Open a saved .fairtl project"
   },
   "newProjectDialog": {
     "title": "New Project",
-    "description": "Select the game folder, name the project, and choose the working languages.",
+    "description": "Set up a project from an RPG Maker folder.",
     "name": "Project name",
     "namePlaceholder": "My translation",
     "gameDir": "Game folder",
-    "gameDirPlaceholder": "Select game folder...",
+    "gameDirPlaceholder": "Select game folder…",
     "browse": "Browse",
     "sourceLang": "Source language",
     "targetLang": "Target language",
     "create": "Create project",
-    "creating": "Creating project...",
+    "creating": "Creating project…",
     "selectFolder": "Select folder"
   },
   "export": {
     "title": "Export translations",
     "button": "Export",
     "selectFolder": "Select empty output folder",
-    "exporting": "Exporting...",
+    "exporting": "Exporting…",
     "success": "Export completed",
-    "successDetail": "{{files}} files exported, {{applied}} of {{total}} translations applied",
+    "successDetail": "Files exported: {{files}}. Translations applied: {{applied}}/{{total}}.",
     "warning": "Export completed with warnings",
-    "warningDetail": "{{count}} translation checks still need review.",
+    "warningDetail": "Checks needing review: {{count}}.",
     "noTranslations": "No translations to export",
     "errorNoProject": "No project open"
   }

@@ -12,6 +12,10 @@ use app_lib::services::exporter;
 use app_lib::services::persistence;
 use app_lib::services::provider::{TranslationProvider, TranslationRequest, TranslationResponse};
 use app_lib::services::translation_apply;
+use app_lib::services::translation_coverage::{
+    mark_project_coverage_issues_for_repair, validate_project_translation_coverage,
+    CoverageOptions, TranslationCoverageReport,
+};
 use app_lib::services::translation_orchestrator;
 use chrono::Local;
 use serde::Serialize;
@@ -31,6 +35,8 @@ struct Options {
     fallback_model: Option<String>,
     fallback_profile: Option<String>,
     fallback_reasoning_effort: Option<String>,
+    strict_target_language: bool,
+    repair_coverage: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -54,6 +60,9 @@ struct RunReport {
     fallback_policy: String,
     retry_count: usize,
     models_used: Vec<String>,
+    coverage_repair_marked: usize,
+    strict_target_language: bool,
+    coverage: TranslationCoverageReport,
 }
 
 #[derive(Debug, Clone)]
@@ -83,6 +92,11 @@ struct QaTranslateStatus {
     retry_count: usize,
     unresolved_entries: usize,
     planner_cache_hit: bool,
+    coverage_repair_marked: usize,
+    strict_target_language: bool,
+    coverage_complete: bool,
+    coverage_errors: usize,
+    coverage_warnings: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -106,13 +120,15 @@ fn print_usage() {
            --files <csv>            Archivos relativos a traducir (ej. data/System.json,data/Map034.json)\n\
            --source-lang <texto>    Idioma fuente (default: mixed Japanese and English)\n\
            --target-lang <texto>    Idioma destino (default: es)\n\
-           --style <texto>          Regla de guia de estilo; se puede repetir\n\
+           --style <texto>          Regla de guía de estilo; se puede repetir\n\
            --model <nombre>         Modelo Codex (default: gpt-5.4)\n\
            --profile <nombre>       Perfil Codex CLI (opcional)\n\
            --reasoning-effort <v>   Esfuerzo de razonamiento Codex CLI (ej. low, medium, high)\n\
            --fallback-model <m>     Modelo de relevo si el primario falla\n\
            --fallback-profile <p>   Perfil Codex CLI para el relevo (opcional)\n\
            --fallback-reasoning-effort <v>  Esfuerzo de razonamiento del relevo\n\
+           --strict-target-language Trata texto traducible idéntico al original como fallo de QA\n\
+           --repair-coverage        Reintenta entradas que fallan cobertura estricta en un proyecto existente\n\
            --help, -h               Muestra esta ayuda"
     );
 }
@@ -133,6 +149,8 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Options, String> {
     let mut fallback_model = None;
     let mut fallback_profile = None;
     let mut fallback_reasoning_effort = None;
+    let mut strict_target_language = false;
+    let mut repair_coverage = false;
 
     let mut args = argv.skip(1);
     while let Some(arg) = args.next() {
@@ -212,6 +230,8 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Options, String> {
                         "Falta valor para --fallback-reasoning-effort".to_string()
                     })?);
             }
+            "--strict-target-language" => strict_target_language = true,
+            "--repair-coverage" => repair_coverage = true,
             "--help" | "-h" => {
                 print_usage();
                 std::process::exit(0);
@@ -233,6 +253,8 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Options, String> {
         fallback_model,
         fallback_profile,
         fallback_reasoning_effort,
+        strict_target_language,
+        repair_coverage,
     })
 }
 
@@ -373,7 +395,7 @@ fn translate_with_usage_limit_fallback(
                         print_progress_line(
                             progress_log,
                             &format!(
-                                "[{}] Fallo por limite de uso en {} chunk {}/{} con {}: {}",
+                                "[{}] Falló por límite de uso en {} lote {}/{} con {}: {}",
                                 format_elapsed(started_at),
                                 file_path,
                                 chunk_index,
@@ -385,7 +407,7 @@ fn translate_with_usage_limit_fallback(
                         print_progress_line(
                             progress_log,
                             &format!(
-                                "[{}] Intentando fallback {}",
+                                "[{}] Intentando modelo alternativo {}",
                                 format_elapsed(started_at),
                                 run_config_label(fallback)
                             ),
@@ -394,7 +416,7 @@ fn translate_with_usage_limit_fallback(
                         if let Err(fallback_error) = runtime.block_on(fallback_provider.validate())
                         {
                             return Err(format!(
-                                "Fallo de traduccion en {} chunk {}/{}. Primario: {}. Fallback invalido: {}",
+                                "Falló la traducción en {} lote {}/{}. Primario: {}. Modelo alternativo inválido: {}",
                                 file_path, chunk_index, total_chunks, primary_error, fallback_error
                             ));
                         }
@@ -405,7 +427,7 @@ fn translate_with_usage_limit_fallback(
                         print_progress_line(
                             progress_log,
                             &format!(
-                                "[{}] Fallback activado | {}",
+                                "[{}] Modelo alternativo activado | {}",
                                 format_elapsed(started_at),
                                 run_config_label(active_config)
                             ),
@@ -415,7 +437,7 @@ fn translate_with_usage_limit_fallback(
                 }
 
                 return Err(format!(
-                    "Fallo de traduccion en {} chunk {}/{}: {}",
+                    "Falló la traducción en {} lote {}/{}: {}",
                     file_path, chunk_index, total_chunks, primary_error
                 ));
             }
@@ -468,7 +490,7 @@ fn snapshot_file_state(
         .files
         .iter()
         .find(|file| file.relative_path == file_path)
-        .ok_or_else(|| format!("No se encontro el archivo '{file_path}' en el proyecto"))?;
+        .ok_or_else(|| format!("No se encontró el archivo '{file_path}' en el proyecto"))?;
 
     Ok((file.entries.clone(), project.updated_at.clone()))
 }
@@ -483,7 +505,7 @@ fn restore_file_state(
         .files
         .iter_mut()
         .find(|file| file.relative_path == file_path)
-        .ok_or_else(|| format!("No se encontro el archivo '{file_path}' en el proyecto"))?;
+        .ok_or_else(|| format!("No se encontró el archivo '{file_path}' en el proyecto"))?;
     file.entries = entries;
     project.updated_at = updated_at;
     Ok(())
@@ -561,7 +583,7 @@ fn main() -> ExitCode {
     let runtime = match Builder::new_current_thread().enable_all().build() {
         Ok(runtime) => runtime,
         Err(error) => {
-            eprintln!("No se pudo iniciar runtime async: {error}");
+            eprintln!("No se pudo iniciar el entorno async: {error}");
             return ExitCode::from(1);
         }
     };
@@ -586,6 +608,38 @@ fn main() -> ExitCode {
     } else {
         options.files.len()
     };
+    let coverage_repair_marked = if options.repair_coverage {
+        let coverage_before_repair = validate_project_translation_coverage(
+            &project,
+            CoverageOptions {
+                strict_unchanged: true,
+                max_issues: usize::MAX,
+            },
+        );
+        let repair_result =
+            mark_project_coverage_issues_for_repair(&mut project, &coverage_before_repair);
+        if repair_result.marked_entries > 0 {
+            let repair_style = "Pase de reparación de cobertura: las entradas solicitadas fallaron antes la QA del idioma destino. Traduce las palabras visibles del idioma fuente al idioma destino; evita devolver texto idéntico salvo que sea un código protegido, marcador, acrónimo de RPG o nombre propio claro.";
+            if !project
+                .style_guide
+                .iter()
+                .any(|note| note.eq_ignore_ascii_case(repair_style))
+            {
+                project.style_guide.push(repair_style.into());
+            }
+            if let Err(error) = persistence::save_project(&project, &project_path) {
+                eprintln!(
+                    "No se pudo guardar reparación de cobertura '{}': {}",
+                    project_path.display(),
+                    error
+                );
+                return ExitCode::from(1);
+            }
+        }
+        repair_result.marked_entries
+    } else {
+        0
+    };
     let already_translated_entries = project
         .files
         .iter()
@@ -595,7 +649,7 @@ fn main() -> ExitCode {
         .count();
 
     print_progress_line(&progress_log, &format!(
-        "[{}] Preparado | game={} | engine={:?} | archivos objetivo={} | modelo={} | profile={} | reasoning={} | fallback={} | resume={} | ya_traducidas={}",
+        "[{}] Preparado | juego={} | motor={:?} | archivos objetivo={} | modelo={} | perfil={} | razonamiento={} | modelo alternativo={} | reanudar={} | ya_traducidas={}",
         format_elapsed(started_at),
         project.game_dir,
         project.engine,
@@ -610,6 +664,16 @@ fn main() -> ExitCode {
         if resumed { "si" } else { "no" },
         already_translated_entries
     ));
+    if options.repair_coverage {
+        print_progress_line(
+            &progress_log,
+            &format!(
+                "[{}] Reparación de cobertura | entradas marcadas={}",
+                format_elapsed(started_at),
+                coverage_repair_marked
+            ),
+        );
+    }
     let mut status = QaTranslateStatus {
         phase: "prepared".into(),
         provider: "codex".into(),
@@ -628,6 +692,11 @@ fn main() -> ExitCode {
         retry_count: 0,
         unresolved_entries: 0,
         planner_cache_hit: false,
+        coverage_repair_marked,
+        strict_target_language: options.strict_target_language,
+        coverage_complete: false,
+        coverage_errors: 0,
+        coverage_warnings: 0,
     };
     save_status(&status_path, &status);
     if resumed {
@@ -659,7 +728,7 @@ fn main() -> ExitCode {
     print_progress_line(
         &progress_log,
         &format!(
-            "[{}] Validando runtime Codex...",
+            "[{}] Validando entorno de Codex…",
             format_elapsed(started_at)
         ),
     );
@@ -669,14 +738,14 @@ fn main() -> ExitCode {
         if is_usage_limit_error(&primary_error.to_string()) {
             if let Some(fallback) = fallback_config.as_ref() {
                 print_progress_line(&progress_log, &format!(
-                    "[{}] Validacion del modelo primario fallo por limite de uso ({primary_error}). Intentando fallback {}",
+                    "[{}] Falló la validación del modelo primario por límite de uso ({primary_error}). Intentando modelo alternativo {}",
                     format_elapsed(started_at),
                     run_config_label(fallback)
                 ));
                 let fallback_provider = create_codex_provider(fallback);
                 if let Err(fallback_error) = runtime.block_on(fallback_provider.validate()) {
                     eprintln!(
-                        "Codex no esta listo. Primario: {primary_error}. Fallback: {fallback_error}"
+                        "Codex no está listo. Primario: {primary_error}. Modelo alternativo: {fallback_error}"
                     );
                     return ExitCode::from(1);
                 }
@@ -687,24 +756,24 @@ fn main() -> ExitCode {
                 print_progress_line(
                     &progress_log,
                     &format!(
-                        "[{}] Fallback activado | {}",
+                        "[{}] Modelo alternativo activado | {}",
                         format_elapsed(started_at),
                         run_config_label(&active_config)
                     ),
                 );
             } else {
-                eprintln!("Codex no esta listo: {primary_error}");
+                eprintln!("Codex no está listo: {primary_error}");
                 return ExitCode::from(1);
             }
         } else {
-            eprintln!("Codex no esta listo: {primary_error}");
+            eprintln!("Codex no está listo: {primary_error}");
             return ExitCode::from(1);
         }
     }
     print_progress_line(
         &progress_log,
         &format!(
-            "[{}] Runtime Codex listo. Construyendo plan de traduccion contextual...",
+            "[{}] Entorno de Codex listo. Construyendo plan de traducción contextual…",
             format_elapsed(started_at)
         ),
     );
@@ -741,7 +810,7 @@ fn main() -> ExitCode {
                 print_progress_line(
                     &progress_log,
                     &format!(
-                        "[{}] Planning | archivos {}/{} | chunks={} | entradas={}{}",
+                        "[{}] Planificación | archivos {}/{} | lotes={} | entradas={}{}",
                         format_elapsed(started_at),
                         snapshot.files_done,
                         snapshot.files_total,
@@ -764,7 +833,7 @@ fn main() -> ExitCode {
         &chunks,
         &ProviderType::Codex,
     ) {
-        eprintln!("Plan de traduccion invalido: {error}");
+        eprintln!("Plan de traducción inválido: {error}");
         return ExitCode::from(1);
     }
     let mut selected_file_order = Vec::new();
@@ -806,7 +875,7 @@ fn main() -> ExitCode {
     print_progress_line(
         &progress_log,
         &format!(
-            "[{}] Inicio | provider=codex {} | archivos={} | chunks={} | entradas={}",
+            "[{}] Inicio | proveedor=codex {} | archivos={} | lotes={} | entradas={}",
             format_elapsed(started_at),
             run_config_label(&active_config),
             selected_files,
@@ -825,7 +894,7 @@ fn main() -> ExitCode {
             render_progress_bar(translated_entries, total_planned_entries, 24);
 
         print_progress_line(&progress_log, &format!(
-            "[{}] {} chunks {}/{} | {} entradas {}/{} | archivo {}/{} | completados {}/{} | {} chunk {}/{} | items={}",
+            "[{}] {} lotes {}/{} | {} entradas {}/{} | archivo {}/{} | completados {}/{} | {} lote {}/{} | entradas={}",
             format_elapsed(started_at),
             completed_chunk_bar,
             chunk_idx + 1,
@@ -861,7 +930,7 @@ fn main() -> ExitCode {
                 print_progress_line(
                     &progress_log,
                     &format!(
-                        "[{}] Reintentando {} chunk {}/{} | intento {}/{} con {}",
+                        "[{}] Reintentando {} lote {}/{} | intento {}/{} con {}",
                         format_elapsed(started_at),
                         chunk.relative_path,
                         chunk.context.chunk_index,
@@ -897,7 +966,7 @@ fn main() -> ExitCode {
                         print_progress_line(
                             &progress_log,
                             &format!(
-                                "[{}] Respuesta de proveedor fuera de esquema en {} chunk {}/{} con {} | {}",
+                                "[{}] Respuesta de proveedor fuera de esquema en {} lote {}/{} con {} | {}",
                                 format_elapsed(started_at),
                                 chunk.relative_path,
                                 chunk.context.chunk_index,
@@ -914,7 +983,7 @@ fn main() -> ExitCode {
                         print_progress_line(
                             &progress_log,
                             &format!(
-                                "[{}] El chunk sigue fuera de esquema; se aislaran sus entradas una por una | {} chunk {}/{}",
+                                "[{}] El lote sigue fuera de esquema; se aislarán sus entradas una por una | {} lote {}/{}",
                                 format_elapsed(started_at),
                                 chunk.relative_path,
                                 chunk.context.chunk_index,
@@ -953,7 +1022,7 @@ fn main() -> ExitCode {
                 match snapshot_file_state(&project, &chunk.relative_path) {
                     Ok(snapshot) => snapshot,
                     Err(error) => {
-                        eprintln!("No se pudo preparar rollback de chunk: {error}");
+                        eprintln!("No se pudo preparar rollback de lote: {error}");
                         return ExitCode::from(1);
                     }
                 };
@@ -977,7 +1046,7 @@ fn main() -> ExitCode {
                             updated_at_snapshot,
                         ) {
                             eprintln!(
-                                "No se pudo revertir chunk parcial '{}': {error}",
+                                "No se pudo revertir lote parcial '{}': {error}",
                                 chunk.relative_path
                             );
                             return ExitCode::from(1);
@@ -997,13 +1066,13 @@ fn main() -> ExitCode {
                             ));
                         }
                         if !result.invalid_entries.is_empty() {
-                            issue_bits.push(format!("invalidas={}", result.invalid_entries.len()));
+                            issue_bits.push(format!("inválidas={}", result.invalid_entries.len()));
                         }
 
                         print_progress_line(
                             &progress_log,
                             &format!(
-                                "[{}] Respuesta invalida en {} chunk {}/{} con {} | {}",
+                                "[{}] Respuesta inválida en {} lote {}/{} con {} | {}",
                                 format_elapsed(started_at),
                                 chunk.relative_path,
                                 chunk.context.chunk_index,
@@ -1052,7 +1121,7 @@ fn main() -> ExitCode {
                                 Ok(snapshot) => snapshot,
                                 Err(error) => {
                                     eprintln!(
-                                            "No se pudo preparar clasificacion individual de chunk: {error}"
+                                            "No se pudo preparar clasificación individual de lote: {error}"
                                         );
                                     return ExitCode::from(1);
                                 }
@@ -1108,7 +1177,7 @@ fn main() -> ExitCode {
                             validation_warnings.extend(clean_result.warnings.clone());
                             if let Err(error) = persistence::save_project(&project, &project_path) {
                                 eprintln!(
-                                    "No se pudo guardar checkpoint parcial tras '{}' chunk {}/{}: {}",
+                                    "No se pudo guardar checkpoint parcial tras '{}' lote {}/{}: {}",
                                     chunk.relative_path,
                                     chunk.context.chunk_index,
                                     file_total_chunks,
@@ -1119,7 +1188,7 @@ fn main() -> ExitCode {
                             print_progress_line(
                                 &progress_log,
                                 &format!(
-                                    "[{}] Subconjunto limpio aplicado en {} chunk {}/{} | aplicadas +{}",
+                                    "[{}] Subconjunto limpio aplicado en {} lote {}/{} | aplicadas +{}",
                                     format_elapsed(started_at),
                                     chunk.relative_path,
                                     chunk.context.chunk_index,
@@ -1140,7 +1209,7 @@ fn main() -> ExitCode {
                             let reason_prefix = if missing_ids.contains(&request.entry_id) {
                                 "respuesta omitida".to_string()
                             } else {
-                                "integridad invalida".to_string()
+                                "integridad inválida".to_string()
                             };
                             let single_context = build_single_entry_context(&chunk, request);
                             let mut single_success = false;
@@ -1279,7 +1348,7 @@ fn main() -> ExitCode {
                                 print_progress_line(
                                     &progress_log,
                                     &format!(
-                                        "[{}] Entrada pendiente para revision manual | {}",
+                                        "[{}] Entrada pendiente para revisión manual | {}",
                                         format_elapsed(started_at),
                                         request.entry_id
                                     ),
@@ -1302,7 +1371,7 @@ fn main() -> ExitCode {
                     }
                     if let Err(error) = persistence::save_project(&project, &project_path) {
                         eprintln!(
-                            "No se pudo guardar checkpoint tras '{}' chunk {}/{}: {}",
+                            "No se pudo guardar checkpoint tras '{}' lote {}/{}: {}",
                             chunk.relative_path,
                             chunk.context.chunk_index,
                             file_total_chunks,
@@ -1315,7 +1384,7 @@ fn main() -> ExitCode {
                     let finished_entry_bar =
                         render_progress_bar(translated_entries, total_planned_entries, 24);
                     print_progress_line(&progress_log, &format!(
-                        "[{}] {} chunks {}/{} | {} entradas {}/{} | archivo {}/{} | completados {}/{} | completado {} chunk {}/{} | aplicadas +{}",
+                        "[{}] {} lotes {}/{} | {} entradas {}/{} | archivo {}/{} | completados {}/{} | completado {} lote {}/{} | aplicadas +{}",
                         format_elapsed(started_at),
                         finished_chunk_bar,
                         chunk_idx + 1,
@@ -1372,7 +1441,7 @@ fn main() -> ExitCode {
         status.files_completed = completed_files.len();
         save_status(&status_path, &status);
         eprintln!(
-            "La corrida termino con {} entradas pendientes para revision manual. Revisa '{}'.",
+            "La corrida terminó con {} entradas pendientes para revisión manual. Revisa '{}'.",
             failure_records.len(),
             failure_manifest_path.display()
         );
@@ -1406,6 +1475,18 @@ fn main() -> ExitCode {
     };
     validation_warnings.extend(export_result.warnings.clone());
 
+    let coverage = validate_project_translation_coverage(
+        &project,
+        CoverageOptions {
+            strict_unchanged: options.strict_target_language,
+            ..CoverageOptions::default()
+        },
+    );
+    status.strict_target_language = options.strict_target_language;
+    status.coverage_complete = coverage.complete;
+    status.coverage_errors = coverage.error_count;
+    status.coverage_warnings = coverage.warning_count;
+
     let report = RunReport {
         game_dir: project.game_dir.clone(),
         project_path: project_path.display().to_string(),
@@ -1425,11 +1506,18 @@ fn main() -> ExitCode {
         fallback_policy,
         retry_count: retry_count_total,
         models_used,
+        coverage_repair_marked,
+        strict_target_language: options.strict_target_language,
+        coverage,
     };
 
     match serde_json::to_string_pretty(&report) {
         Ok(text) => {
-            status.phase = "completed".into();
+            status.phase = if report.coverage.complete {
+                "completed".into()
+            } else {
+                "needs-review".into()
+            };
             status.entries_applied = translated_entries;
             status.chunks_completed = total_chunks;
             status.files_completed = completed_files.len();
@@ -1437,16 +1525,25 @@ fn main() -> ExitCode {
             print_progress_line(
                 &progress_log,
                 &format!(
-                    "[{}] Fin | archivos={}/{} | entradas={}/{} | warnings={}",
+                    "[{}] Fin | archivos={}/{} | entradas={}/{} | avisos={} | cobertura={} errores={} avisos_cobertura={}",
                     format_elapsed(started_at),
                     completed_files.len(),
                     selected_files,
                     translated_entries,
                     total_planned_entries,
-                    report.validation_warnings.len()
+                    report.validation_warnings.len(),
+                    if report.coverage.complete { "PASS" } else { "FAIL" },
+                    report.coverage.error_count,
+                    report.coverage.warning_count
                 ),
             );
             println!("{text}");
+            if !report.coverage.complete {
+                eprintln!(
+                    "La cobertura de traducción no cumple el criterio de idioma destino. Revisa el campo 'coverage' del reporte."
+                );
+                return ExitCode::from(1);
+            }
         }
         Err(error) => {
             eprintln!("No se pudo serializar reporte: {error}");
@@ -1459,7 +1556,7 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_retryable_provider_shape_error, prepare_workspace_export_dir};
+    use super::{is_retryable_provider_shape_error, parse_args, prepare_workspace_export_dir};
 
     #[test]
     fn provider_shape_errors_are_retryable() {
@@ -1509,5 +1606,24 @@ mod tests {
         assert!(!removed);
         assert!(!export_dir.exists());
         let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn parse_args_accepts_repair_coverage_flag() {
+        let options = parse_args(
+            [
+                "qa_translate_provider",
+                "--game-dir",
+                "D:\\Games\\Demo",
+                "--repair-coverage",
+                "--strict-target-language",
+            ]
+            .into_iter()
+            .map(str::to_string),
+        )
+        .unwrap();
+
+        assert!(options.repair_coverage);
+        assert!(options.strict_target_language);
     }
 }

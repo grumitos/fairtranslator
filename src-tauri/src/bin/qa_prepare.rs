@@ -62,7 +62,7 @@ fn print_usage() {
            --report <ruta>       Markdown global a escribir (default: <workspace>\\campaign-report.md)\n\
            --source-lang <code>  Idioma fuente del proyecto (default: en)\n\
            --target-lang <code>  Idioma destino del proyecto (default: es)\n\
-           --chunk-size <n>      Tamano de lote para prompts IA (default: 200)\n\
+           --chunk-size <n>      Tamaño de lote para prompts IA (default: 200)\n\
            --help, -h            Muestra esta ayuda"
     );
 }
@@ -109,7 +109,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Options, String> {
                     .ok_or_else(|| "Falta valor para --chunk-size".to_string())?;
                 chunk_size = value
                     .parse::<usize>()
-                    .map_err(|_| format!("Valor invalido para --chunk-size: {value}"))?;
+                    .map_err(|_| format!("Valor inválido para --chunk-size: {value}"))?;
                 if chunk_size == 0 {
                     return Err("--chunk-size debe ser >= 1".to_string());
                 }
@@ -119,7 +119,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Options, String> {
                 std::process::exit(0);
             }
             _ if arg.starts_with("--") => {
-                return Err(format!("Opcion desconocida: {arg}"));
+                return Err(format!("Opción desconocida: {arg}"));
             }
             _ => paths.push(arg),
         }
@@ -402,10 +402,13 @@ fn build_report(workspace: &Path, manifests: &[SampleManifest], options: &Option
         ));
         markdown.push_str(&format!("- Project: `{}`\n", manifest.project_path));
         markdown.push_str(&format!("- Exports dir: `{}`\n", manifest.exports_dir));
-        markdown.push_str(&format!("- AI batch dir: `{}`\n", manifest.batch_dir));
+        markdown.push_str(&format!(
+            "- Directorio de lotes IA: `{}`\n",
+            manifest.batch_dir
+        ));
         markdown.push_str(&format!("- Manifest: `{}`\n", manifest.manifest_path));
         markdown.push_str(&format!(
-            "- AI batches: `{}` (`instructionCandidates={}`)\n\n",
+            "- Lotes IA: `{}` (`instructionCandidates={}`)\n\n",
             manifest.batch_count, manifest.instruction_candidates
         ));
     }
@@ -438,7 +441,7 @@ fn main() -> ExitCode {
         match prepare_sample(selected, &options, index) {
             Ok(manifest) => {
                 println!(
-                    "[OK] {} => engine={} files={} entries={} batches={}",
+                    "[OK] {} => motor={} archivos={} entradas={} lotes={}",
                     manifest.sample_name,
                     manifest.engine,
                     manifest.files,
@@ -469,8 +472,8 @@ fn main() -> ExitCode {
         return ExitCode::from(1);
     }
 
-    println!("Report: {}", report_path.display());
-    println!("Workspace: {}", options.workspace.display());
+    println!("Reporte: {}", report_path.display());
+    println!("Espacio de trabajo: {}", options.workspace.display());
 
     ExitCode::SUCCESS
 }

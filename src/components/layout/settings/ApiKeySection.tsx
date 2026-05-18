@@ -166,7 +166,9 @@ export function ApiKeySection({ provider }: ApiKeySectionProps) {
       }
       toast.success(t("apiKeys.saved"));
     } catch (e) {
-      toast.error(String(e));
+      toast.error(t("apiKeys.saveFailed"), {
+        description: e instanceof Error ? e.message : String(e),
+      });
     }
   }, [
     apiKey,
@@ -202,7 +204,9 @@ export function ApiKeySection({ provider }: ApiKeySectionProps) {
       }
       toast.success(t("apiKeys.removed"));
     } catch (e) {
-      toast.error(String(e));
+      toast.error(t("apiKeys.removeFailed"), {
+        description: e instanceof Error ? e.message : String(e),
+      });
     }
   }, [isCodex, provider, refreshCodexStatus, remove, t]);
 

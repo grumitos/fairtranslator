@@ -1,16 +1,16 @@
 {
-  "title": "Configuracion",
-  "description": "Configura proveedores, apariencia e idioma de la aplicacion.",
+  "title": "Configuración",
+  "description": "Configura proveedores, apariencia e idioma de la aplicación.",
   "apiKeys": {
     "title": "Proveedores",
     "openai": {
       "label": "OpenAI",
       "placeholder": "sk-...",
-      "organization": "Organizacion de OpenAI",
-      "organizationPlaceholder": "ID de organizacion de OpenAI (opcional)",
+      "organization": "Organización de OpenAI",
+      "organizationPlaceholder": "ID de organización de OpenAI (opcional)",
       "project": "Proyecto de OpenAI",
       "projectPlaceholder": "ID de proyecto de OpenAI (opcional)",
-      "authNote": "La autenticacion soportada aqui para OpenAI es por API key. No se usan cookies ni sesion de ChatGPT; los campos organizacion/proyecto agregan scoping oficial a la request."
+      "authNote": "Usa claves de API, no sesiones de ChatGPT. Organización y proyecto son opcionales."
     },
     "deepl": {
       "label": "DeepL",
@@ -26,38 +26,40 @@
       "commandPathPlaceholder": "Ruta al ejecutable de codex (opcional)",
       "profile": "Perfil de Codex",
       "profilePlaceholder": "Nombre de perfil de Codex (opcional)",
-      "authNote": "La autenticacion de Codex la gestiona el CLI instalado. Deja la ruta vacia para usar `codex` desde PATH; el estado inferior muestra si el binario y la sesion de ChatGPT ya estan listos.",
-      "login": "Iniciar sesion con Codex",
-      "deviceLogin": "Usar codigo de dispositivo",
-      "loginSuccess": "El inicio de sesion de Codex esta listo",
-      "loginIncomplete": "El inicio de sesion de Codex no se completo",
-      "loginFailed": "Fallo el inicio de sesion de Codex",
+      "authNote": "Codex usa la CLI instalada. Deja la ruta vacía para usar PATH.",
+      "login": "Iniciar sesión con Codex",
+      "deviceLogin": "Usar código de dispositivo",
+      "loginSuccess": "El inicio de sesión de Codex está listo",
+      "loginIncomplete": "El inicio de sesión de Codex no se completó",
+      "loginFailed": "Falló el inicio de sesión de Codex",
       "statusReady": "Instalado y autenticado",
-      "statusLoginRequired": "Instalado, falta iniciar sesion",
-      "statusNotInstalled": "No se encontro el CLI",
-      "statusError": "Se detecto el CLI, pero fallo la comprobacion",
+      "statusLoginRequired": "Instalado, falta iniciar sesión",
+      "statusNotInstalled": "No se encontró el CLI",
+      "statusError": "Se detectó el CLI, pero falló la comprobación",
       "checkStatus": "Comprobar CLI",
-      "sourceSidecar": "Usando el runtime Codex empaquetado con la app",
+      "sourceSidecar": "Usando el entorno de Codex incluido con la app",
       "sourcePath": "Usando `codex` desde PATH",
       "sourceConfigured": "Usando una ruta personalizada del ejecutable",
       "resolvedPathLabel": "Ejecutable",
-      "versionLabel": "Version"
+      "versionLabel": "Versión"
     },
-    "save": "Guardar configuracion",
-    "saved": "Configuracion guardada",
-    "remove": "Limpiar configuracion",
-    "removed": "Configuracion eliminada",
+    "save": "Guardar",
+    "saved": "Configuración guardada",
+    "saveFailed": "No se pudo guardar el proveedor",
+    "remove": "Limpiar",
+    "removed": "Configuración eliminada",
+    "removeFailed": "No se pudo limpiar el proveedor",
     "validate": "Validar",
-    "validating": "Validando...",
+    "validating": "Validando…",
     "valid": "Proveedor listo",
-    "invalid": "La validacion del proveedor fallo",
-    "apiKey": "API key",
+    "invalid": "Falló la validación del proveedor",
+    "apiKey": "Clave de API",
     "model": "Modelo",
     "modelPlaceholder": "gpt-4o-mini / gpt-5.4",
-    "endpoint": "Endpoint personalizado",
+    "endpoint": "URL personalizada",
     "endpointPlaceholder": "URL del endpoint (opcional)",
     "noKey": "Sin clave configurada",
-    "configured": "Configurada"
+    "configured": "Listo"
   },
   "appearance": {
     "title": "Apariencia",
@@ -69,13 +71,13 @@
   "language": {
     "title": "Idioma",
     "select": "Seleccionar idioma",
-    "es": "Espanol",
-    "en": "Ingles"
+    "es": "Español",
+    "en": "Inglés"
   },
   "wordWrap": {
-    "title": "Ajuste de linea",
+    "title": "Ajuste de línea",
     "label": "Columna de ajuste",
-    "description": "Numero de caracteres antes de ajustar la linea (0 = desactivado)",
+    "description": "Ajusta después de esta cantidad de caracteres. Usa 0 para desactivar.",
     "disabled": "Desactivado",
     "chars": "{{count}} caracteres"
   }

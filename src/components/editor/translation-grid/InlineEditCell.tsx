@@ -10,6 +10,7 @@ interface InlineEditCellProps {
   onCancel: () => void;
   onNavigate: (direction: "next" | "prev") => void;
   onOpenDialog: (entry: EntryWithPath) => void;
+  ariaLabel: string;
 }
 
 export function InlineEditCell({
@@ -20,6 +21,7 @@ export function InlineEditCell({
   onCancel,
   onNavigate,
   onOpenDialog,
+  ariaLabel,
 }: InlineEditCellProps) {
   const [value, setValue] = useState(initialValue);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -115,6 +117,8 @@ export function InlineEditCell({
   return (
     <textarea
       ref={textareaRef}
+      name={`translation-${entry.id}`}
+      aria-label={ariaLabel}
       value={value}
       onChange={(e) => setValue(e.target.value)}
       onKeyDown={handleKeyDown}

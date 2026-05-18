@@ -26,6 +26,7 @@ describe("InlineEditCell", () => {
         onCancel={onCancel}
         onNavigate={onNavigate}
         onOpenDialog={onOpenDialog}
+        ariaLabel="Translation"
       />,
     );
 

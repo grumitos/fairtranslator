@@ -9,8 +9,6 @@ function App() {
   const theme = useSettingsStore((s) => s.theme);
   const setTheme = useSettingsStore((s) => s.setTheme);
 
-  // Apply initial theme on mount — delegates to store's setTheme
-  // which handles document class toggling
   useEffect(() => {
     setTheme(theme);
   }, [theme, setTheme]);

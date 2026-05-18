@@ -7,7 +7,6 @@ import { cn } from "@/lib/utils";
 import { FileText, FolderOpen } from "lucide-react";
 import type { TranslationFile } from "@/types/domain";
 
-/** Returns a Tailwind color class based on translation progress percentage */
 function progressColor(percent: number): string {
   if (percent >= 100) return "ft-progress-complete";
   if (percent >= 60) return "ft-progress-good";
@@ -77,10 +76,11 @@ export function Sidebar() {
         <span className="truncate text-sm font-semibold tracking-normal">{project.name}</span>
       </div>
 
-      {/* Global progress bar */}
       <div className="border-b border-sidebar-border px-3 py-2">
         <div className="mb-1 flex items-center justify-between text-[11px] text-muted-foreground">
-          <span>{t("statusBar.percentage", { percent: globalStats.percent })}</span>
+          <span aria-label={t("statusBar.percentage", { percent: globalStats.percent })}>
+            {t("statusBar.percentageShort", { percent: globalStats.percent })}
+          </span>
           <span className="font-medium tabular-nums text-sidebar-foreground">{globalStats.translated}/{globalStats.total}</span>
         </div>
         <div
@@ -100,7 +100,6 @@ export function Sidebar() {
 
       <ScrollArea className="flex-1">
         <div className="p-1.5">
-          {/* All entries */}
           <button
             onClick={() => setActiveFile(null)}
             className={cn(
@@ -116,7 +115,6 @@ export function Sidebar() {
             </span>
           </button>
 
-          {/* File groups */}
           {grouped.length === 0 ? (
             <div className="ft-empty-state mt-2 px-3 py-5 text-xs text-muted-foreground">
               {t("sidebar.noFiles")}
@@ -147,7 +145,6 @@ export function Sidebar() {
                         {translatedCount}/{entryCount}
                       </span>
                     </div>
-                    {/* Per-file mini progress bar */}
                     <div
                       className="mt-1 ml-5 h-1 w-[calc(100%-1.25rem)] overflow-hidden rounded-full bg-background/60"
                       role="progressbar"

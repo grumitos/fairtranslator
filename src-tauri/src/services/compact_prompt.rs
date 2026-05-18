@@ -309,8 +309,11 @@ pub fn parse_provider_response(
         return parse_compact_provider_response(parsed, entry_refs);
     }
 
-    let legacy: LegacyProviderEnvelope = serde_json::from_str(normalized)
-        .map_err(|error| AppError::Api(format!("Failed to parse provider response: {error}")))?;
+    let legacy: LegacyProviderEnvelope = serde_json::from_str(normalized).map_err(|error| {
+        AppError::Api(format!(
+            "No se pudo leer la respuesta del proveedor: {error}"
+        ))
+    })?;
     parse_legacy_provider_response(legacy, entry_refs)
 }
 
@@ -325,7 +328,11 @@ pub fn parse_external_ai_response(
 
     match value {
         serde_json::Value::Array(items) => serde_json::from_value(serde_json::Value::Array(items))
-            .map_err(|error| AppError::Parse(format!("Invalid AI batch response schema: {error}"))),
+            .map_err(|error| {
+                AppError::Parse(format!(
+                    "El esquema de la respuesta de IA no es válido: {error}"
+                ))
+            }),
         serde_json::Value::Object(map) => {
             let object = serde_json::Value::Object(map.clone());
             let looks_legacy = map.contains_key("projectId")
@@ -358,7 +365,9 @@ pub fn parse_external_ai_response(
 
             let envelope: LegacyExternalEnvelope =
                 serde_json::from_value(object.clone()).map_err(|error| {
-                    AppError::Parse(format!("Invalid AI batch response schema: {error}"))
+                    AppError::Parse(format!(
+                        "El esquema de la respuesta de IA no es válido: {error}"
+                    ))
                 })?;
             validate_envelope_ids(
                 envelope.project_id.as_deref(),
@@ -369,7 +378,8 @@ pub fn parse_external_ai_response(
             Ok(envelope.translations)
         }
         _ => Err(AppError::Parse(
-            "AI batch response must be a JSON array or an object with 'translations'".into(),
+            "La respuesta del lote para IA debe ser un arreglo JSON o un objeto con 'translations'"
+                .into(),
         )),
     }
 }
@@ -383,14 +393,14 @@ fn validate_envelope_ids(
     if let Some(expected) = expected_project_id {
         if actual_project_id != Some(expected) {
             return Err(AppError::Parse(
-                "AI batch response projectId does not match the current export batch".into(),
+                "El projectId de la respuesta de IA no coincide con el lote exportado".into(),
             ));
         }
     }
     if let Some(expected) = expected_batch_id {
         if actual_batch_id != Some(expected) {
             return Err(AppError::Parse(
-                "AI batch response batchId does not match the current export batch".into(),
+                "El batchId de la respuesta de IA no coincide con el lote exportado".into(),
             ));
         }
     }
@@ -403,7 +413,7 @@ fn parse_compact_provider_response(
 ) -> Result<Vec<TranslationResponse>, AppError> {
     if parsed.translations.len() != entry_refs.len() {
         return Err(AppError::Api(format!(
-            "Provider returned {} translations but expected {}",
+            "El proveedor devolvió {} traducciones, pero se esperaban {}",
             parsed.translations.len(),
             entry_refs.len()
         )));
@@ -419,13 +429,13 @@ fn parse_compact_provider_response(
     for translation in parsed.translations {
         let entry_ref = refs_by_id.get(&translation.local_id).ok_or_else(|| {
             AppError::Api(format!(
-                "Provider returned an unexpected local entry ID: {}",
+                "El proveedor devolvió un ID local inesperado: {}",
                 translation.local_id
             ))
         })?;
         if !seen.insert(translation.local_id) {
             return Err(AppError::Api(format!(
-                "Provider returned a duplicate local entry ID: {}",
+                "El proveedor devolvió un ID local duplicado: {}",
                 translation.local_id
             )));
         }
@@ -441,7 +451,7 @@ fn parse_compact_provider_response(
         .map(|entry| {
             let translated_text = by_entry.remove(&entry.entry_id).ok_or_else(|| {
                 AppError::Api(format!(
-                    "Provider omitted a translation for entry ID {}",
+                    "El proveedor omitió la traducción de la entrada {}",
                     entry.entry_id
                 ))
             })?;
@@ -459,7 +469,7 @@ fn parse_legacy_provider_response(
 ) -> Result<Vec<TranslationResponse>, AppError> {
     if legacy.translations.len() != entry_refs.len() {
         return Err(AppError::Api(format!(
-            "Provider returned {} translations but expected {}",
+            "El proveedor devolvió {} traducciones, pero se esperaban {}",
             legacy.translations.len(),
             entry_refs.len()
         )));
@@ -479,13 +489,13 @@ fn parse_legacy_provider_response(
     for translation in legacy.translations {
         if !expected_ids.contains(translation.entry_id.as_str()) {
             return Err(AppError::Api(format!(
-                "Provider returned an unexpected entry ID: {}",
+                "El proveedor devolvió un ID de entrada inesperado: {}",
                 translation.entry_id
             )));
         }
         if !seen_ids.insert(translation.entry_id.clone()) {
             return Err(AppError::Api(format!(
-                "Provider returned a duplicate entry ID: {}",
+                "El proveedor devolvió un ID de entrada duplicado: {}",
                 translation.entry_id
             )));
         }
@@ -504,7 +514,7 @@ fn parse_legacy_provider_response(
         .map(|entry| {
             let translated_text = by_id.remove(&entry.entry_id).ok_or_else(|| {
                 AppError::Api(format!(
-                    "Provider omitted a translation for entry ID {}",
+                    "El proveedor omitió la traducción de la entrada {}",
                     entry.entry_id
                 ))
             })?;
@@ -522,13 +532,14 @@ fn parse_compact_external_response(
 ) -> Result<Vec<AiBatchTranslation>, AppError> {
     let entry_refs = entry_refs.ok_or_else(|| {
         AppError::Parse(
-            "AI batch response used compact local IDs but no response map was provided".into(),
+            "La respuesta de IA usó ID locales compactos, pero no se entregó el mapa de respuesta"
+                .into(),
         )
     })?;
 
     if parsed.translations.len() != entry_refs.len() {
         return Err(AppError::Parse(format!(
-            "AI batch response has {} translations but expected {}",
+            "La respuesta de IA tiene {} traducciones, pero se esperaban {}",
             parsed.translations.len(),
             entry_refs.len()
         )));
@@ -544,13 +555,13 @@ fn parse_compact_external_response(
     for item in parsed.translations {
         let entry_ref = refs_by_id.get(&item.local_id).ok_or_else(|| {
             AppError::Parse(format!(
-                "AI batch response returned an unexpected local entry ID: {}",
+                "La respuesta de IA devolvió un ID local inesperado: {}",
                 item.local_id
             ))
         })?;
         if !seen.insert(item.local_id) {
             return Err(AppError::Parse(format!(
-                "AI batch response returned a duplicate local entry ID: {}",
+                "La respuesta de IA devolvió un ID local duplicado: {}",
                 item.local_id
             )));
         }
@@ -754,12 +765,21 @@ fn build_system_prompt(
 fn language_pair_prompt_rules(source_lang: &str, target_lang: &str) -> &'static str {
     if is_japanese_language(source_lang) && is_spanish_language(target_lang) {
         concat!(
+            "For Spanish targets, translate visible RPG Maker database names, enemy/troop names, skill/item/armor names, game titles, menu terms and meaningful compact labels into Spanish.\n",
+            "Do not leave English words unchanged just because they are short, uppercase or concatenated; split compounds naturally when needed, such as FIREHOUND to Sabueso de fuego.\n",
+            "Preserve only clear proper names, staff names, handles, control codes, script/plugin identifiers, file names, variable names, placeholders and common RPG acronyms such as HP, MP, TP and EXP.\n",
             "For Japanese to Spanish, write natural neutral Spanish instead of literal calques.\n",
-            "Examples: 学校の帰り道 is de vuelta de la escuela, not de regreso a la escuela; 一人称 in settings is forma de referirse a si mismo, not primera persona.\n",
+            "Examples: 学校の帰り道 is de vuelta de la escuela, not de regreso a la escuela; 一人称 in settings is forma de referirse a sí mismo, not primera persona.\n",
             "Adapt dialogue like dubbing or subtitles: preserve intent and timing, prefer compact Spanish that fits the original text box/window over word-for-word completeness.\n",
             "Keep UI and choice labels short enough for RPG Maker windows; avoid sentence-length labels when a concise command works.\n",
             "Use Spanish punctuation in Spanish text; avoid Japanese punctuation such as 。, ？, ！, 「」 unless it is part of a preserved name or source-only artifact.\n",
             "For credits/staff rolls, translate role headings but preserve names, circles, brand names and supporter handles.\n"
+        )
+    } else if is_spanish_language(target_lang) {
+        concat!(
+            "For Spanish targets, translate visible RPG Maker database names, enemy/troop names, skill/item/armor names, game titles, menu terms and meaningful compact labels into Spanish.\n",
+            "Do not leave English words unchanged just because they are short, uppercase or concatenated; split compounds naturally when needed, such as FIREHOUND to Sabueso de fuego.\n",
+            "Preserve only clear proper names, staff names, handles, control codes, script/plugin identifiers, file names, variable names, placeholders and common RPG acronyms such as HP, MP, TP and EXP.\n"
         )
     } else {
         ""
@@ -976,6 +996,27 @@ mod tests {
     }
 
     #[test]
+    fn test_build_provider_bundle_adds_spanish_database_name_rules() {
+        let bundle = build_provider_bundle(
+            "en",
+            "es",
+            &[TranslationRequest {
+                entry_id: "entry-1".into(),
+                file_context: "Enemies > #1 > name".into(),
+                text: "FIREHOUND".into(),
+                notes: String::new(),
+            }],
+            &[],
+            &sample_context(),
+        )
+        .unwrap();
+
+        assert!(bundle.system_prompt.contains("enemy/troop names"));
+        assert!(bundle.system_prompt.contains("FIREHOUND"));
+        assert!(bundle.system_prompt.contains("HP, MP, TP and EXP"));
+    }
+
+    #[test]
     fn test_parse_provider_response_restores_real_ids_and_newlines() {
         let bundle = build_provider_bundle(
             "ja",
@@ -1121,6 +1162,6 @@ mod tests {
         assert!(bundle.system_prompt.contains("de vuelta de la escuela"));
         assert!(bundle
             .system_prompt
-            .contains("forma de referirse a si mismo"));
+            .contains("forma de referirse a sí mismo"));
     }
 }

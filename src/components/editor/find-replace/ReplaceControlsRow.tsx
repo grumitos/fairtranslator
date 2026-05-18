@@ -24,9 +24,12 @@ export function ReplaceControlsRow({
   return (
     <div className="flex items-center gap-1">
       <Input
+        name="replace-text"
         value={replaceText}
         onChange={(e) => onReplaceTextChange(e.target.value)}
         placeholder={t("findReplace.replacePlaceholder")}
+        autoComplete="off"
+        aria-label={t("findReplace.replace")}
         className="h-7 flex-1 text-xs"
         onKeyDown={(e) => {
           if (e.key === "Enter") {
@@ -37,7 +40,14 @@ export function ReplaceControlsRow({
 
       <Tooltip>
         <TooltipTrigger asChild>
-          <Button variant="ghost" size="icon-sm" onClick={onReplaceOne} disabled={disabled}>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={onReplaceOne}
+            disabled={disabled}
+            aria-label={t("findReplace.replaceOne")}
+            title={t("findReplace.replaceOne")}
+          >
             <Replace className="size-3.5" />
           </Button>
         </TooltipTrigger>
@@ -46,7 +56,14 @@ export function ReplaceControlsRow({
 
       <Tooltip>
         <TooltipTrigger asChild>
-          <Button variant="ghost" size="icon-sm" onClick={onReplaceAll} disabled={disabled}>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={onReplaceAll}
+            disabled={disabled}
+            aria-label={t("findReplace.replaceAll")}
+            title={t("findReplace.replaceAll")}
+          >
             <ReplaceAll className="size-3.5" />
           </Button>
         </TooltipTrigger>

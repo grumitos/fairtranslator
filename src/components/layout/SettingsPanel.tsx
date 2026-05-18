@@ -55,7 +55,7 @@ export function SettingsPanel({ open, onOpenChange }: SettingsPanelProps) {
           <SheetDescription>{t("settings:description")}</SheetDescription>
         </SheetHeader>
 
-        <Tabs defaultValue="apikeys" className="mt-4">
+        <Tabs defaultValue="apikeys" className="px-4 pb-4">
           <TabsList className="w-full">
             <TabsTrigger value="apikeys" className="flex-1">
               {t("settings:apiKeys.title")}
@@ -72,7 +72,6 @@ export function SettingsPanel({ open, onOpenChange }: SettingsPanelProps) {
           </TabsContent>
 
           <TabsContent value="appearance" className="mt-4 space-y-6">
-            {/* Theme */}
             <div className="space-y-2">
               <Label id="settings-theme-label">{t("settings:appearance.theme")}</Label>
               <Select value={theme} onValueChange={(v) => setTheme(v as "light" | "dark" | "system")}>
@@ -87,7 +86,6 @@ export function SettingsPanel({ open, onOpenChange }: SettingsPanelProps) {
               </Select>
             </div>
 
-            {/* Language */}
             <div className="space-y-2">
               <Label id="settings-language-label">{t("settings:language.title")}</Label>
               <Select
@@ -104,7 +102,6 @@ export function SettingsPanel({ open, onOpenChange }: SettingsPanelProps) {
               </Select>
             </div>
 
-            {/* Word Wrap */}
             <div className="space-y-2">
               <Label htmlFor="settings-word-wrap-column">{t("settings:wordWrap.title")}</Label>
               <Input

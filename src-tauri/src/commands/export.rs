@@ -20,7 +20,7 @@ pub async fn export_project(
             .lock()
             .map_err(|e| AppError::Project(format!("Lock error: {e}")))?;
         proj.clone()
-            .ok_or_else(|| AppError::Project("No project is currently open".into()))?
+            .ok_or_else(|| AppError::Project("No hay ningún proyecto abierto".into()))?
     };
 
     let output_path = PathBuf::from(&output_dir);

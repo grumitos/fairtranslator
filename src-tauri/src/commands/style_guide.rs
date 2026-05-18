@@ -36,9 +36,9 @@ fn replace_style_guide_and_save(
             .project_path
             .lock()
             .map_err(|e| AppError::Project(format!("Lock error: {e}")))?;
-        path_guard
-            .clone()
-            .ok_or_else(|| AppError::Project("No save path set. Save the project first.".into()))?
+        path_guard.clone().ok_or_else(|| {
+            AppError::Project("No hay ruta de guardado. Guarda el proyecto primero.".into())
+        })?
     };
 
     let mut updated_project = {
@@ -48,7 +48,7 @@ fn replace_style_guide_and_save(
             .map_err(|e| AppError::Project(format!("Lock error: {e}")))?;
         proj_guard
             .clone()
-            .ok_or_else(|| AppError::Project("No project is currently open".into()))?
+            .ok_or_else(|| AppError::Project("No hay ningún proyecto abierto".into()))?
     };
 
     updated_project.style_guide = normalize_items(items);
@@ -86,7 +86,7 @@ pub async fn style_guide_list(state: tauri::State<'_, AppState>) -> Result<Vec<S
 
     let project = proj_guard
         .as_ref()
-        .ok_or_else(|| AppError::Project("No project is currently open".into()))?;
+        .ok_or_else(|| AppError::Project("No hay ningún proyecto abierto".into()))?;
 
     Ok(project.style_guide.clone())
 }

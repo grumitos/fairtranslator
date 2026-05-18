@@ -90,8 +90,8 @@ fn main() -> ExitCode {
         }
     } else {
         for row in rows {
-            println!("selected: {}", row.selected_path);
-            println!("resolved: {}", row.resolved_path);
+            println!("seleccionado: {}", row.selected_path);
+            println!("resuelto: {}", row.resolved_path);
             println!("engine: {}", row.engine);
             println!("files: {}", row.files);
             println!("entries: {}", row.entries);

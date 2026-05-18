@@ -62,6 +62,7 @@ export function useTranslationGridColumns(
                 entry={info.row.original}
                 initialValue={info.getValue()}
                 wrapStyle={wrapStyle}
+                ariaLabel={t("grid.translation")}
                 onCommit={meta.onCommitInlineEdit}
                 onCancel={meta.onCancelInlineEdit}
                 onNavigate={(dir) => meta.onNavigateInlineEdit(dir, info.row.index)}

@@ -1,4 +1,4 @@
-import type { RefObject } from "react";
+import { useCallback, useRef, type RefObject, type UIEvent } from "react";
 import { flexRender, type Row, type Table } from "@tanstack/react-table";
 import { cn } from "@/lib/utils";
 import type { EntryWithPath, TranslationGridMeta } from "@/components/editor/translation-grid/types";
@@ -36,39 +36,60 @@ export function TranslationGridTableView({
   totalEntriesText,
 }: TranslationGridTableViewProps) {
   const meta = table.options.meta as TranslationGridMeta | undefined;
+  const headerInnerRef = useRef<HTMLDivElement>(null);
+  const lastScrollLeftRef = useRef(0);
+  const totalGridWidth = table.getTotalSize();
+
+  const handleRowsScroll = useCallback((event: UIEvent<HTMLDivElement>) => {
+    const scrollLeft = event.currentTarget.scrollLeft;
+    if (scrollLeft === lastScrollLeftRef.current) {
+      return;
+    }
+
+    lastScrollLeftRef.current = scrollLeft;
+    if (headerInnerRef.current) {
+      headerInnerRef.current.style.transform = `translateX(${-scrollLeft}px)`;
+    }
+  }, []);
 
   return (
     <>
       {/* Header with resize handles */}
-      <div className="sticky top-0 z-10 flex h-9 border-b bg-card/95 text-[11px] font-semibold uppercase tracking-normal text-muted-foreground shadow-xs">
-        {table.getHeaderGroups().map((headerGroup) =>
-          headerGroup.headers.map((header) => (
-            <div
-              key={header.id}
-              className="relative flex items-center border-r px-3 last:border-r-0 select-none"
-              style={{ width: header.getSize(), minWidth: header.getSize() }}
-            >
-              {flexRender(header.column.columnDef.header, header.getContext())}
+      <div className="sticky top-0 z-10 overflow-hidden border-b bg-card/95 shadow-xs">
+        <div
+          ref={headerInnerRef}
+          className="flex h-9 text-[11px] font-semibold uppercase tracking-normal text-muted-foreground will-change-transform"
+          style={{ width: totalGridWidth, minWidth: "100%" }}
+        >
+          {table.getHeaderGroups().map((headerGroup) =>
+            headerGroup.headers.map((header) => (
+              <div
+                key={header.id}
+                className="relative flex items-center border-r px-3 last:border-r-0 select-none"
+                style={{ width: header.getSize(), minWidth: header.getSize() }}
+              >
+                {flexRender(header.column.columnDef.header, header.getContext())}
 
-              {/* Column resize handle */}
-              {header.column.getCanResize() && (
-                <div
-                  onMouseDown={header.getResizeHandler()}
-                  onTouchStart={header.getResizeHandler()}
-                  className={cn(
-                    "absolute right-0 top-0 h-full w-1.5 cursor-col-resize select-none touch-none transition-colors duration-150",
-                    "hover:bg-primary/40 active:bg-primary/60",
-                    header.column.getIsResizing() && "bg-primary",
-                  )}
-                />
-              )}
-            </div>
-          )),
-        )}
+                {/* Column resize handle */}
+                {header.column.getCanResize() && (
+                  <div
+                    onMouseDown={header.getResizeHandler()}
+                    onTouchStart={header.getResizeHandler()}
+                    className={cn(
+                      "absolute right-0 top-0 h-full w-1.5 cursor-col-resize select-none touch-none transition-colors duration-150",
+                      "hover:bg-primary/40 active:bg-primary/60",
+                      header.column.getIsResizing() && "bg-primary",
+                    )}
+                  />
+                )}
+              </div>
+            )),
+          )}
+        </div>
       </div>
 
       {/* Virtualized rows */}
-      <div ref={parentRef} className="min-h-0 flex-1 overflow-auto bg-background/40">
+      <div ref={parentRef} className="min-h-0 flex-1 overflow-auto bg-background/40" onScroll={handleRowsScroll}>
         {rows.length === 0 ? (
           <div className="flex h-full items-center justify-center p-6">
             <div className="ft-empty-state" role="status">
@@ -103,6 +124,8 @@ export function TranslationGridTableView({
                   )}
                   style={{
                     minHeight: "36px",
+                    minWidth: "100%",
+                    width: totalGridWidth,
                     transform: `translateY(${virtualRow.start}px)`,
                   }}
                   onDoubleClick={() => onRowDoubleClick(row.original)}

@@ -550,7 +550,7 @@ mod tests {
 
         assert!(error
             .to_string()
-            .contains("batchId does not match the current export batch"));
+            .contains("batchId de la respuesta de IA no coincide"));
     }
 
     #[test]

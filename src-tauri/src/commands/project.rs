@@ -39,7 +39,7 @@ pub async fn project_create(
     let selected_path = PathBuf::from(&game_dir);
     if !selected_path.is_dir() {
         return Err(AppError::NotFound(format!(
-            "Game directory not found: {game_dir}"
+            "No se encontró la carpeta del juego: {game_dir}"
         )));
     }
 
@@ -62,7 +62,6 @@ pub async fn project_create(
         updated_at: now,
     };
 
-    // Store in app state
     {
         let mut proj = state
             .project
@@ -71,7 +70,6 @@ pub async fn project_create(
         *proj = Some(project.clone());
     }
 
-    // Set default project path
     {
         let default_path = persistence::default_project_path(&game_path);
         let mut path = state
@@ -94,7 +92,6 @@ pub async fn project_open(
 
     let project = persistence::load_project(&project_path)?;
 
-    // Store in app state
     {
         let mut proj = state
             .project
@@ -128,7 +125,7 @@ pub async fn project_save(
             .lock()
             .map_err(|e| AppError::Project(format!("Lock error: {e}")))?;
         proj.clone()
-            .ok_or_else(|| AppError::Project("No project is currently open".into()))?
+            .ok_or_else(|| AppError::Project("No hay ningún proyecto abierto".into()))?
     };
 
     let save_path = if let Some(p) = path {
@@ -140,7 +137,7 @@ pub async fn project_save(
             .map_err(|e| AppError::Project(format!("Lock error: {e}")))?;
         stored
             .clone()
-            .ok_or_else(|| AppError::Project("No save path set. Use Save As.".into()))?
+            .ok_or_else(|| AppError::Project("No hay ruta de guardado. Usa Guardar como.".into()))?
     };
 
     // Update timestamp
@@ -195,7 +192,7 @@ pub async fn project_update_entry(
 
     let project = proj_guard
         .as_mut()
-        .ok_or_else(|| AppError::Project("No project is currently open".into()))?;
+        .ok_or_else(|| AppError::Project("No hay ningún proyecto abierto".into()))?;
 
     apply_entry_update(
         project,
@@ -239,7 +236,7 @@ pub async fn project_update_entries(
 
     let project = proj_guard
         .as_mut()
-        .ok_or_else(|| AppError::Project("No project is currently open".into()))?;
+        .ok_or_else(|| AppError::Project("No hay ningún proyecto abierto".into()))?;
 
     let mut updated_project = project.clone();
 
@@ -258,13 +255,15 @@ fn apply_entry_update(project: &mut Project, update: &ProjectEntryUpdate) -> Res
         .files
         .iter_mut()
         .find(|f| f.relative_path == update.file_path)
-        .ok_or_else(|| AppError::NotFound(format!("File not found: {}", update.file_path)))?;
+        .ok_or_else(|| {
+            AppError::NotFound(format!("Archivo no encontrado: {}", update.file_path))
+        })?;
 
     let entry = file
         .entries
         .iter_mut()
         .find(|e| e.id == update.entry_id)
-        .ok_or_else(|| AppError::NotFound(format!("Entry not found: {}", update.entry_id)))?;
+        .ok_or_else(|| AppError::NotFound(format!("Entrada no encontrada: {}", update.entry_id)))?;
 
     entry.translation = update.translation.clone();
     entry.status = if update.translation.trim().is_empty() {

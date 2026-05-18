@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { isTauri } from "@tauri-apps/api/core";
 import { useProjectStore } from "@/stores/projectStore";
 import * as ipc from "@/lib/ipc";
 
@@ -19,6 +20,10 @@ function normalizeRules(items: string[]): string[] {
   return normalized;
 }
 
+function areRulesEqual(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((item, index) => item === right[index]);
+}
+
 export function useStyleGuide() {
   const project = useProjectStore((s) => s.project);
   const replaceProject = useProjectStore((s) => s.replaceProject);
@@ -31,6 +36,10 @@ export function useStyleGuide() {
     (items: string[], markDirty: boolean | "preserve") => {
       if (!project) {
         return items;
+      }
+
+      if (areRulesEqual(project.styleGuide, items)) {
+        return project.styleGuide;
       }
 
       replaceProject({
@@ -50,6 +59,10 @@ export function useStyleGuide() {
     setIsLoading(true);
     setError(null);
     try {
+      if (!isTauri()) {
+        return styleGuide;
+      }
+
       const items = await ipc.styleGuideList();
       const normalized = normalizeRules(items);
       return applyProjectUpdate(normalized, "preserve");
@@ -60,18 +73,22 @@ export function useStyleGuide() {
     } finally {
       setIsLoading(false);
     }
-  }, [applyProjectUpdate, project]);
+  }, [applyProjectUpdate, project, styleGuide]);
 
   const replace = useCallback(
     async (items: string[]) => {
       if (!project) {
-        throw new Error("No project is currently open");
+        throw new Error("No hay ningún proyecto abierto");
       }
 
       const normalized = normalizeRules(items);
       setIsLoading(true);
       setError(null);
       try {
+        if (!isTauri()) {
+          return applyProjectUpdate(normalized, true);
+        }
+
         await ipc.styleGuideReplace(normalized);
         const refreshedProject = await ipc.projectGet();
         if (refreshedProject) {

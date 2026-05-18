@@ -51,7 +51,7 @@ export function StyleGuidePanel({ open, onOpenChange }: StyleGuidePanelProps) {
 
   useEffect(() => {
     if (open) {
-      void refresh();
+      void refresh().catch(() => undefined);
     }
   }, [open, refresh]);
 
@@ -67,20 +67,20 @@ export function StyleGuidePanel({ open, onOpenChange }: StyleGuidePanelProps) {
       return;
     }
 
-    setDraftRules((prev) => [...prev, next]);
+    setDraftRules((prev) => normalizeRules([...prev, next]));
     setNewRule("");
   }, [newRule]);
 
   const handleRuleChange = useCallback((index: number, next: string) => {
     setDraftRules((prev) => {
-      const updated = [...prev];
+      const updated = normalizeRules(prev);
       updated[index] = next;
       return updated;
     });
   }, []);
 
   const handleRemoveRule = useCallback((index: number) => {
-    setDraftRules((prev) => prev.filter((_, currentIndex) => currentIndex !== index));
+    setDraftRules((prev) => normalizeRules(prev).filter((_, currentIndex) => currentIndex !== index));
   }, []);
 
   const handleSave = useCallback(async () => {
@@ -108,7 +108,7 @@ export function StyleGuidePanel({ open, onOpenChange }: StyleGuidePanelProps) {
           <SheetDescription>{t("styleGuide.description")}</SheetDescription>
         </SheetHeader>
 
-        <div className="mt-4 space-y-4">
+        <div className="space-y-4 px-4 pb-4">
           <div className="space-y-2">
             <Label htmlFor="style-guide-new-rule">{t("styleGuide.addTitle")}</Label>
             <div className="flex gap-2">

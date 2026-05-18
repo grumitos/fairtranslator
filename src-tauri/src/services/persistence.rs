@@ -45,7 +45,6 @@ struct ProjectMeta {
 /// Uses atomic write strategy: writes to a temp directory first, then renames.
 /// If `project_path` already exists, the old directory is replaced atomically.
 pub fn save_project(project: &Project, project_path: &Path) -> Result<(), AppError> {
-    // Build a temp path next to the final destination
     let parent = project_path
         .parent()
         .ok_or_else(|| AppError::Io("Cannot determine parent directory".into()))?;
@@ -60,10 +59,8 @@ pub fn save_project(project: &Project, project_path: &Path) -> Result<(), AppErr
         std::fs::remove_dir_all(&temp_dir)?;
     }
 
-    // Create temp directory structure
     std::fs::create_dir_all(temp_dir.join("entries"))?;
 
-    // Build metadata
     let file_list: Vec<String> = project
         .files
         .iter()
@@ -85,7 +82,6 @@ pub fn save_project(project: &Project, project_path: &Path) -> Result<(), AppErr
         updated_at: project.updated_at.clone(),
     };
 
-    // Write project.json
     let meta_json = serde_json::to_string_pretty(&meta)?;
     std::fs::write(temp_dir.join("project.json"), meta_json)?;
 

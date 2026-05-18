@@ -70,7 +70,6 @@ export function NewProjectDialog({ open, onOpenChange }: NewProjectDialogProps) 
     try {
       await create(formGameDir, formName, formSourceLang, formTargetLang);
       onOpenChange(false);
-      // Reset form
       setFormName("");
       setFormGameDir("");
       setFormSourceLang("ja");
@@ -91,7 +90,6 @@ export function NewProjectDialog({ open, onOpenChange }: NewProjectDialogProps) 
         </DialogHeader>
 
         <div className="flex flex-col gap-4 py-4">
-          {/* Game directory */}
           <div className="flex flex-col gap-1.5">
             <label htmlFor="npd-game-dir" className="text-sm font-medium">
               {t("newProjectDialog.gameDir")}
@@ -119,7 +117,6 @@ export function NewProjectDialog({ open, onOpenChange }: NewProjectDialogProps) 
             </div>
           </div>
 
-          {/* Project name */}
           <div className="flex flex-col gap-1.5">
             <label htmlFor="npd-name" className="text-sm font-medium">
               {t("newProjectDialog.name")}
@@ -135,7 +132,6 @@ export function NewProjectDialog({ open, onOpenChange }: NewProjectDialogProps) 
             />
           </div>
 
-          {/* Languages */}
           <div className="grid grid-cols-2 gap-3">
             <div className="flex flex-col gap-1.5">
               <label id="npd-source-lang-label" className="text-sm font-medium">

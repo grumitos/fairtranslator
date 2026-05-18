@@ -23,12 +23,11 @@ pub async fn glossary_add(
 
     let project = proj_guard
         .as_mut()
-        .ok_or_else(|| AppError::Project("No project is currently open".into()))?;
+        .ok_or_else(|| AppError::Project("No hay ningún proyecto abierto".into()))?;
 
-    // Check for duplicate source term
     if project.glossary.iter().any(|g| g.source == source) {
         return Err(AppError::Project(format!(
-            "Glossary term already exists: \"{}\"",
+            "El término ya existe en el glosario: \"{}\"",
             source
         )));
     }
@@ -60,13 +59,13 @@ pub async fn glossary_update(
 
     let project = proj_guard
         .as_mut()
-        .ok_or_else(|| AppError::Project("No project is currently open".into()))?;
+        .ok_or_else(|| AppError::Project("No hay ningún proyecto abierto".into()))?;
 
     let term = project
         .glossary
         .iter_mut()
         .find(|g| g.source == source)
-        .ok_or_else(|| AppError::NotFound(format!("Glossary term not found: \"{}\"", source)))?;
+        .ok_or_else(|| AppError::NotFound(format!("Término no encontrado: \"{}\"", source)))?;
 
     term.target = target;
     term.case_sensitive = case_sensitive;
@@ -89,14 +88,14 @@ pub async fn glossary_remove(
 
     let project = proj_guard
         .as_mut()
-        .ok_or_else(|| AppError::Project("No project is currently open".into()))?;
+        .ok_or_else(|| AppError::Project("No hay ningún proyecto abierto".into()))?;
 
     let before = project.glossary.len();
     project.glossary.retain(|g| g.source != source);
 
     if project.glossary.len() == before {
         return Err(AppError::NotFound(format!(
-            "Glossary term not found: \"{}\"",
+            "Término no encontrado: \"{}\"",
             source
         )));
     }
@@ -118,7 +117,7 @@ pub async fn glossary_list(
 
     let project = proj_guard
         .as_ref()
-        .ok_or_else(|| AppError::Project("No project is currently open".into()))?;
+        .ok_or_else(|| AppError::Project("No hay ningún proyecto abierto".into()))?;
 
     Ok(project.glossary.clone())
 }

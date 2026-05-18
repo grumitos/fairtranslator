@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogFooter,
@@ -64,26 +65,33 @@ export function EditEntryDialog({
           <DialogTitle className="text-sm font-medium">
             {t("editor:grid.editTranslation")}
           </DialogTitle>
-          <p className="text-xs text-muted-foreground">{entry.fileContext}</p>
+          <DialogDescription className="text-xs text-muted-foreground">
+            {entry.fileContext}
+          </DialogDescription>
         </DialogHeader>
 
         <div className="flex flex-col gap-4 py-2">
           {/* Original text */}
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-medium text-muted-foreground">
+            <label id="edit-entry-original-label" className="text-xs font-medium text-muted-foreground">
               {t("editor:grid.original")}
             </label>
-            <div className="rounded-md border bg-muted/30 p-3 text-sm whitespace-pre-wrap select-text">
+            <div
+              className="rounded-md border bg-muted/30 p-3 text-sm whitespace-pre-wrap select-text"
+              aria-labelledby="edit-entry-original-label"
+            >
               {entry.original}
             </div>
           </div>
 
           {/* Translation textarea */}
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-medium text-muted-foreground">
+            <label htmlFor="edit-entry-translation" className="text-xs font-medium text-muted-foreground">
               {t("editor:grid.translation")}
             </label>
             <Textarea
+              id="edit-entry-translation"
+              name="entry-translation"
               value={translation}
               onChange={(e) => setTranslation(e.target.value)}
               rows={Math.max(3, entry.original.split("\n").length)}
@@ -94,7 +102,7 @@ export function EditEntryDialog({
           {/* Status + notes row */}
           <div className="grid grid-cols-2 gap-3">
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-medium text-muted-foreground">
+              <label id="edit-entry-status-label" className="text-xs font-medium text-muted-foreground">
                 {t("editor:grid.status")}
               </label>
               <Select
@@ -106,7 +114,7 @@ export function EditEntryDialog({
                   }
                 }}
               >
-                <SelectTrigger className="h-8 text-sm">
+                <SelectTrigger className="h-8 text-sm" aria-labelledby="edit-entry-status-label">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -123,10 +131,12 @@ export function EditEntryDialog({
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-medium text-muted-foreground">
+              <label htmlFor="edit-entry-notes" className="text-xs font-medium text-muted-foreground">
                 {t("editor:grid.notes")}
               </label>
               <Textarea
+                id="edit-entry-notes"
+                name="entry-notes"
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
                 rows={1}

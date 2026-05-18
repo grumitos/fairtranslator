@@ -51,7 +51,7 @@ pub fn validate_translation(
         issues.push(IntegrityIssue {
             severity: IntegritySeverity::Error,
             message: format!(
-                "{} -> {} was empty or whitespace-only after translation.",
+                "{} -> {} quedó vacía o solo con espacios tras traducir.",
                 file_path, entry.id
             ),
         });
@@ -65,19 +65,19 @@ pub fn validate_translation(
         let unexpected = multiset_difference(&translated_tokens, &original_tokens);
         let mut detail = String::new();
         if !missing.is_empty() {
-            detail.push_str(&format!("missing {}", missing.join(", ")));
+            detail.push_str(&format!("faltan {}", missing.join(", ")));
         }
         if !unexpected.is_empty() {
             if !detail.is_empty() {
                 detail.push_str("; ");
             }
-            detail.push_str(&format!("unexpected {}", unexpected.join(", ")));
+            detail.push_str(&format!("sobran {}", unexpected.join(", ")));
         }
 
         issues.push(IntegrityIssue {
             severity: IntegritySeverity::Error,
             message: format!(
-                "{} -> {} changed control codes or placeholders ({detail}).",
+                "{} -> {} cambió códigos de control o marcadores ({detail}).",
                 file_path, entry.id
             ),
         });
@@ -93,7 +93,7 @@ pub fn validate_translation(
         issues.push(IntegrityIssue {
             severity,
             message: format!(
-                "{} -> {} changed line count from {} to {}.",
+                "{} -> {} cambió la cantidad de líneas de {} a {}.",
                 file_path, entry.id, original_line_count, translated_line_count
             ),
         });
@@ -109,7 +109,7 @@ pub fn validate_translation(
             issues.push(IntegrityIssue {
                 severity: IntegritySeverity::Warning,
                 message: format!(
-                    "{} -> {} grew from ~{} to ~{} chars and may overflow a short UI field.",
+                    "{} -> {} creció de ~{} a ~{} caracteres y puede desbordar un campo corto de UI.",
                     file_path, entry.id, original_width, translated_width
                 ),
             });
@@ -156,12 +156,12 @@ pub fn summarize_export_errors(errors: &[String]) -> String {
     let shown = errors.iter().take(MAX_ERRORS).cloned().collect::<Vec<_>>();
     let remaining = errors.len().saturating_sub(shown.len());
     let mut lines = vec![
-        "Export blocked by translation integrity checks.".to_string(),
-        "Fix the following entries before exporting:".to_string(),
+        "Exportación bloqueada por comprobaciones de integridad.".to_string(),
+        "Corrige estas entradas antes de exportar:".to_string(),
     ];
     lines.extend(shown.into_iter().map(|issue| format!("- {issue}")));
     if remaining > 0 {
-        lines.push(format!("- ... and {remaining} more issues"));
+        lines.push(format!("- ... y {remaining} incidencias más"));
     }
     lines.join("\n")
 }
@@ -412,6 +412,7 @@ fn match_named_placeholder(slice: &[char]) -> Option<usize> {
 fn match_choice_control_dsl(slice: &[char]) -> Option<usize> {
     let name_len = slice
         .iter()
+        .take(13)
         .take_while(|ch| ch.is_ascii_alphabetic())
         .count();
     if !(2..=12).contains(&name_len) || slice.get(name_len) != Some(&'(') {
@@ -484,7 +485,7 @@ mod tests {
         );
 
         assert!(report.has_errors());
-        assert!(report.errors[0].contains("control codes or placeholders"));
+        assert!(report.errors[0].contains("códigos de control o marcadores"));
     }
 
     #[test]
@@ -501,7 +502,7 @@ mod tests {
         );
 
         assert!(report.has_errors());
-        assert!(report.errors[0].contains("control codes or placeholders"));
+        assert!(report.errors[0].contains("códigos de control o marcadores"));
     }
 
     #[test]
@@ -515,7 +516,7 @@ mod tests {
         );
 
         assert!(report.has_errors());
-        assert!(report.errors[0].contains("changed line count"));
+        assert!(report.errors[0].contains("cantidad de líneas"));
     }
 
     #[test]
@@ -530,7 +531,7 @@ mod tests {
 
         assert!(report.errors.is_empty());
         assert_eq!(report.warnings.len(), 1);
-        assert!(report.warnings[0].contains("changed line count"));
+        assert!(report.warnings[0].contains("cantidad de líneas"));
     }
 
     #[test]
@@ -545,7 +546,7 @@ mod tests {
 
         assert!(report.errors.is_empty());
         assert_eq!(report.warnings.len(), 1);
-        assert!(report.warnings[0].contains("may overflow"));
+        assert!(report.warnings[0].contains("puede desbordar"));
     }
 
     #[test]
@@ -606,6 +607,15 @@ mod tests {
     }
 
     #[test]
+    fn test_collect_special_token_spans_handles_long_plain_alpha_text() {
+        let text = "A".repeat(20_000);
+
+        let spans = collect_special_token_spans(&text);
+
+        assert!(spans.is_empty());
+    }
+
+    #[test]
     fn test_validate_translation_detects_broken_name_honorific_compound() {
         let entry = make_entry(
             "CommonEvents:411:text:3",
@@ -619,7 +629,7 @@ mod tests {
         );
 
         assert!(report.has_errors());
-        assert!(report.errors[0].contains("missing \\N[2]-onee-chan"));
-        assert!(report.errors[0].contains("unexpected \\N[2]"));
+        assert!(report.errors[0].contains("faltan \\N[2]-onee-chan"));
+        assert!(report.errors[0].contains("sobran \\N[2]"));
     }
 }

@@ -266,6 +266,7 @@ export function TranslationGrid() {
     cancelEdit();
     setDialogEntry(entry);
   }, [cancelEdit]);
+  const hasActiveFilters = Boolean(statusFilter || deferredSearchQuery.trim());
 
   if (!project) {
     return null;
@@ -273,8 +274,9 @@ export function TranslationGrid() {
 
   return (
     <div
-      className="flex h-full flex-col outline-none"
+      className="ft-focus flex h-full flex-col rounded-sm outline-none"
       tabIndex={0}
+      aria-label={t("grid.label")}
       onKeyDown={handleGridKeyDown}
     >
       <TranslationGridTableView
@@ -286,7 +288,7 @@ export function TranslationGrid() {
         matchedEntryIds={matchedEntryIds}
         measureElement={virtualizer.measureElement}
         onRowDoubleClick={handleRowDoubleClick}
-        emptyText={t("grid.noEntries")}
+        emptyText={t(hasActiveFilters ? "grid.noFilteredEntries" : "grid.noEntries")}
         totalEntriesText={t("grid.totalEntries", { count: filteredData.length })}
       />
 

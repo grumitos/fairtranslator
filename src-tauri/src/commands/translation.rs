@@ -364,7 +364,7 @@ pub async fn translate_ai_batch_export(
 
     let project = proj_guard
         .as_ref()
-        .ok_or_else(|| AppError::Project("No project is currently open".into()))?;
+        .ok_or_else(|| AppError::Project("No hay ningún proyecto abierto".into()))?;
 
     ai_batch::export_ai_batch(project, &file_paths, max_entries)
 }
@@ -393,7 +393,7 @@ pub async fn translate_ai_batch_apply(
 
     let project = proj_guard
         .as_mut()
-        .ok_or_else(|| AppError::Project("No project is currently open".into()))?;
+        .ok_or_else(|| AppError::Project("No hay ningún proyecto abierto".into()))?;
 
     Ok(ai_batch::apply_ai_batch_updates(
         project,
@@ -568,7 +568,7 @@ async fn run_batch_translation(
 
                     proj_guard.and_then(|mut guard| {
                         let project = guard.as_mut().ok_or_else(|| {
-                            AppError::Project("No project is currently open".into())
+                            AppError::Project("No hay ningún proyecto abierto".into())
                         })?;
                         translation_apply::apply_provider_responses(
                             project,
@@ -584,7 +584,7 @@ async fn run_batch_translation(
                             failed_entries += missing_response_count;
                             chunk_had_failure = true;
                             let message = format!(
-                                "Provider '{}' returned {} fewer translations than requested for '{}'.",
+                                "El proveedor '{}' devolvió {} traducciones menos de las solicitadas para '{}'.",
                                 provider_name,
                                 missing_response_count,
                                 file_batch.relative_path
@@ -597,7 +597,7 @@ async fn run_batch_translation(
                             failed_entries += result.missing_project_entries.len();
                             chunk_had_failure = true;
                             let message = format!(
-                                "Translated responses could not be matched back into '{}' ({} entry IDs).",
+                                "No se pudieron asociar respuestas traducidas en '{}' ({} ID de entrada).",
                                 file_batch.relative_path,
                                 result.missing_project_entries.len()
                             );
@@ -609,7 +609,7 @@ async fn run_batch_translation(
                             failed_entries += result.invalid_entries.len();
                             chunk_had_failure = true;
                             let message = format!(
-                                "Skipped {} translated entries in '{}' because integrity checks failed.",
+                                "Se omitieron {} entradas traducidas en '{}' porque fallaron las comprobaciones de integridad.",
                                 result.invalid_entries.len(),
                                 file_batch.relative_path
                             );
@@ -624,7 +624,7 @@ async fn run_batch_translation(
                         if unexpected_response_count > 0 {
                             chunk_had_failure = true;
                             let message = format!(
-                                "Provider '{}' returned {} unexpected entry IDs for '{}'.",
+                                "El proveedor '{}' devolvió {} ID de entrada inesperados para '{}'.",
                                 provider_name, unexpected_response_count, file_batch.relative_path
                             );
                             log::error!("{message}");
@@ -643,7 +643,7 @@ async fn run_batch_translation(
                         failed_entries += file_batch.entries.len();
                         failed_batches += 1;
                         let message = format!(
-                            "Failed to apply translated responses for '{}' (provider {}): {}",
+                            "No se pudieron aplicar respuestas traducidas para '{}' (proveedor {}): {}",
                             file_batch.relative_path, provider_name, error
                         );
                         log::error!("{message}");
@@ -655,7 +655,7 @@ async fn run_batch_translation(
                 failed_entries += file_batch.entries.len();
                 failed_batches += 1;
                 let message = format!(
-                    "Translation failed for '{}' with provider '{}': {}",
+                    "Falló la traducción de '{}' con el proveedor '{}': {}",
                     file_batch.relative_path, provider_name, error
                 );
                 log::error!(
@@ -747,7 +747,7 @@ pub async fn translate_batch_start(
 
         let project = proj_guard
             .as_ref()
-            .ok_or_else(|| AppError::Project("No project is currently open".into()))?;
+            .ok_or_else(|| AppError::Project("No hay ningún proyecto abierto".into()))?;
 
         let source_lang = project.source_lang.clone();
         let target_lang = project.target_lang.clone();

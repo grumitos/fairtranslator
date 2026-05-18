@@ -69,7 +69,7 @@ fn parse_status(value: &str) -> Result<EntryStatus, String> {
         "draft" => Ok(EntryStatus::Draft),
         "reviewed" => Ok(EntryStatus::Reviewed),
         "final" => Ok(EntryStatus::Final),
-        _ => Err(format!("Estado invalido: {value}")),
+        _ => Err(format!("Estado inválido: {value}")),
     }
 }
 
@@ -102,7 +102,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Options, String> {
                 print_usage();
                 std::process::exit(0);
             }
-            _ if arg.starts_with("--") => return Err(format!("Opcion desconocida: {arg}")),
+            _ if arg.starts_with("--") => return Err(format!("Opción desconocida: {arg}")),
             _ => return Err(format!("Argumento inesperado: {arg}")),
         }
     }
@@ -150,7 +150,7 @@ fn validate_response_complete(
 ) -> Result<(), String> {
     if translations.len() != expected_entries.len() {
         return Err(format!(
-            "Respuesta incompleta: esperaba {} entradas y recibi {}",
+            "Respuesta incompleta: esperaba {} entradas y recibí {}",
             expected_entries.len(),
             translations.len()
         ));
@@ -242,7 +242,7 @@ fn main() -> ExitCode {
             Ok(entries) => entries,
             Err(error) => {
                 eprintln!(
-                    "No se pudo leer entradas esperadas para batch {}: {}",
+                    "No se pudieron leer entradas esperadas para el lote {}: {}",
                     batch.index, error
                 );
                 return ExitCode::from(1);
@@ -253,7 +253,7 @@ fn main() -> ExitCode {
             Ok(content) => content,
             Err(error) => {
                 eprintln!(
-                    "No se pudo leer respuesta para batch {} en '{}': {}",
+                    "No se pudo leer respuesta para el lote {} en '{}': {}",
                     batch.index,
                     response_path.display(),
                     error
@@ -287,7 +287,7 @@ fn main() -> ExitCode {
                     Ok(translations) => translations,
                     Err(compact_error) => {
                         eprintln!(
-                            "Respuesta invalida para batch {} ({}): {}",
+                            "Respuesta inválida para lote {} ({}): {}",
                             batch.index,
                             response_path.display(),
                             compact_error
@@ -300,7 +300,7 @@ fn main() -> ExitCode {
 
         if let Err(error) = validate_response_complete(&expected_entries_batch, &translations) {
             eprintln!(
-                "Respuesta incompleta para batch {} ({}): {}",
+                "Respuesta incompleta para el lote {} ({}): {}",
                 batch.index,
                 response_path.display(),
                 error
@@ -415,7 +415,7 @@ fn main() -> ExitCode {
     }
 
     println!(
-        "[OK] {} => applied={} skipped={} warnings={} exportFiles={} exportEntries={} reopenedEntries={}",
+        "[OK] {} => aplicadas={} omitidas={} avisos={} archivosExportados={} entradasExportadas={} entradasReabiertas={}",
         manifest.sample_name,
         applied_entries,
         skipped_entries,
@@ -424,8 +424,8 @@ fn main() -> ExitCode {
         export_result.entries_applied,
         report.reopened_entries
     );
-    println!("Report: {}", report_path.display());
-    println!("Export: {}", export_dir.display());
+    println!("Reporte: {}", report_path.display());
+    println!("Exportación: {}", export_dir.display());
 
     ExitCode::SUCCESS
 }

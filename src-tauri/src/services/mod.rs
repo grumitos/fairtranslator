@@ -10,5 +10,6 @@ pub mod persistence;
 pub mod provider;
 pub mod secrets;
 pub mod translation_apply;
+pub mod translation_coverage;
 pub mod translation_integrity;
 pub mod translation_orchestrator;

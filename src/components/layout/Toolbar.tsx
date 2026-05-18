@@ -63,7 +63,7 @@ export function Toolbar() {
       return;
     }
 
-    const selected = await dialogOpen({ directory: true, title: t("common:openProject"), filters: [] });
+    const selected = await dialogOpen({ directory: true, title: t("common:openProjectFolder"), filters: [] });
     if (selected && typeof selected === "string") {
       try {
         await open(selected);
@@ -156,7 +156,7 @@ export function Toolbar() {
               <FileText className="size-4" />
             </IconAction>
             <IconAction
-              label={`${t("editor:toolbar.findReplace")} - ${t("editor:toolbar.findReplaceShortcut")}`}
+              label={t("editor:toolbar.findReplace")}
               onClick={toggleFindReplace}
               disabled={!project}
               active={showFindReplace}

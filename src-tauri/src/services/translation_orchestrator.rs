@@ -416,6 +416,14 @@ fn build_style_guide(project: &Project, selected_files: &[&TranslationFile]) -> 
             "Keep menu labels, commands and database names concise enough for RPG UI.".into(),
         );
     }
+    if is_spanish_language(&project.target_lang) && has_ui {
+        notes.push(
+            "Translate visible database names, enemy/troop names, skill/item/armor names, game titles, menu terms and meaningful compact labels into Spanish; do not leave English unchanged only because it is short, uppercase or concatenated.".into(),
+        );
+        notes.push(
+            "Preserve only clear proper names, staff names, handles, control codes, script/plugin identifiers, file names, variable names, placeholders and common RPG acronyms such as HP, MP, TP and EXP.".into(),
+        );
+    }
     if has_dialogue {
         notes.push("Favor natural in-game dialogue and keep speaker register consistent across nearby lines.".into());
     }
@@ -435,7 +443,7 @@ fn build_style_guide(project: &Project, selected_files: &[&TranslationFile]) -> 
         );
     }
     if is_japanese_language(&project.source_lang) && is_spanish_language(&project.target_lang) {
-        notes.push("For Japanese-to-Spanish RPG Maker text, prefer natural neutral Spanish over literal Japanese wording; e.g. render 学校の帰り道 as de vuelta de la escuela, and 一人称 UI settings as forma de referirse a si mismo.".into());
+        notes.push("For Japanese-to-Spanish RPG Maker text, prefer natural neutral Spanish over literal Japanese wording; e.g. render 学校の帰り道 as de vuelta de la escuela, and 一人称 UI settings as forma de referirse a sí mismo.".into());
         notes.push("Preserve RPG Maker choice/plugin condition prefixes exactly, such as if(s[12]) and en(s[20]); translate only the visible choice label after those prefixes and control codes.".into());
         notes.push("Adapt dialogue like dubbing or subtitles: keep Spanish compact enough for the original RPG Maker text timing/window, condense instead of expanding literally, and do not add extra dialogue lines.".into());
         notes.push("Do not change RPG Maker script commands, scene logic, variables, tags or formatting; preserve structure and only translate visible text.".into());
@@ -1464,6 +1472,25 @@ mod tests {
         assert!(style_blob.contains("de vuelta de la escuela"));
         assert!(style_blob.contains("if(s[12])"));
         assert!(style_blob.contains("choice labels concise"));
+    }
+
+    #[test]
+    fn test_build_translation_plan_adds_spanish_database_name_rules() {
+        let mut project = make_project();
+        project.source_lang = "en".into();
+        project.target_lang = "es".into();
+
+        let plan = build_translation_plan(&project, &[], &ProviderType::Codex);
+        let style_blob = plan
+            .iter()
+            .flat_map(|chunk| chunk.context.style_guide.iter())
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(style_blob.contains("enemy/troop names"));
+        assert!(style_blob.contains("uppercase or concatenated"));
+        assert!(style_blob.contains("HP, MP, TP and EXP"));
     }
 
     #[test]

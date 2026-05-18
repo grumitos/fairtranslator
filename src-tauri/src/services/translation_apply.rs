@@ -21,7 +21,7 @@ pub fn apply_provider_responses(
         .files
         .iter_mut()
         .find(|f| f.relative_path == file_path)
-        .ok_or_else(|| AppError::NotFound(format!("File not found: {file_path}")))?;
+        .ok_or_else(|| AppError::NotFound(format!("Archivo no encontrado: {file_path}")))?;
 
     let mut result = ProviderApplyResult::default();
 

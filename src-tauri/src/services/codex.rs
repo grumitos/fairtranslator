@@ -880,7 +880,7 @@ mod tests {
 
         assert!(error
             .to_string()
-            .contains("returned 1 translations but expected 2"));
+            .contains("devolvió 1 traducciones, pero se esperaban 2"));
     }
 
     #[test]

@@ -10,7 +10,7 @@
       "organizationPlaceholder": "OpenAI organization ID (optional)",
       "project": "OpenAI project",
       "projectPlaceholder": "OpenAI project ID (optional)",
-      "authNote": "Supported OpenAI auth here is API-key based. ChatGPT/session cookies are not used; optional organization/project fields add official request scoping."
+      "authNote": "Use API keys, not ChatGPT sessions. Organization and project are optional."
     },
     "deepl": {
       "label": "DeepL",
@@ -26,7 +26,7 @@
       "commandPathPlaceholder": "codex executable path (optional)",
       "profile": "Codex profile",
       "profilePlaceholder": "Codex profile name (optional)",
-      "authNote": "Codex auth is managed by the installed Codex CLI. Leave the command path empty to use `codex` from PATH; the status below shows whether the binary and ChatGPT session are ready.",
+      "authNote": "Codex uses the installed CLI. Leave the path empty to use PATH.",
       "login": "Sign in with Codex",
       "deviceLogin": "Use device code",
       "loginSuccess": "Codex sign-in is ready",
@@ -43,18 +43,20 @@
       "resolvedPathLabel": "Executable",
       "versionLabel": "Version"
     },
-    "save": "Save settings",
+    "save": "Save",
     "saved": "Settings saved",
-    "remove": "Clear settings",
+    "saveFailed": "Could not save provider",
+    "remove": "Clear",
     "removed": "Settings cleared",
+    "removeFailed": "Could not clear provider",
     "validate": "Validate",
-    "validating": "Validating...",
+    "validating": "Validating…",
     "valid": "Provider is ready",
     "invalid": "Provider validation failed",
     "apiKey": "API key",
     "model": "Model",
     "modelPlaceholder": "gpt-4o-mini / gpt-5.4",
-    "endpoint": "Custom endpoint",
+    "endpoint": "Custom URL",
     "endpointPlaceholder": "Endpoint URL (optional)",
     "noKey": "No key configured",
     "configured": "Configured"
@@ -75,7 +77,7 @@
   "wordWrap": {
     "title": "Word wrap",
     "label": "Wrap column",
-    "description": "Number of characters before wrapping (0 = disabled)",
+    "description": "Wrap after this many characters. Use 0 to disable.",
     "disabled": "Disabled",
     "chars": "{{count}} characters"
   }

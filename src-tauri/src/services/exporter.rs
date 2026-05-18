@@ -2942,7 +2942,7 @@ mod tests {
         assert!(result
             .warnings
             .iter()
-            .any(|warning| warning.contains("changed line count")));
+            .any(|warning| warning.contains("cantidad de líneas")));
 
         let _ = fs::remove_dir_all(&temp_dir);
         let _ = fs::remove_dir_all(&output_dir);

@@ -2,7 +2,13 @@ import { type CSSProperties, useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { useGlossary } from "@/hooks/useGlossary";
 import { GlossaryAddForm } from "@/components/layout/glossary/GlossaryAddForm";
 import { GlossaryTermRow } from "@/components/layout/glossary/GlossaryTermRow";
@@ -11,6 +17,13 @@ import type { GlossaryTerm } from "@/types/domain";
 interface GlossaryPanelProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+}
+
+function getGlossaryErrorMessage(error: unknown, duplicateMessage: string) {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("already exists") || message.includes("ya existe")
+    ? duplicateMessage
+    : message;
 }
 
 export function GlossaryPanel({ open, onOpenChange }: GlossaryPanelProps) {
@@ -35,7 +48,9 @@ export function GlossaryPanel({ open, onOpenChange }: GlossaryPanelProps) {
       setNewCaseSensitive(true);
       toast.success(t("addSuccess"));
     } catch (e) {
-      toast.error(String(e));
+      toast.error(t("addFailed"), {
+        description: getGlossaryErrorMessage(e, t("duplicate")),
+      });
     }
   }, [newSource, newTarget, newCaseSensitive, add, t]);
 
@@ -45,7 +60,9 @@ export function GlossaryPanel({ open, onOpenChange }: GlossaryPanelProps) {
         await remove(source);
         toast.success(t("removeSuccess"));
       } catch (e) {
-        toast.error(String(e));
+        toast.error(t("removeFailed"), {
+          description: e instanceof Error ? e.message : String(e),
+        });
       }
     },
     [remove, t],
@@ -67,7 +84,9 @@ export function GlossaryPanel({ open, onOpenChange }: GlossaryPanelProps) {
       setEditingSource(null);
       toast.success(t("updateSuccess"));
     } catch (e) {
-      toast.error(String(e));
+      toast.error(t("updateFailed"), {
+        description: e instanceof Error ? e.message : String(e),
+      });
     }
   }, [editingSource, editTarget, editCaseSensitive, update, t]);
 
@@ -76,9 +95,10 @@ export function GlossaryPanel({ open, onOpenChange }: GlossaryPanelProps) {
       <SheetContent style={{ "--sheet-width": "480px" } as CSSProperties}>
         <SheetHeader>
           <SheetTitle>{t("title")}</SheetTitle>
+          <SheetDescription className="sr-only">{t("description")}</SheetDescription>
         </SheetHeader>
 
-        <div className="mt-4 space-y-4">
+        <div className="space-y-4 px-4 pb-4">
           <GlossaryAddForm
             source={newSource}
             target={newTarget}

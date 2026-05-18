@@ -113,7 +113,7 @@ export function StatusBar() {
             />
           </div>
           <span className="font-semibold tabular-nums text-foreground/80">
-            {t("statusBar.percentage", { percent })}
+            {t("statusBar.percentageShort", { percent })}
           </span>
         </div>
       </div>

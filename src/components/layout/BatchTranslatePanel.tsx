@@ -8,7 +8,13 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -253,8 +259,11 @@ export function BatchTranslatePanel({
       <SheetContent style={{ "--sheet-width": "420px" } as CSSProperties}>
         <SheetHeader>
           <SheetTitle>{t("editor:batch.title")}</SheetTitle>
+          <SheetDescription className="sr-only">
+            {t("editor:batch.description")}
+          </SheetDescription>
         </SheetHeader>
-        <div className="mt-4 space-y-4">
+        <div className="space-y-4 px-4 pb-4">
           <div className="space-y-2">
             <Label>{t("editor:batch.selectFiles")}</Label>
             <div className="flex items-center gap-2">

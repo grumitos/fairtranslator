@@ -15,7 +15,7 @@ export function WelcomeScreen() {
   const handleOpen = useCallback(async () => {
     const selected = await dialogOpen({
       directory: true,
-      title: t("openProject"),
+      title: t("openProjectFolder"),
       filters: [],
     });
     if (selected && typeof selected === "string") {
@@ -30,14 +30,14 @@ export function WelcomeScreen() {
   }, [open, t]);
 
   return (
-    <div className="flex h-screen flex-col items-center justify-center bg-background p-4 text-foreground">
-      <div className="w-full max-w-md rounded-lg border bg-card p-5 text-center shadow-sm">
+    <div className="flex min-h-dvh w-full min-w-0 flex-col items-center justify-center overflow-hidden bg-background p-4 text-foreground">
+      <div className="w-full max-w-sm min-w-0 rounded-lg border bg-card p-5 text-center shadow-sm">
         <div className="border-b pb-5">
-          <h1 className="text-2xl font-semibold tracking-normal">{t("welcome.title")}</h1>
+          <h1 className="text-2xl font-semibold tracking-normal break-words">{t("welcome.title")}</h1>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">{t("welcome.subtitle")}</p>
         </div>
 
-        <div className="mx-auto mt-5 flex w-full max-w-xs flex-col gap-3">
+        <div className="mx-auto mt-5 flex w-full max-w-xs min-w-0 flex-col gap-3">
           <Button
             size="lg"
             onClick={() => setShowNewDialog(true)}

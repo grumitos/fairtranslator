@@ -56,9 +56,12 @@ export function FindControlsRow({
     <div className="flex items-center gap-1">
       <Input
         ref={findInputRef}
+        name="find-query"
         value={findQuery}
         onChange={(e) => onFindChange(e.target.value)}
         placeholder={t("findReplace.findPlaceholder")}
+        autoComplete="off"
+        aria-label={t("findReplace.find")}
         className={cn(
           "h-7 flex-1 text-xs",
           isInvalidRegex && "border-destructive focus-visible:ring-destructive",
@@ -70,11 +73,24 @@ export function FindControlsRow({
         }}
       />
 
-      <span className="min-w-16 text-center text-xs text-muted-foreground">{matchInfoLabel}</span>
+      <span
+        className="min-w-20 max-w-28 truncate text-center text-xs text-muted-foreground"
+        role="status"
+        aria-live="polite"
+      >
+        {matchInfoLabel}
+      </span>
 
       <Tooltip>
         <TooltipTrigger asChild>
-          <Button variant="ghost" size="icon-sm" onClick={onPrev} disabled={!hasMatches}>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={onPrev}
+            disabled={!hasMatches}
+            aria-label={t("findReplace.previous")}
+            title={t("findReplace.previous")}
+          >
             <ChevronUp className="size-3.5" />
           </Button>
         </TooltipTrigger>
@@ -83,7 +99,14 @@ export function FindControlsRow({
 
       <Tooltip>
         <TooltipTrigger asChild>
-          <Button variant="ghost" size="icon-sm" onClick={onNext} disabled={!hasMatches}>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={onNext}
+            disabled={!hasMatches}
+            aria-label={t("findReplace.next")}
+            title={t("findReplace.next")}
+          >
             <ChevronDown className="size-3.5" />
           </Button>
         </TooltipTrigger>
@@ -96,6 +119,9 @@ export function FindControlsRow({
             variant={matchCase ? "secondary" : "ghost"}
             size="icon-sm"
             onClick={onToggleMatchCase}
+            aria-label={t("findReplace.matchCase")}
+            aria-pressed={matchCase}
+            title={t("findReplace.matchCase")}
           >
             <CaseSensitive className="size-3.5" />
           </Button>
@@ -105,7 +131,14 @@ export function FindControlsRow({
 
       <Tooltip>
         <TooltipTrigger asChild>
-          <Button variant={useRegex ? "secondary" : "ghost"} size="icon-sm" onClick={onToggleRegex}>
+          <Button
+            variant={useRegex ? "secondary" : "ghost"}
+            size="icon-sm"
+            onClick={onToggleRegex}
+            aria-label={t("findReplace.useRegex")}
+            aria-pressed={useRegex}
+            title={t("findReplace.useRegex")}
+          >
             <Regex className="size-3.5" />
           </Button>
         </TooltipTrigger>
@@ -113,7 +146,7 @@ export function FindControlsRow({
       </Tooltip>
 
       <Select value={searchTarget} onValueChange={onSearchTargetChange}>
-        <SelectTrigger className="h-7 w-28 text-xs">
+        <SelectTrigger className="h-7 w-28 text-xs" aria-label={t("findReplace.searchIn")}>
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -125,7 +158,13 @@ export function FindControlsRow({
 
       <Tooltip>
         <TooltipTrigger asChild>
-          <Button variant="ghost" size="icon-sm" onClick={onClose}>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={onClose}
+            aria-label={t("findReplace.close")}
+            title={t("findReplace.close")}
+          >
             <X className="size-3.5" />
           </Button>
         </TooltipTrigger>

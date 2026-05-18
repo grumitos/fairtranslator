@@ -157,15 +157,11 @@ export function AppShell() {
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-background">
-      {/* Toolbar */}
       <Toolbar />
 
-      {/* Find & Replace bar */}
       {showFindReplace && <FindReplaceBar />}
 
-      {/* Main area: sidebar + resize handle + content */}
       <div className="flex min-h-0 flex-1 overflow-hidden p-1.5 pt-1">
-        {/* Sidebar */}
         <div
           className={cn(
             "min-h-0 flex-shrink-0 overflow-hidden rounded-md border bg-sidebar shadow-sm md:block",
@@ -176,7 +172,6 @@ export function AppShell() {
           <Sidebar />
         </div>
 
-        {/* Resize handle */}
         <div
           onMouseDown={(e) => { e.preventDefault(); setIsResizingSidebar(true); }}
           onKeyDown={(e) => {
@@ -201,7 +196,6 @@ export function AppShell() {
           aria-valuenow={sidebarWidth}
         />
 
-        {/* Editor area */}
         <main
           className={cn(
             "min-w-0 flex-1 overflow-hidden rounded-md border bg-card shadow-sm md:block",
@@ -239,7 +233,6 @@ export function AppShell() {
         </button>
       </nav>
 
-      {/* Status bar */}
       <StatusBar />
     </div>
   );

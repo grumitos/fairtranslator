@@ -124,7 +124,9 @@ export function FindReplaceBar() {
     if (!regex || matches.length === 0) return;
     const match = matches[currentMatchIndex];
     if (!match || match.field !== "translation") {
-      toast.error(t("findReplace.noMatches"));
+      toast.error(t(match?.field === "original"
+        ? "findReplace.noReplaceInOriginal"
+        : "findReplace.noReplaceMatches"));
       return;
     }
 
@@ -147,7 +149,7 @@ export function FindReplaceBar() {
     if (!regex || matches.length === 0) return;
     const translationMatches = matches.filter((m) => m.field === "translation");
     if (translationMatches.length === 0) {
-      toast.error(t("findReplace.noMatches"));
+      toast.error(t("findReplace.noReplaceMatches"));
       return;
     }
 
@@ -173,7 +175,7 @@ export function FindReplaceBar() {
       }
     }
     if (updates.length === 0) {
-      toast.error(t("findReplace.noMatches"));
+      toast.error(t("findReplace.noReplaceMatches"));
       return;
     }
     try {

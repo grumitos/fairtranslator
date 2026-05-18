@@ -37,22 +37,31 @@ export function GlossaryTermRow({
   return (
     <div className="flex items-center gap-2 rounded-lg border p-2">
       {isEditing ? (
-        <div className="flex-1 space-y-2">
+        <div className="min-w-0 flex-1 space-y-2">
           <div className="flex gap-2">
-            <Input value={term.source} disabled className="flex-1 text-xs opacity-60" />
             <Input
+              aria-label={t("glossary:source")}
+              value={term.source}
+              disabled
+              className="min-w-0 flex-1 text-xs opacity-60"
+            />
+            <Input
+              aria-label={t("glossary:target")}
               value={editTarget}
               onChange={(e) => onEditTargetChange(e.target.value)}
-              className="flex-1 text-xs"
+              className="min-w-0 flex-1 text-xs"
             />
           </div>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Checkbox
+                id="glossary-edit-case-sensitive"
                 checked={editCaseSensitive}
                 onCheckedChange={(v) => onEditCaseSensitiveChange(v === true)}
               />
-              <span className="text-xs">{t("glossary:caseSensitive")}</span>
+              <label htmlFor="glossary-edit-case-sensitive" className="text-xs">
+                {t("glossary:caseSensitive")}
+              </label>
             </div>
             <div className="flex gap-1">
               <Button size="sm" onClick={onUpdate} disabled={isLoading} className="h-6 text-xs">
@@ -73,20 +82,36 @@ export function GlossaryTermRow({
         <>
           <div className="min-w-0 flex-1">
             <div className="flex gap-2 text-xs">
-              <span className="truncate font-medium">{term.source}</span>
+              <span className="min-w-0 flex-1 truncate font-medium">{term.source}</span>
               <span className="text-muted-foreground">→</span>
-              <span className="truncate">{term.target}</span>
+              <span className="min-w-0 flex-1 truncate">{term.target}</span>
             </div>
             {term.caseSensitive && (
-              <span className="text-[10px] text-muted-foreground">
+              <span
+                className="text-[10px] text-muted-foreground"
+                aria-label={t("glossary:caseSensitive")}
+                title={t("glossary:caseSensitive")}
+              >
                 {t("glossary:caseSensitiveBadge")}
               </span>
             )}
           </div>
-          <Button variant="ghost" size="icon-sm" onClick={() => onStartEdit(term)}>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => onStartEdit(term)}
+            aria-label={`${t("glossary:edit")}: ${term.source}`}
+            title={t("glossary:edit")}
+          >
             <Pencil className="size-3" />
           </Button>
-          <Button variant="ghost" size="icon-sm" onClick={() => onRemove(term.source)}>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => onRemove(term.source)}
+            aria-label={`${t("glossary:remove")}: ${term.source}`}
+            title={t("glossary:remove")}
+          >
             <Trash2 className="size-3" />
           </Button>
         </>

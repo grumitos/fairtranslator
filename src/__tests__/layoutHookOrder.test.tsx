@@ -62,7 +62,8 @@ describe("layout project transitions", () => {
     });
 
     expect(screen.getByText("Engine: MV")).toBeInTheDocument();
-    expect(screen.getByText("100% complete")).toBeInTheDocument();
+    expect(screen.getByRole("progressbar", { name: "100% complete" })).toBeInTheDocument();
+    expect(screen.getByText("100%")).toBeInTheDocument();
   });
 
   it("keeps Sidebar hook order stable when a project opens", async () => {

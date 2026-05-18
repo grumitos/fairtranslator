@@ -30,19 +30,27 @@ export function GlossaryAddForm({
 
   return (
     <div className="space-y-2 rounded-lg border p-3">
-      <Label className="text-sm font-medium">{t("add")}</Label>
+      <Label className="text-sm font-medium">{t("addTitle")}</Label>
       <div className="flex gap-2">
         <Input
+          name="glossary-source"
+          aria-label={t("source")}
+          autoComplete="off"
+          spellCheck={false}
           value={source}
           onChange={(e) => onSourceChange(e.target.value)}
           placeholder={t("sourcePlaceholder")}
-          className="flex-1 text-xs"
+          className="min-w-0 flex-1 text-xs"
         />
         <Input
+          name="glossary-target"
+          aria-label={t("target")}
+          autoComplete="off"
+          spellCheck={false}
           value={target}
           onChange={(e) => onTargetChange(e.target.value)}
           placeholder={t("targetPlaceholder")}
-          className="flex-1 text-xs"
+          className="min-w-0 flex-1 text-xs"
         />
       </div>
       <div className="flex items-center justify-between">
