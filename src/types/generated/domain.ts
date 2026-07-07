@@ -5,7 +5,7 @@ export type Engine = "mv" | "mz" | "vxAce" | "vx" | "xp";
 
 export type EntryStatus = "untranslated" | "draft" | "reviewed" | "final";
 
-export type ProviderType = "openai" | "deepl" | "google" | "codex";
+export type ProviderType = "openai" | "deepl" | "google" | "codex" | "opencode";
 
 export type Project = { id: string, name: string, sourceLang: string, targetLang: string, engine: Engine, gameDir: string, files: Array<TranslationFile>, glossary: Array<GlossaryTerm>, styleGuide: Array<string>, createdAt: string, updatedAt: string, };
 
@@ -19,7 +19,7 @@ export type BatchProgress = { filesProcessed: number, totalFiles: number, chunks
 
 export type AiBatchEntry = { filePath: string, entryId: string, fileContext: string, original: string, currentTranslation: string, instructionCandidate: boolean, instructionReason: string | null, };
 
-export type AiBatchExport = { projectId: string, projectName: string, batchId: string, engine: Engine, sourceLang: string, targetLang: string, totalSelectedEntries: number, exportedEntries: number, entries: Array<AiBatchEntry>, responseMap: Array<AiBatchResponseRef>, prompt: string, };
+export type AiBatchExport = { projectId: string, projectName: string, batchId: string, engine: Engine, sourceLang: string, targetLang: string, totalSelectedEntries: number, exportedEntries: number, entries: Array<AiBatchEntry>, responseMap: Array<AiBatchResponseRef>, prompt: string, translationSheet: string, };
 
 export type AiBatchResponseRef = { localId: number, filePath: string, entryId: string, };
 

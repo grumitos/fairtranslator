@@ -11,6 +11,7 @@ import type {
   GlossaryTerm,
   ProjectEntryUpdate,
   Project,
+  ProviderModel,
   ProviderType,
 } from "@/types/domain";
 
@@ -58,6 +59,19 @@ type IpcCommands = {
   >;
   apikey_delete: IpcCommand<{ provider: ProviderType }, void>;
   apikey_validate: IpcCommand<{ provider: ProviderType }, void>;
+  apikey_models: IpcCommand<
+    {
+      provider: ProviderType;
+      apiKey: Nullable<string>;
+      model: Nullable<string>;
+      endpoint: Nullable<string>;
+      organization: Nullable<string>;
+      project: Nullable<string>;
+      commandPath: Nullable<string>;
+      profile: Nullable<string>;
+    },
+    ProviderModel[]
+  >;
   codex_status: IpcCommand<
     {
       commandPath: Nullable<string>;
@@ -102,7 +116,7 @@ type IpcCommands = {
   style_guide_list: IpcCommand<undefined, string[]>;
   style_guide_replace: IpcCommand<{ items: string[] }, string[]>;
   translate_batch_start: IpcCommand<
-    { provider: ProviderType; filePaths: string[] },
+    { provider: ProviderType; filePaths: string[]; model: Nullable<string> },
     BatchProgress
   >;
 };
@@ -246,6 +260,27 @@ export const apikeyDelete = (provider: ProviderType) =>
 export const apikeyValidate = (provider: ProviderType) =>
   safeInvoke("apikey_validate", { provider });
 
+export const apikeyModels = (
+  provider: ProviderType,
+  apiKey?: string,
+  model?: string,
+  endpoint?: string,
+  organization?: string,
+  project?: string,
+  commandPath?: string,
+  profile?: string,
+) =>
+  safeInvoke("apikey_models", {
+    provider,
+    apiKey: apiKey ?? null,
+    model: model ?? null,
+    endpoint: endpoint ?? null,
+    organization: organization ?? null,
+    project: project ?? null,
+    commandPath: commandPath ?? null,
+    profile: profile ?? null,
+  });
+
 export const codexStatus = (
   commandPath?: string,
   model?: string,
@@ -331,5 +366,6 @@ export const styleGuideReplace = (items: string[]) =>
 export const translateBatchStart = (
   provider: ProviderType,
   filePaths: string[],
+  model?: string,
 ) =>
-  safeInvoke("translate_batch_start", { provider, filePaths });
+  safeInvoke("translate_batch_start", { provider, filePaths, model: model ?? null });

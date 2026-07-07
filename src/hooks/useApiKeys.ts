@@ -3,6 +3,7 @@ import * as ipc from "@/lib/ipc";
 import type {
   ApiKeyInfo,
   CodexRuntimeStatus,
+  ProviderModel,
   ProviderAuthMode,
   ProviderType,
 } from "@/types/domain";
@@ -94,6 +95,41 @@ export function useApiKeys() {
     }
   }, []);
 
+  const listModels = useCallback(
+    async (
+      provider: ProviderType,
+      apiKey?: string,
+      model?: string,
+      endpoint?: string,
+      organization?: string,
+      project?: string,
+      commandPath?: string,
+      profile?: string,
+    ): Promise<ProviderModel[]> => {
+      setIsLoading(true);
+      setError(null);
+      try {
+        return await ipc.apikeyModels(
+          provider,
+          apiKey,
+          model,
+          endpoint,
+          organization,
+          project,
+          commandPath,
+          profile,
+        );
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setError(msg);
+        throw e;
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [],
+  );
+
   const inspectCodex = useCallback(
     async (
       commandPath?: string,
@@ -144,6 +180,7 @@ export function useApiKeys() {
     save,
     remove,
     validate,
+    listModels,
     inspectCodex,
     loginCodex,
   };

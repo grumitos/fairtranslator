@@ -32,6 +32,7 @@ pub enum ProviderType {
     Deepl,
     Google,
     Codex,
+    Opencode,
 }
 
 /// Root project model
@@ -135,6 +136,8 @@ pub struct AiBatchExport {
     #[serde(default)]
     pub response_map: Vec<AiBatchResponseRef>,
     pub prompt: String,
+    #[serde(default)]
+    pub translation_sheet: String,
 }
 
 /// Mapping used by compact external-AI prompts to recover real project IDs.

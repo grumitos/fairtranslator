@@ -79,12 +79,12 @@ export function useTranslation() {
   }, [replaceProject]);
 
   const startBatch = useCallback(
-    async (provider: ProviderType, filePaths: string[] = []) => {
+    async (provider: ProviderType, filePaths: string[] = [], model?: string) => {
       setIsTranslating(true);
       setProgress(null);
       setError(null);
       try {
-        const result = await ipc.translateBatchStart(provider, filePaths);
+        const result = await ipc.translateBatchStart(provider, filePaths, model);
         return result;
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);

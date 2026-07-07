@@ -36,6 +36,7 @@ const PROVIDERS: { id: ProviderType; labelKey: string }[] = [
   { id: "deepl", labelKey: "settings:apiKeys.deepl.label" },
   { id: "google", labelKey: "settings:apiKeys.google.label" },
   { id: "codex", labelKey: "settings:apiKeys.codex.label" },
+  { id: "opencode", labelKey: "settings:apiKeys.opencode.label" },
 ];
 
 export function SettingsPanel({ open, onOpenChange }: SettingsPanelProps) {

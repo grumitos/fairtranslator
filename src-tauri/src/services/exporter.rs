@@ -10,8 +10,8 @@ use crate::error::AppError;
 use crate::models::{Engine, EntryStatus, Project};
 use crate::parser::rpgmaker::{
     classify_file, classify_relative_path, parse_mv_mz_game, parse_plugins_js, render_plugins_js,
-    FileKind, CODE_CHANGE_NAME, CODE_CHANGE_NICKNAME, CODE_CHANGE_PROFILE, CODE_SCROLL_TEXT,
-    CODE_SHOW_CHOICES, CODE_SHOW_TEXT, DB_TEXT_FIELDS,
+    FileKind, CODE_CHANGE_NAME, CODE_CHANGE_NICKNAME, CODE_CHANGE_PROFILE, CODE_CONTROL_VARIABLES,
+    CODE_SCROLL_TEXT, CODE_SHOW_CHOICES, CODE_SHOW_TEXT, DB_TEXT_FIELDS,
 };
 use crate::services::message_wrapping::{
     join_overflow_message_lines, wrap_mv_mz_message_translation,
@@ -2566,6 +2566,15 @@ fn apply_event_commands(
                     applied += 1;
                 }
             }
+            CODE_CONTROL_VARIABLES => {
+                let entry_id = format!("{id_prefix}:variableText:{i}");
+                if let Some(translation) = translations.get(&entry_id) {
+                    if let Ok(quoted) = serde_json::to_string(translation) {
+                        set_parameter(list, i, 4, &quoted);
+                        applied += 1;
+                    }
+                }
+            }
             _ => {}
         }
         i += 1;
@@ -2742,6 +2751,62 @@ mod tests {
             .warnings
             .iter()
             .any(|warning| warning.contains("cantidad de líneas")));
+
+        let _ = fs::remove_dir_all(&temp_dir);
+        let _ = fs::remove_dir_all(&output_dir);
+    }
+
+    #[test]
+    fn test_export_project_applies_quoted_variable_text() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("fairtl_export_variable_{}", uuid::Uuid::new_v4()));
+        let data_dir = temp_dir.join("data");
+        let js_dir = temp_dir.join("js");
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::create_dir_all(&js_dir).unwrap();
+        fs::write(js_dir.join("rpg_core.js"), "").unwrap();
+        fs::write(
+            data_dir.join("CommonEvents.json"),
+            r#"[null,{"id":1,"list":[{"code":122,"parameters":[10,10,0,4,"\"Waste Plant\""]},{"code":0,"parameters":[]}]}]"#,
+        )
+        .unwrap();
+
+        let project = Project {
+            id: "test".into(),
+            name: "Variable Text".into(),
+            source_lang: "en".into(),
+            target_lang: "es".into(),
+            engine: Engine::Mv,
+            game_dir: temp_dir.to_string_lossy().into(),
+            files: vec![TranslationFile {
+                relative_path: "data/CommonEvents.json".into(),
+                entries: vec![make_entry(
+                    "CommonEvents:1:variableText:0",
+                    "Waste Plant",
+                    "Planta de tratamiento de residuos",
+                    EntryStatus::Draft,
+                )],
+            }],
+            glossary: vec![],
+            style_guide: vec![],
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+
+        let output_dir = std::env::temp_dir().join(format!(
+            "fairtl_export_variable_out_{}",
+            uuid::Uuid::new_v4()
+        ));
+        export_project(&project, &output_dir).unwrap();
+        let exported: Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("data").join("CommonEvents.json")).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            exported[1]["list"][0]["parameters"][4],
+            Value::String("\"Planta de tratamiento de residuos\"".into())
+        );
 
         let _ = fs::remove_dir_all(&temp_dir);
         let _ = fs::remove_dir_all(&output_dir);

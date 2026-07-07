@@ -34,6 +34,7 @@ pub const CODE_SCROLL_TEXT: i64 = 405;
 pub const CODE_CHANGE_NAME: i64 = 320;
 pub const CODE_CHANGE_NICKNAME: i64 = 324;
 pub const CODE_CHANGE_PROFILE: i64 = 325;
+pub const CODE_CONTROL_VARIABLES: i64 = 122;
 
 const MAX_GAME_ROOT_SEARCH_DEPTH: usize = 8;
 const MAX_GAME_ROOT_SCAN_DIRS: usize = 20_000;
@@ -1035,6 +1036,7 @@ fn extract_terms_recursive(
 /// - 320: Change Actor Name
 /// - 324: Change Actor Nickname
 /// - 325: Change Actor Profile
+/// - 122: Control Variables with an exact quoted string literal
 fn extract_event_commands(
     list: &[Value],
     id_prefix: &str,
@@ -1167,6 +1169,25 @@ fn extract_event_commands(
                     }
                 }
             }
+            CODE_CONTROL_VARIABLES => {
+                if let Some(Value::Array(p)) = params {
+                    if p.get(3).and_then(Value::as_i64) == Some(4) {
+                        if let Some(text) = p
+                            .get(4)
+                            .and_then(Value::as_str)
+                            .and_then(parse_quoted_string_literal)
+                        {
+                            if !text.trim().is_empty() {
+                                entries.push(make_entry(
+                                    &format!("{id_prefix}:variableText:{cmd_idx}"),
+                                    &format!("{context_prefix} > variable text"),
+                                    text,
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -1193,6 +1214,10 @@ fn extract_event_commands(
     }
 
     entries
+}
+
+fn parse_quoted_string_literal(value: &str) -> Option<String> {
+    serde_json::from_str::<String>(value).ok()
 }
 
 // ---------------------------------------------------------------------------
@@ -1314,6 +1339,28 @@ mod tests {
         assert_eq!(entries[0].original, "Yes");
         assert_eq!(entries[1].original, "No");
         assert_eq!(entries[2].original, "Maybe");
+    }
+
+    #[test]
+    fn test_extract_event_commands_quoted_variable_text_only() {
+        let list: Value = serde_json::from_str(
+            r#"[
+                {"code": 122, "parameters": [10, 10, 0, 4, "\"Waste Plant\""]},
+                {"code": 122, "parameters": [11, 11, 0, 4, "$gameVariables.value(1) + 1"]},
+                {"code": 0, "parameters": []}
+            ]"#,
+        )
+        .unwrap();
+
+        let entries = extract_event_commands(
+            list.as_array().unwrap(),
+            "CommonEvents:2",
+            "CommonEvents > CommonEvent 2",
+        );
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, "CommonEvents:2:variableText:0");
+        assert_eq!(entries[0].original, "Waste Plant");
     }
 
     #[test]

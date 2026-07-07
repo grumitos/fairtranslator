@@ -12,6 +12,7 @@ use crate::services::provider::{
 };
 use crate::services::translation_integrity::{self, IntegrityMode};
 use crate::services::translation_orchestrator;
+use serde_json::json;
 
 /// Default batch size when exporting entries for manual or AI-assisted translation.
 pub const DEFAULT_AI_BATCH_MAX_ENTRIES: usize = 200;
@@ -88,10 +89,14 @@ pub(crate) fn estimate_ai_batch_prompt_tokens(
             instruction_reason: None,
         })
         .collect::<Vec<_>>();
-    let prompt =
+    let bundle =
         compact_prompt::build_external_ai_bundle(project, "budget-estimate", &entries, context)
-            .expect("serializing compact external AI prompt should not fail")
-            .render_single_prompt();
+            .expect("serializing compact external AI prompt should not fail");
+    let response_map = bundle.response_map();
+    let translation_sheet =
+        translation_sheet_for(project, "budget-estimate", &entries, context, &response_map)
+            .expect("serializing external AI translation sheet should not fail");
+    let prompt = render_external_ai_prompt(&bundle.system_prompt, &translation_sheet);
 
     approximate_token_count(&prompt)
         + EXTERNAL_AI_PROMPT_WRAPPER_TOKEN_OVERHEAD
@@ -154,8 +159,10 @@ fn make_ai_batch_export(
         )
     };
     let bundle = compact_prompt::build_external_ai_bundle(project, &batch_id, &entries, &context)?;
-    let prompt = bundle.render_single_prompt();
     let response_map = bundle.response_map();
+    let translation_sheet =
+        translation_sheet_for(project, &batch_id, &entries, &context, &response_map)?;
+    let prompt = render_external_ai_prompt(&bundle.system_prompt, &translation_sheet);
 
     Ok(AiBatchExport {
         project_id: project.id.clone(),
@@ -169,7 +176,66 @@ fn make_ai_batch_export(
         entries,
         response_map,
         prompt,
+        translation_sheet,
     })
+}
+
+fn render_external_ai_prompt(system_prompt: &str, translation_sheet: &str) -> String {
+    format!(
+        "{system_prompt}\n\nEditable translation sheet JSON:\n{translation_sheet}\n\nReturn ONLY the same JSON object with each translations[].t filled. Keep p, b and k unchanged. Do not rewrite source text in translations[].o; it is reference-only."
+    )
+}
+
+fn translation_sheet_for(
+    project: &Project,
+    batch_id: &str,
+    entries: &[AiBatchEntry],
+    context: &TranslationBatchContext,
+    response_map: &[AiBatchResponseRef],
+) -> Result<String, AppError> {
+    let rows = entries
+        .iter()
+        .zip(response_map.iter())
+        .map(|(entry, response_ref)| {
+            json!({
+                "k": response_ref.local_id,
+                "c": &entry.file_context,
+                "o": &entry.original,
+                "t": &entry.current_translation,
+                "n": "",
+                "s": false
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let sheet = json!({
+        "p": &project.id,
+        "b": batch_id,
+        "sourceLanguage": &project.source_lang,
+        "targetLanguage": &project.target_lang,
+        "context": {
+            "project": &project.name,
+            "file": &context.file_path,
+            "kind": &context.file_kind,
+            "chunk": context.chunk_index,
+            "totalChunks": context.total_chunks,
+            "styleGuide": &context.style_guide,
+            "glossary": project.glossary.iter().map(|term| {
+                json!({
+                    "source": &term.source,
+                    "target": &term.target
+                })
+            }).collect::<Vec<_>>()
+        },
+        "instructions": [
+            "Translate only translations[].o into translations[].t.",
+            "Leave p, b, k, c and o unchanged if you include them in the response.",
+            "Use s=true only for entries that should stay skipped; keep n short."
+        ],
+        "translations": rows
+    });
+
+    serde_json::to_string_pretty(&sheet).map_err(AppError::from)
 }
 
 pub fn export_ai_batch(
@@ -418,19 +484,23 @@ mod tests {
         assert_eq!(batch.entries.len(), 2);
         assert_eq!(batch.response_map.len(), 2);
         assert!(!batch.batch_id.is_empty());
-        assert!(batch.prompt.contains("\"pid\":\"project-1\""));
+        assert!(batch.prompt.contains("\"p\": \"project-1\""));
         assert!(batch
             .prompt
-            .contains(&format!("\"bid\":\"{}\"", batch.batch_id)));
-        assert!(batch.prompt.contains("\"k\":1"));
+            .contains(&format!("\"b\": \"{}\"", batch.batch_id)));
+        assert!(batch.prompt.contains("\"k\": 1"));
+        assert!(batch.prompt.contains("\"o\": \"Welcome to town.\""));
+        assert!(batch.prompt.contains("\"t\": \"\""));
+        assert!(batch.translation_sheet.contains("\"translations\""));
+        assert!(batch
+            .translation_sheet
+            .contains("\"o\": \"Welcome to town.\""));
         assert!(batch
             .prompt
             .contains("Keep the sibling tone natural in Spanish."));
-        assert!(batch
-            .prompt
-            .contains("\"gl\":[{\"s\":\"Onee-chan\",\"t\":\"Onee-chan\"}]"));
-        assert!(batch.prompt.contains("\"pn\":\"AI Batch Test\""));
-        assert!(batch.prompt.contains("\"fp\":\"data/Map001.json\""));
+        assert!(batch.prompt.contains("\"source\": \"Onee-chan\""));
+        assert!(batch.prompt.contains("\"project\": \"AI Batch Test\""));
+        assert!(batch.prompt.contains("\"file\": \"data/Map001.json\""));
 
         let tutorial = batch
             .entries
@@ -533,6 +603,27 @@ mod tests {
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].file_path, "data/Map001.json");
         assert_eq!(parsed[0].entry_id, "Map001:event:1:page:1:list:0");
+    }
+
+    #[test]
+    fn test_parse_ai_batch_response_accepts_clean_translation_sheet() {
+        let batch = export_ai_batch(&make_test_project(), &[], Some(10)).unwrap();
+        let mut sheet: serde_json::Value = serde_json::from_str(&batch.translation_sheet).unwrap();
+        sheet["translations"][0]["t"] = json!("Bienvenido al pueblo.");
+        sheet["translations"][1]["t"] = json!("Pulsa Z para confirmar.");
+
+        let parsed = parse_ai_batch_response_with_refs(
+            &serde_json::to_string(&sheet).unwrap(),
+            Some("project-1"),
+            Some(&batch.batch_id),
+            Some(&batch.response_map),
+        )
+        .unwrap();
+
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].file_path, "data/Map001.json");
+        assert_eq!(parsed[0].entry_id, "Map001:event:1:page:1:list:0");
+        assert_eq!(parsed[0].translation, "Bienvenido al pueblo.");
     }
 
     #[test]

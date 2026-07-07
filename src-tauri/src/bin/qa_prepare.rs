@@ -244,17 +244,19 @@ fn build_project(
 }
 
 fn response_template_for(batch: &AiBatchExport) -> serde_json::Value {
-    json!({
-        "p": batch.project_id,
-        "b": batch.batch_id,
-        "translations": batch.response_map.iter().map(|entry| {
-            json!({
-                "k": entry.local_id,
-                "t": "",
-                "n": "",
-                "s": false
-            })
-        }).collect::<Vec<_>>()
+    serde_json::from_str(&batch.translation_sheet).unwrap_or_else(|_| {
+        json!({
+            "p": batch.project_id,
+            "b": batch.batch_id,
+            "translations": batch.response_map.iter().map(|entry| {
+                json!({
+                    "k": entry.local_id,
+                    "t": "",
+                    "n": "",
+                    "s": false
+                })
+            }).collect::<Vec<_>>()
+        })
     })
 }
 

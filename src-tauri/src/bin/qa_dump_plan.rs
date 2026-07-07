@@ -62,7 +62,7 @@ fn print_usage() {
          \n\
          Opciones:\n\
            --output <ruta>          Archivo JSON de salida (default: <project>/qa_translate.plan.json)\n\
-           --provider <nombre>      codex|openai|deepl|google|external-ai (default: codex)\n\
+           --provider <nombre>      codex|openai|opencode|deepl|google|external-ai (default: codex)\n\
            --full                   Incluye todos los chunks y entryIds completos\n\
            --help, -h               Muestra esta ayuda"
     );
@@ -71,6 +71,7 @@ fn print_usage() {
 fn parse_provider(value: &str) -> Result<ProviderType, String> {
     match value.to_ascii_lowercase().as_str() {
         "openai" => Ok(ProviderType::Openai),
+        "opencode" | "open-code" => Ok(ProviderType::Opencode),
         "codex" => Ok(ProviderType::Codex),
         "deepl" => Ok(ProviderType::Deepl),
         "google" => Ok(ProviderType::Google),
@@ -131,6 +132,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Options, String> {
 fn provider_label(provider: &ProviderType) -> &'static str {
     match provider {
         ProviderType::Openai => "openai",
+        ProviderType::Opencode => "opencode",
         ProviderType::Codex => "codex",
         ProviderType::Deepl => "deepl",
         ProviderType::Google => "google",

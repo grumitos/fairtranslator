@@ -18,8 +18,8 @@ use crate::models::{
 };
 use crate::services::provider::{TranslationBatchContext, TranslationProvider, TranslationRequest};
 use crate::services::{
-    ai_batch, endpoint::normalize_https_endpoint_override, secrets, translation_apply,
-    translation_orchestrator,
+    ai_batch, ai_models::ProviderModel, endpoint::normalize_https_endpoint_override, secrets,
+    translation_apply, translation_orchestrator,
 };
 
 /// Name of the store file for API settings
@@ -107,6 +107,7 @@ fn provider_id(provider: &ProviderType) -> &'static str {
         ProviderType::Deepl => "deepl",
         ProviderType::Google => "google",
         ProviderType::Codex => "codex",
+        ProviderType::Opencode => "opencode",
     }
 }
 
@@ -305,6 +306,75 @@ pub async fn apikey_validate(
     create_provider(&app, &info)?.validate().await
 }
 
+/// List models for providers that expose model discovery.
+#[tauri::command]
+pub async fn apikey_models(
+    app: tauri::AppHandle,
+    provider: ProviderType,
+    api_key: Option<String>,
+    model: Option<String>,
+    endpoint: Option<String>,
+    organization: Option<String>,
+    project: Option<String>,
+    command_path: Option<String>,
+    profile: Option<String>,
+) -> Result<Vec<ProviderModel>, AppError> {
+    let mut info = apikey_load(app.clone(), provider).await?;
+    if let Some(api_key) = api_key {
+        info.api_key = api_key;
+    }
+    if model.is_some() {
+        info.model = model;
+    }
+    if endpoint.is_some() {
+        info.endpoint = endpoint;
+    }
+    if organization.is_some() {
+        info.organization = organization;
+    }
+    if project.is_some() {
+        info.project = project;
+    }
+    if command_path.is_some() {
+        info.command_path = command_path;
+    }
+    if profile.is_some() {
+        info.profile = profile;
+    }
+    let endpoint = normalize_provider_endpoint_override(&info.provider, info.endpoint.clone())?;
+
+    match info.provider {
+        ProviderType::Openai => {
+            if info.api_key.trim().is_empty() {
+                return Err(AppError::Api(
+                    "No API key configured for this provider".to_string(),
+                ));
+            }
+            crate::services::openai::OpenAiProvider::list_models(
+                &info.api_key,
+                endpoint,
+                info.organization.clone(),
+                info.project.clone(),
+            )
+            .await
+        }
+        ProviderType::Opencode => {
+            crate::services::opencode::OpenCodeProvider::list_models(&info.api_key, endpoint).await
+        }
+        ProviderType::Codex => {
+            let provider = crate::services::codex::CodexProvider::with_app_handle(
+                app,
+                info.command_path.clone(),
+                info.model.clone(),
+                info.profile.clone(),
+                None,
+            );
+            provider.list_models().await
+        }
+        ProviderType::Deepl | ProviderType::Google => Ok(Vec::new()),
+    }
+}
+
 /// Inspect the local Codex runtime without requiring saved settings.
 #[tauri::command]
 pub async fn codex_status(
@@ -431,7 +501,7 @@ fn create_provider(
                 endpoint,
                 info.organization.clone(),
                 info.project.clone(),
-            )))
+            )?))
         }
         ProviderType::Deepl => {
             use crate::services::deepl::DeepLProvider;
@@ -453,6 +523,14 @@ fn create_provider(
                 info.profile.clone(),
                 None,
             )))
+        }
+        ProviderType::Opencode => {
+            use crate::services::opencode::OpenCodeProvider;
+            Ok(Box::new(OpenCodeProvider::new(
+                info.api_key.clone(),
+                info.model.clone(),
+                endpoint,
+            )?))
         }
     }
 }
@@ -737,8 +815,13 @@ pub async fn translate_batch_start(
     state: tauri::State<'_, AppState>,
     provider: ProviderType,
     file_paths: Vec<String>,
+    model: Option<String>,
 ) -> Result<BatchProgress, AppError> {
-    let info = apikey_load(app.clone(), provider).await?;
+    let mut info = apikey_load(app.clone(), provider).await?;
+    if let Some(model) = model {
+        let model = model.trim().to_string();
+        info.model = if model.is_empty() { None } else { Some(model) };
+    }
     let (source_lang, target_lang, glossary, batches, total_entries, total_files, total_chunks) = {
         let proj_guard = state
             .project

@@ -11,7 +11,7 @@ FairTranslator currently targets the RPG Maker family, not every RPG engine.
 - Supported engines: RPG Maker MZ, MV, VX Ace, VX, and XP
 - Project format: `.fairtl`
 - Translation workflows: manual editing, batch translation through built-in providers, and external AI batch export/apply
-- Built-in providers: OpenAI, DeepL, Google Translate, and Codex
+- Built-in providers: OpenAI, OpenCode Go, DeepL, Google Translate, and Codex
 - Desktop stack: Tauri 2, Rust, React, and TypeScript
 - Release posture: Windows-first at the moment
 
@@ -21,7 +21,7 @@ FairTranslator currently targets the RPG Maker family, not every RPG engine.
 - Extracts translatable text from database files, maps, common events, troops, and system terms where supported by the engine parser/exporter
 - Stores translation progress, notes, statuses, and glossary terms inside the project
 - Applies glossary guidance during provider-based translation
-- Supports external AI workflows by exporting a structured prompt and applying a structured JSON response
+- Supports external AI workflows by exporting an editor-friendly translation sheet plus prompt guidance, then applying the structured JSON response
 - Exports a translated copy of the game to a separate output directory
 
 The exporter copies the original game to the target folder first and only writes translations into the copied output. The source game directory is not modified.
@@ -30,7 +30,7 @@ The exporter copies the original game to the target folder first and only writes
 
 FairTranslator supports two provider styles today:
 
-- Direct HTTP providers that use an API key: OpenAI, DeepL, Google Translate
+- Direct HTTP providers that use an API key: OpenAI, OpenCode Go, DeepL, Google Translate
 - Codex through the Codex CLI runtime
 
 Provider API keys are stored in the operating-system credential store on Windows. Non-secret provider settings, such as selected model, profile, organization/project identifiers, and endpoint override metadata, remain in the local app store. Legacy API keys found in the older JSON-backed store are migrated into secure storage when loaded and then removed from the JSON store.
@@ -39,11 +39,11 @@ Custom provider endpoint overrides are intentionally restricted: they must be HT
 
 For Codex, authentication is managed by the installed Codex CLI. FairTranslator does not implement ChatGPT OAuth itself and does not store ChatGPT OAuth tokens. The runtime can be resolved from:
 
-1. A bundled sidecar binary
-2. A user-configured executable path
+1. A user-configured executable path
+2. A bundled sidecar binary
 3. `codex` from `PATH`
 
-For the standard release workflow, assume option `2` or `3`. Sidecar builds are supported by the codebase, but they are not the default public release artifact.
+For the standard release workflow, assume option `1` or `3`. Sidecar builds are supported by the codebase, but they are not the default public release artifact.
 
 ## Honest Product Positioning
 
@@ -140,6 +140,8 @@ npm run tauri:build:codex-sidecar
 
 - Release/version strategy: [docs/versioning-and-roadmap.md](./docs/versioning-and-roadmap.md)
 - Run hygiene: [docs/run-hygiene.md](./docs/run-hygiene.md)
+- AI agent translation workflow: [docs/AI_AGENT_TRANSLATION_WORKFLOW.md](./docs/AI_AGENT_TRANSLATION_WORKFLOW.md)
+- Unity support plan: [docs/UNITY_TRANSLATION_SUPPORT.md](./docs/UNITY_TRANSLATION_SUPPORT.md)
 - Latest release notes: [docs/releases/v0.9.2.md](./docs/releases/v0.9.2.md)
 - Previous release notes: [docs/releases/v0.9.1.md](./docs/releases/v0.9.1.md)
 - Initial release notes: [docs/releases/v0.9.0.md](./docs/releases/v0.9.0.md)

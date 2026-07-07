@@ -27,6 +27,7 @@ pub fn run() {
             commands::translation::apikey_load,
             commands::translation::apikey_delete,
             commands::translation::apikey_validate,
+            commands::translation::apikey_models,
             commands::translation::codex_status,
             commands::translation::codex_login,
             commands::translation::translate_ai_batch_export,

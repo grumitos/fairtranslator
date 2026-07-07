@@ -2,12 +2,19 @@ use std::collections::HashSet;
 
 pub(crate) fn is_japanese_language(value: &str) -> bool {
     let lower = value.trim().to_ascii_lowercase();
-    lower == "ja" || lower == "jp" || lower.contains("japanese") || lower.contains("japon")
+    lower == "ja"
+        || lower == "jp"
+        || lower.starts_with("ja-")
+        || lower.starts_with("ja_")
+        || lower.contains("japanese")
+        || lower.contains("japon")
 }
 
 pub(crate) fn is_spanish_language(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
+    let lower = value.trim().to_ascii_lowercase();
     lower == "es"
+        || lower.starts_with("es-")
+        || lower.starts_with("es_")
         || lower.contains("spanish")
         || lower.contains("español")
         || lower.contains("espanol")
@@ -137,5 +144,13 @@ mod tests {
         let right = lexical_terms_vec("Castle gate translated previously");
 
         assert_eq!(overlap_score_vec(&left, &right), 2);
+    }
+
+    #[test]
+    fn classifies_locale_codes() {
+        assert!(is_japanese_language("ja-JP"));
+        assert!(is_spanish_language("es-419"));
+        assert!(is_spanish_language("es_MX"));
+        assert!(!is_spanish_language("en-US"));
     }
 }

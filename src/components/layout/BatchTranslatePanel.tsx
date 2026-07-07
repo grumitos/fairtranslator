@@ -1,6 +1,6 @@
 import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Bot, CheckCircle, ClipboardCopy, Play, Upload } from "lucide-react";
+import { Bot, CheckCircle, ClipboardCopy, Play, RefreshCw, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -28,7 +28,7 @@ import { useTranslation as useTranslationHook } from "@/hooks/useTranslation";
 import * as ipc from "@/lib/ipc";
 import { countPendingTranslationEntries } from "@/lib/translationMetrics";
 import { useProjectStore } from "@/stores/projectStore";
-import type { AiBatchExport, ProviderType } from "@/types/domain";
+import type { AiBatchExport, ApiKeyInfo, ProviderModel, ProviderType } from "@/types/domain";
 
 interface BatchTranslatePanelProps {
   open: boolean;
@@ -42,6 +42,7 @@ const PROVIDERS: { id: ProviderType; labelKey: string }[] = [
   { id: "deepl", labelKey: "editor:batch.providers.deepl" },
   { id: "google", labelKey: "editor:batch.providers.google" },
   { id: "codex", labelKey: "editor:batch.providers.codex" },
+  { id: "opencode", labelKey: "editor:batch.providers.opencode" },
 ];
 
 export function BatchTranslatePanel({
@@ -53,6 +54,10 @@ export function BatchTranslatePanel({
   const project = useProjectStore((s) => s.project);
   const replaceProject = useProjectStore((s) => s.replaceProject);
   const [provider, setProvider] = useState<ProviderType | "">("");
+  const [providerConfig, setProviderConfig] = useState<ApiKeyInfo | null>(null);
+  const [runModel, setRunModel] = useState("");
+  const [providerModels, setProviderModels] = useState<ProviderModel[]>([]);
+  const [isRefreshingModels, setIsRefreshingModels] = useState(false);
   const [mode, setMode] = useState<BatchMode>("providers");
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
   const [allFiles, setAllFiles] = useState(true);
@@ -78,6 +83,30 @@ export function BatchTranslatePanel({
   const providerCapabilityKey = provider
     ? (`editor:batch.providers.capabilities.${provider}` as const)
     : null;
+  const supportsRunModel =
+    provider === "openai" || provider === "opencode" || provider === "codex";
+  const requiresRunModel = provider === "openai" || provider === "opencode";
+  const requiresProviderConfig =
+    provider === "openai" || provider === "deepl" || provider === "opencode";
+  const canStartProviderRun =
+    Boolean(provider) &&
+    (!requiresProviderConfig || Boolean(providerConfig?.isConfigured)) &&
+    (!requiresRunModel || Boolean(runModel.trim())) &&
+    !isTranslating &&
+    untranslatedCount > 0;
+  const selectedRunModelInOptions = useMemo(
+    () => providerModels.some((option) => option.id === runModel),
+    [providerModels, runModel],
+  );
+  const displayedRunModels = useMemo(() => {
+    if (!runModel || selectedRunModelInOptions) {
+      return providerModels;
+    }
+    return [
+      { id: runModel, ownedBy: t("editor:batch.models.currentManual") },
+      ...providerModels,
+    ];
+  }, [providerModels, runModel, selectedRunModelInOptions, t]);
 
   const handleToggleFile = useCallback((path: string) => {
     setSelectedFiles((prev) =>
@@ -89,18 +118,61 @@ export function BatchTranslatePanel({
     if (!provider) {
       return;
     }
+    if (requiresProviderConfig && !providerConfig?.isConfigured) {
+      toast.error(t("editor:batch.noProvider"));
+      return;
+    }
+    if (requiresRunModel && !runModel.trim()) {
+      toast.error(t("editor:batch.models.required"));
+      return;
+    }
     try {
-      await startBatch(provider, fileSelection);
+      const selectedRunModel = supportsRunModel
+        ? provider === "codex"
+          ? runModel
+          : runModel.trim() || undefined
+        : undefined;
+      await startBatch(provider, fileSelection, selectedRunModel);
     } catch (e) {
       toast.error(String(e));
     }
-  }, [provider, fileSelection, startBatch]);
+  }, [fileSelection, provider, providerConfig?.isConfigured, requiresProviderConfig, requiresRunModel, runModel, startBatch, supportsRunModel, t]);
+
+  const handleRefreshProviderModels = useCallback(async () => {
+    if (!provider || !supportsRunModel) return;
+    setIsRefreshingModels(true);
+    try {
+      const models = await ipc.apikeyModels(
+        provider,
+        undefined,
+        runModel || undefined,
+        providerConfig?.endpoint,
+        providerConfig?.organization,
+        providerConfig?.project,
+        providerConfig?.commandPath,
+        providerConfig?.profile,
+      );
+      setProviderModels(models);
+      if (!runModel && models.length > 0) {
+        setRunModel(models[0].id);
+      }
+      toast.success(t("editor:batch.models.refreshed"), {
+        description: t("editor:batch.models.count", { count: models.length }),
+      });
+    } catch (e) {
+      toast.error(t("editor:batch.models.refreshFailed"), {
+        description: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      setIsRefreshingModels(false);
+    }
+  }, [provider, providerConfig, runModel, supportsRunModel, t]);
 
   const handleExportAiBatch = useCallback(async () => {
     const parsedMaxEntries = maxEntries.trim() ? Number(maxEntries) : undefined;
     if (
       parsedMaxEntries !== undefined &&
-      (!Number.isFinite(parsedMaxEntries) || parsedMaxEntries < 1)
+      (!Number.isInteger(parsedMaxEntries) || parsedMaxEntries < 1)
     ) {
       setAiError(t("editor:batch.ai.invalidMaxEntries"));
       return;
@@ -223,6 +295,35 @@ export function BatchTranslatePanel({
     setAiError(null);
     setAiWarnings([]);
   }, [project?.id]);
+
+  useEffect(() => {
+    let isActive = true;
+    setProviderModels([]);
+    setProviderConfig(null);
+    setRunModel("");
+
+    if (!provider) {
+      return () => {
+        isActive = false;
+      };
+    }
+
+    ipc.apikeyLoad(provider)
+      .then((info) => {
+        if (!isActive) return;
+        setProviderConfig(info);
+        setRunModel(info.model ?? "");
+      })
+      .catch(() => {
+        if (!isActive) return;
+        setProviderConfig(null);
+        setRunModel("");
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [provider]);
 
   useEffect(() => {
     if (wasTranslatingRef.current && !isTranslating && progress) {
@@ -353,9 +454,62 @@ export function BatchTranslatePanel({
                 </div>
               )}
 
+              {provider && supportsRunModel && (
+                <div className="space-y-2 rounded-md border border-border/70 bg-muted/30 p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-xs font-medium text-foreground">
+                        {t("editor:batch.models.title")}
+                      </p>
+                      <p className="truncate text-[11px] text-muted-foreground">
+                        {runModel.trim()
+                          ? t("editor:batch.models.selected", { model: runModel.trim() })
+                          : provider === "codex"
+                            ? t("editor:batch.models.codexDefault")
+                            : t("editor:batch.models.noneSelected")}
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void handleRefreshProviderModels()}
+                      disabled={isRefreshingModels}
+                      className="h-7 shrink-0 gap-1 px-2 text-xs"
+                    >
+                      <RefreshCw className={`size-3.5 ${isRefreshingModels ? "animate-spin" : ""}`} />
+                      {t("editor:batch.models.refresh")}
+                    </Button>
+                  </div>
+
+                  {displayedRunModels.length > 0 && (
+                    <Select value={runModel} onValueChange={setRunModel}>
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder={t("editor:batch.models.selectPlaceholder")} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {displayedRunModels.map((option) => (
+                          <SelectItem key={option.id} value={option.id}>
+                            {option.id}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+
+                  <Input
+                    name="batch-provider-model"
+                    value={runModel}
+                    onChange={(event) => setRunModel(event.target.value)}
+                    placeholder={t("editor:batch.models.manualPlaceholder")}
+                    className="text-xs"
+                  />
+                </div>
+              )}
+
               <Button
                 onClick={handleStart}
-                disabled={!provider || isTranslating || untranslatedCount === 0}
+                disabled={!canStartProviderRun}
                 className="w-full"
               >
                 {isTranslating ? (

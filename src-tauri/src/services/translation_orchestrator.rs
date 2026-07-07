@@ -7,6 +7,7 @@ use crate::models::{EntryStatus, Project, ProviderType, TranslationEntry, Transl
 use crate::services::ai_batch;
 use crate::services::codex::CodexProvider;
 use crate::services::openai::OpenAiProvider;
+use crate::services::opencode::OpenCodeProvider;
 use crate::services::provider::{
     TranslationBatchContext, TranslationExample, TranslationRequest, TranslationTermHint,
 };
@@ -18,6 +19,7 @@ use crate::services::translation_text::{
 
 const DEFAULT_MAX_ENTRIES_PER_CHUNK: usize = 20;
 const LLM_MAX_ENTRIES_PER_CHUNK: usize = 24;
+const OPENCODE_MAX_ENTRIES_PER_CHUNK: usize = 16;
 const EXTERNAL_AI_DEFAULT_MAX_ENTRIES_PER_CHUNK: usize = 200;
 const MAX_TERM_HINTS: usize = 12;
 const MAX_TRANSLATION_EXAMPLES: usize = 6;
@@ -29,6 +31,7 @@ const MAX_ESTIMATED_TOTAL_TOKENS: usize = 18_000;
 enum ChunkPlanningMode {
     Standard,
     OpenAi,
+    OpenCode,
     Codex,
     ExternalAi,
 }
@@ -81,13 +84,15 @@ pub struct PlanningProgressSnapshot {
 }
 
 pub fn entry_is_pending_translation(entry: &TranslationEntry) -> bool {
-    entry.status == EntryStatus::Untranslated && !entry.original.trim().is_empty()
+    !entry.original.trim().is_empty()
+        && (entry.status == EntryStatus::Untranslated || entry.translation.trim().is_empty())
 }
 
 fn mode_for_provider(provider: &ProviderType) -> ChunkPlanningMode {
     match provider {
         ProviderType::Openai => ChunkPlanningMode::OpenAi,
         ProviderType::Codex => ChunkPlanningMode::Codex,
+        ProviderType::Opencode => ChunkPlanningMode::OpenCode,
         ProviderType::Deepl | ProviderType::Google => ChunkPlanningMode::Standard,
     }
 }
@@ -209,6 +214,7 @@ fn ensure_plan_within_budget_for_mode(
             .unwrap_or("unknown");
         let provider_label = match mode {
             ChunkPlanningMode::OpenAi => "OpenAI",
+            ChunkPlanningMode::OpenCode => "OpenCode",
             ChunkPlanningMode::Codex => "Codex",
             ChunkPlanningMode::ExternalAi => "External AI export",
             ChunkPlanningMode::Standard => "provider",
@@ -418,7 +424,7 @@ fn build_style_guide(project: &Project, selected_files: &[&TranslationFile]) -> 
 
     if has_ui {
         notes.push(
-            "Keep menu labels, commands and database names concise enough for RPG UI.".into(),
+            "Keep menu labels, commands and database names concise enough for the game UI.".into(),
         );
     }
     if is_spanish_language(&project.target_lang) && has_ui {
@@ -448,11 +454,11 @@ fn build_style_guide(project: &Project, selected_files: &[&TranslationFile]) -> 
         );
     }
     if is_japanese_language(&project.source_lang) && is_spanish_language(&project.target_lang) {
-        notes.push("For Japanese-to-Spanish RPG Maker text, prefer natural neutral Spanish over literal Japanese wording; e.g. render 学校の帰り道 as de vuelta de la escuela, and 一人称 UI settings as forma de referirse a sí mismo.".into());
-        notes.push("Preserve RPG Maker choice/plugin condition prefixes exactly, such as if(s[12]) and en(s[20]); translate only the visible choice label after those prefixes and control codes.".into());
-        notes.push("Adapt dialogue like dubbing or subtitles: keep Spanish compact enough for the original RPG Maker text timing/window, condense instead of expanding literally, and do not add extra dialogue lines.".into());
-        notes.push("Do not change RPG Maker script commands, scene logic, variables, tags or formatting; preserve structure and only translate visible text.".into());
-        notes.push("Keep Spanish UI and choice labels concise so they fit RPG Maker windows, and avoid Japanese punctuation marks in Spanish output unless they are part of preserved names or source artifacts.".into());
+        notes.push("For Japanese-to-Spanish game text, prefer natural neutral Spanish over literal Japanese wording; e.g. render 学校の帰り道 as de vuelta de la escuela, and 一人称 UI settings as forma de referirse a sí mismo.".into());
+        notes.push("Preserve choice/plugin condition prefixes exactly when present, such as if(s[12]) and en(s[20]); translate only the visible choice label after those prefixes and control codes.".into());
+        notes.push("Adapt dialogue like dubbing or subtitles: keep Spanish compact enough for the original text timing/window, condense instead of expanding literally, and do not add extra dialogue lines.".into());
+        notes.push("Do not change engine script commands, scene logic, variables, tags or formatting; preserve structure and only translate visible text.".into());
+        notes.push("Keep Spanish UI and choice labels concise so they fit the original game UI/text windows, and avoid Japanese punctuation marks in Spanish output unless they are part of preserved names or source artifacts.".into());
         notes.push("For credits and staff rolls, translate role headings while preserving names, circles, brand names and supporter handles.".into());
     }
 
@@ -710,6 +716,7 @@ fn planner_cache_fingerprint_for_mode(
     let mode_label = match mode {
         ChunkPlanningMode::Standard => "standard",
         ChunkPlanningMode::OpenAi => "openai",
+        ChunkPlanningMode::OpenCode => "opencode",
         ChunkPlanningMode::Codex => "codex",
         ChunkPlanningMode::ExternalAi => "external-ai",
     };
@@ -781,6 +788,7 @@ fn max_entries_for_mode(mode: ChunkPlanningMode, max_entries: Option<usize>) -> 
     match mode {
         ChunkPlanningMode::Standard => DEFAULT_MAX_ENTRIES_PER_CHUNK,
         ChunkPlanningMode::OpenAi | ChunkPlanningMode::Codex => LLM_MAX_ENTRIES_PER_CHUNK,
+        ChunkPlanningMode::OpenCode => OPENCODE_MAX_ENTRIES_PER_CHUNK,
         ChunkPlanningMode::ExternalAi => max_entries
             .unwrap_or(EXTERNAL_AI_DEFAULT_MAX_ENTRIES_PER_CHUNK)
             .max(1),
@@ -963,6 +971,13 @@ fn estimated_prompt_tokens(
     match mode {
         ChunkPlanningMode::Standard => 0,
         ChunkPlanningMode::OpenAi => OpenAiProvider::estimate_total_tokens(
+            &project.source_lang,
+            &project.target_lang,
+            entries,
+            &project.glossary,
+            context,
+        ),
+        ChunkPlanningMode::OpenCode => OpenCodeProvider::estimate_total_tokens(
             &project.source_lang,
             &project.target_lang,
             entries,
@@ -1242,6 +1257,31 @@ mod tests {
             .map(|index| format!("Long rule {index}: {}", "z".repeat(320)))
             .collect();
         project
+    }
+
+    #[test]
+    fn test_entry_pending_counts_blank_translation_even_after_status_drift() {
+        assert!(entry_is_pending_translation(&make_entry(
+            "draft-empty",
+            "Map001 > Show Text",
+            "Hello",
+            "",
+            EntryStatus::Draft,
+        )));
+        assert!(entry_is_pending_translation(&make_entry(
+            "final-empty",
+            "Map001 > Show Text",
+            "Hello",
+            "   ",
+            EntryStatus::Final,
+        )));
+        assert!(!entry_is_pending_translation(&make_entry(
+            "blank-original",
+            "Map001 > Show Text",
+            "   ",
+            "",
+            EntryStatus::Untranslated,
+        )));
     }
 
     #[test]

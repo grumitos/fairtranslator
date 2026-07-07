@@ -10,6 +10,9 @@ use crate::models::GlossaryTerm;
 use crate::services::provider::{
     TranslationBatchContext, TranslationProvider, TranslationRequest, TranslationResponse,
 };
+use crate::services::translation_replacements::{
+    protect_special_literals, restore_replacements, TextReplacement,
+};
 
 /// Maximum texts per API call. DeepL supports up to 50 texts per request.
 const MAX_BATCH_SIZE: usize = 50;
@@ -174,7 +177,11 @@ impl TranslationProvider for DeepLProvider {
         };
 
         for chunk in requests.chunks(MAX_BATCH_SIZE) {
-            let texts: Vec<String> = chunk.iter().map(|r| r.text.clone()).collect();
+            let prepared: Vec<(String, Vec<TextReplacement>)> = chunk
+                .iter()
+                .map(|request| protect_special_literals(&request.text))
+                .collect();
+            let texts: Vec<String> = prepared.iter().map(|(text, _)| text.clone()).collect();
 
             let deepl_request = DeepLRequest {
                 text: texts,
@@ -210,10 +217,14 @@ impl TranslationProvider for DeepLProvider {
                 )));
             }
 
-            for (req, translation) in chunk.iter().zip(deepl_response.translations.into_iter()) {
+            for ((req, translation), (_, replacements)) in chunk
+                .iter()
+                .zip(deepl_response.translations.into_iter())
+                .zip(prepared.iter())
+            {
                 all_responses.push(TranslationResponse {
                     entry_id: req.entry_id.clone(),
-                    translated_text: translation.text,
+                    translated_text: restore_replacements(translation.text, replacements),
                 });
             }
         }

@@ -14,6 +14,7 @@ use tokio::task;
 
 use crate::error::AppError;
 use crate::models::GlossaryTerm;
+use crate::services::ai_models::ProviderModel;
 use crate::services::compact_prompt::{self, CompactPromptBundle};
 use crate::services::provider::{
     approximate_token_count, TranslationBatchContext, TranslationProvider, TranslationRequest,
@@ -263,6 +264,66 @@ impl CodexProvider {
         self.runtime_status().await
     }
 
+    pub async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
+        let runtime = self
+            .resolve_runtime()
+            .await
+            .map_err(|failure| AppError::Api(failure.message))?;
+        let output = self
+            .run_command(
+                &runtime.candidate,
+                vec!["models".to_string()],
+                None,
+                None,
+                None,
+            )
+            .await?;
+
+        let mut models = Vec::new();
+        if output.status.success() {
+            let combined = format!(
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            for line in combined
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+            {
+                for token in line.split_whitespace() {
+                    let token = token.trim_matches(|ch: char| {
+                        matches!(ch, ',' | ';' | '*' | '[' | ']' | '(' | ')' | '"' | '\'')
+                    });
+                    if looks_like_model_id(token)
+                        && !models.iter().any(|model: &ProviderModel| model.id == token)
+                    {
+                        models.push(ProviderModel {
+                            id: token.to_string(),
+                            owned_by: Some("codex-cli".to_string()),
+                            created: None,
+                        });
+                    }
+                }
+            }
+        }
+
+        if let Some(configured_model) = &self.model {
+            if !models.iter().any(|model| model.id == *configured_model) {
+                models.insert(
+                    0,
+                    ProviderModel {
+                        id: configured_model.clone(),
+                        owned_by: Some("configured".to_string()),
+                        created: None,
+                    },
+                );
+            }
+        }
+
+        Ok(models)
+    }
+
     async fn run_login_command(
         &self,
         runtime: &RuntimeCandidate,
@@ -304,12 +365,6 @@ impl CodexProvider {
     }
 
     async fn resolve_runtime(&self) -> Result<ResolvedRuntime, RuntimeResolutionFailure> {
-        if let Some(sidecar_candidate) = self.sidecar_candidate() {
-            if let Ok(runtime) = self.probe_runtime(sidecar_candidate).await {
-                return Ok(runtime);
-            }
-        }
-
         if let Some(configured_path) = &self.configured_command_path {
             let resolved = resolve_command_path(configured_path);
             let candidate = RuntimeCandidate {
@@ -328,6 +383,12 @@ impl CodexProvider {
                 });
             }
             return self.probe_runtime(candidate).await;
+        }
+
+        if let Some(sidecar_candidate) = self.sidecar_candidate() {
+            if let Ok(runtime) = self.probe_runtime(sidecar_candidate).await {
+                return Ok(runtime);
+            }
         }
 
         let resolved = resolve_command_path(DEFAULT_COMMAND_PATH);
@@ -573,6 +634,20 @@ fn login_requires_auth(output: &str) -> bool {
         || normalized.contains("run codex login")
         || normalized.contains("authentication required")
         || normalized.contains("login required")
+}
+
+fn looks_like_model_id(value: &str) -> bool {
+    let value = value.trim();
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '/' | ':'))
+        && (value.contains('-') || value.contains('/') || value.starts_with("gpt"))
+        && !matches!(
+            value.to_ascii_lowercase().as_str(),
+            "models" | "model" | "provider" | "available"
+        )
 }
 
 fn reasoning_effort_config_arg(reasoning_effort: &str) -> String {

@@ -42,14 +42,34 @@ fn fit_message_lines_to_existing_slots(lines: Vec<String>, max_lines: usize) -> 
 fn reflow_mv_mz_message_lines(translation: &str, compact_blank_lines: bool) -> Vec<String> {
     let mut lines = Vec::new();
     let mut paragraph = String::new();
+    let first_nonempty = translation
+        .split('\n')
+        .position(|line| !line.trim().is_empty());
+    let preserve_first = first_nonempty.is_some_and(|index| {
+        translation.split('\n').nth(index).is_some_and(|line| {
+            let line = line.trim();
+            visible_message_width(line) <= 32
+                && !line.ends_with(['.', '!', '?', '…', ',', ';'])
+                && translation
+                    .split('\n')
+                    .skip(index + 1)
+                    .any(|next| !next.trim().is_empty())
+        })
+    });
 
-    for raw_line in translation.split('\n') {
+    for (index, raw_line) in translation.split('\n').enumerate() {
         let line = raw_line.trim();
         if line.is_empty() {
             flush_reflowed_message_paragraph(&mut paragraph, &mut lines);
             if !compact_blank_lines {
                 lines.push(String::new());
             }
+            continue;
+        }
+
+        if preserve_first && first_nonempty == Some(index) {
+            flush_reflowed_message_paragraph(&mut paragraph, &mut lines);
+            lines.push(line.to_string());
             continue;
         }
 
@@ -225,5 +245,31 @@ mod tests {
 
         assert!(wrapped.starts_with("\\N[1]"));
         assert!(wrapped.lines().count() <= 3);
+    }
+
+    #[test]
+    fn preserves_short_speaker_line_before_dialogue() {
+        let wrapped = wrap_mv_mz_message_translation(
+            "Nanae\nTe irás de Ciudad Tanena cuando termine tu periodo, ¿no?",
+            false,
+            3,
+        );
+        let lines = wrapped.lines().collect::<Vec<_>>();
+
+        assert_eq!(lines[0], "Nanae");
+        assert!(lines[1].starts_with("Te irás"));
+    }
+
+    #[test]
+    fn preserves_short_title_line_with_colon_before_dialogue() {
+        let wrapped = wrap_mv_mz_message_translation(
+            "Yuika:\nTe irás de Ciudad Tanena cuando termine tu periodo, ¿no?",
+            false,
+            3,
+        );
+        let lines = wrapped.lines().collect::<Vec<_>>();
+
+        assert_eq!(lines[0], "Yuika:");
+        assert!(lines[1].starts_with("Te irás"));
     }
 }

@@ -1,11 +1,19 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useApiKeys } from "@/hooks/useApiKeys";
-import type { ApiKeyInfo, CodexRuntimeStatus, ProviderType } from "@/types/domain";
+import type { ApiKeyInfo, CodexRuntimeStatus, ProviderModel, ProviderType } from "@/types/domain";
 
 interface ApiKeySectionProps {
   provider: ProviderType;
@@ -28,7 +36,16 @@ function isConfigured(info: ApiKeyInfo): boolean {
 
 export function ApiKeySection({ provider }: ApiKeySectionProps) {
   const { t } = useTranslation("settings");
-  const { load, save, remove, validate, inspectCodex, loginCodex, isLoading } = useApiKeys();
+  const {
+    load,
+    save,
+    remove,
+    validate,
+    listModels,
+    inspectCodex,
+    loginCodex,
+    isLoading,
+  } = useApiKeys();
   const [apiKey, setApiKey] = useState("");
   const [model, setModel] = useState("");
   const [endpoint, setEndpoint] = useState("");
@@ -36,11 +53,15 @@ export function ApiKeySection({ provider }: ApiKeySectionProps) {
   const [project, setProject] = useState("");
   const [commandPath, setCommandPath] = useState("");
   const [profile, setProfile] = useState("");
+  const [modelOptions, setModelOptions] = useState<ProviderModel[]>([]);
+  const [isRefreshingModels, setIsRefreshingModels] = useState(false);
   const [hasConfig, setHasConfig] = useState(false);
   const [codexStatus, setCodexStatus] = useState<CodexRuntimeStatus | null>(null);
 
   const isCodex = provider === "codex";
-  const supportsModel = provider === "openai" || provider === "codex";
+  const isOpenCode = provider === "opencode";
+  const supportsModel = provider === "openai" || provider === "codex" || isOpenCode;
+  const supportsModelRefresh = provider === "openai" || provider === "codex" || isOpenCode;
   const supportsEndpoint = provider !== "codex";
   const providerKey = useMemo(() => {
     switch (provider) {
@@ -52,10 +73,30 @@ export function ApiKeySection({ provider }: ApiKeySectionProps) {
         return "google";
       case "codex":
         return "codex";
+      case "opencode":
+        return "opencode";
       default:
         return "openai";
     }
   }, [provider]);
+
+  const selectedModelExistsInOptions = useMemo(
+    () => modelOptions.some((option) => option.id === model),
+    [model, modelOptions],
+  );
+
+  const displayedModelOptions = useMemo(() => {
+    if (!model || selectedModelExistsInOptions) {
+      return modelOptions;
+    }
+    return [
+      {
+        id: model,
+        ownedBy: t("apiKeys.models.currentManual"),
+      },
+      ...modelOptions,
+    ];
+  }, [model, modelOptions, selectedModelExistsInOptions, t]);
 
   const codexStatusLabelKey = useMemo(() => {
     if (!codexStatus) return null;
@@ -113,6 +154,7 @@ export function ApiKeySection({ provider }: ApiKeySectionProps) {
         setProject(info.project ?? "");
         setCommandPath(info.commandPath ?? "");
         setProfile(info.profile ?? "");
+        setModelOptions([]);
         setHasConfig(isConfigured(info));
 
         if (provider === "codex") {
@@ -142,6 +184,50 @@ export function ApiKeySection({ provider }: ApiKeySectionProps) {
       isActive = false;
     };
   }, [inspectCodex, load, provider]);
+
+  const handleRefreshModels = useCallback(async () => {
+    if (!supportsModelRefresh) return;
+    setIsRefreshingModels(true);
+    try {
+      const models = await listModels(
+        provider,
+        isCodex ? undefined : apiKey,
+        model || undefined,
+        supportsEndpoint ? endpoint : undefined,
+        provider === "openai" ? organization : undefined,
+        provider === "openai" ? project : undefined,
+        isCodex ? commandPath : undefined,
+        isCodex ? profile : undefined,
+      );
+      setModelOptions(models);
+      if (!model && models.length > 0) {
+        setModel(models[0].id);
+      }
+      toast.success(t("apiKeys.models.refreshed"), {
+        description: t("apiKeys.models.count", { count: models.length }),
+      });
+    } catch (e) {
+      toast.error(t("apiKeys.models.refreshFailed"), {
+        description: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      setIsRefreshingModels(false);
+    }
+  }, [
+    apiKey,
+    commandPath,
+    endpoint,
+    isCodex,
+    listModels,
+    model,
+    organization,
+    profile,
+    project,
+    provider,
+    supportsEndpoint,
+    supportsModelRefresh,
+    t,
+  ]);
 
   const handleSave = useCallback(async () => {
     try {
@@ -196,6 +282,7 @@ export function ApiKeySection({ provider }: ApiKeySectionProps) {
       setProject("");
       setCommandPath("");
       setProfile("");
+      setModelOptions([]);
       setHasConfig(false);
       if (isCodex) {
         await refreshCodexStatus("", "", "");
@@ -262,7 +349,7 @@ export function ApiKeySection({ provider }: ApiKeySectionProps) {
 
   return (
     <div className="space-y-3 rounded-lg border p-3">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <Label className="text-sm font-medium">{t(`apiKeys.${providerKey}.label`)}</Label>
         {hasConfig && (
           <span className="text-xs text-success">
@@ -286,16 +373,51 @@ export function ApiKeySection({ provider }: ApiKeySectionProps) {
       )}
 
       {supportsModel && (
-        <Input
-          name={`${providerKey}-model`}
-          aria-label={t("apiKeys.model")}
-          autoComplete="off"
-          spellCheck={false}
-          value={model}
-          onChange={(e) => setModel(e.target.value)}
-          placeholder={t("apiKeys.modelPlaceholder")}
-          className="text-xs"
-        />
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <Label htmlFor={`${providerKey}-model`} className="text-xs text-muted-foreground">
+              {t("apiKeys.model")}
+            </Label>
+            {supportsModelRefresh && (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => void handleRefreshModels()}
+                disabled={isLoading || isRefreshingModels}
+                className="h-7 gap-1 px-2 text-xs"
+              >
+                <RefreshCw className={`size-3.5 ${isRefreshingModels ? "animate-spin" : ""}`} />
+                {t("apiKeys.models.refresh")}
+              </Button>
+            )}
+          </div>
+          {displayedModelOptions.length > 0 && (
+            <Select value={model} onValueChange={setModel}>
+              <SelectTrigger className="w-full text-xs">
+                <SelectValue placeholder={t("apiKeys.models.selectPlaceholder")} />
+              </SelectTrigger>
+              <SelectContent>
+                {displayedModelOptions.map((option) => (
+                  <SelectItem key={option.id} value={option.id}>
+                    {option.id}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          <Input
+            id={`${providerKey}-model`}
+            name={`${providerKey}-model`}
+            aria-label={t("apiKeys.model")}
+            autoComplete="off"
+            spellCheck={false}
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            placeholder={t("apiKeys.modelPlaceholder")}
+            className="text-xs"
+          />
+        </div>
       )}
 
       {provider === "openai" && (
@@ -400,6 +522,10 @@ export function ApiKeySection({ provider }: ApiKeySectionProps) {
         </>
       )}
 
+      {isOpenCode && (
+        <p className="text-xs text-muted-foreground">{t("apiKeys.opencode.authNote")}</p>
+      )}
+
       {supportsEndpoint && (
         <Input
           name={`${providerKey}-endpoint`}
@@ -410,7 +536,11 @@ export function ApiKeySection({ provider }: ApiKeySectionProps) {
           spellCheck={false}
           value={endpoint}
           onChange={(e) => setEndpoint(e.target.value)}
-          placeholder={t("apiKeys.endpointPlaceholder")}
+          placeholder={
+            isOpenCode
+              ? t("apiKeys.opencode.endpointPlaceholder")
+              : t("apiKeys.endpointPlaceholder")
+          }
           className="text-xs"
         />
       )}

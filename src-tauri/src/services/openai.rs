@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
 use crate::models::GlossaryTerm;
+use crate::services::ai_models::{self, ProviderModel};
 use crate::services::compact_prompt;
 use crate::services::provider::{
     approximate_token_count, TranslationBatchContext, TranslationProvider, TranslationRequest,
@@ -18,9 +19,6 @@ use crate::services::provider::{
 const MAX_BATCH_SIZE: usize = 24;
 const OPENAI_CHAT_WRAPPER_TOKEN_OVERHEAD: usize = 96;
 const OPENAI_RESPONSE_HEADROOM_TOKENS: usize = 2048;
-
-/// Default model to use if none is specified in config
-const DEFAULT_MODEL: &str = "gpt-4o-mini";
 
 /// Default API endpoint
 const DEFAULT_ENDPOINT: &str = "https://api.openai.com/v1/chat/completions";
@@ -41,15 +39,20 @@ impl OpenAiProvider {
         endpoint: Option<String>,
         organization: Option<String>,
         project: Option<String>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, AppError> {
+        let model = model
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| AppError::Api("Select an OpenAI model before translating".into()))?;
+
+        Ok(Self {
             client: Client::new(),
             api_key,
-            model: model.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
+            model,
             endpoint: endpoint.unwrap_or_else(|| DEFAULT_ENDPOINT.to_string()),
             organization: organization.filter(|value| !value.trim().is_empty()),
             project: project.filter(|value| !value.trim().is_empty()),
-        }
+        })
     }
 
     fn apply_auth_headers(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
@@ -65,6 +68,31 @@ impl OpenAiProvider {
         } else {
             request
         }
+    }
+
+    pub async fn list_models(
+        api_key: &str,
+        endpoint: Option<String>,
+        organization: Option<String>,
+        project: Option<String>,
+    ) -> Result<Vec<ProviderModel>, AppError> {
+        let client = Client::new();
+        let endpoint = endpoint.unwrap_or_else(|| DEFAULT_ENDPOINT.to_string());
+        let mut headers = Vec::new();
+        if let Some(organization) = organization.as_deref() {
+            headers.push(("OpenAI-Organization", organization));
+        }
+        if let Some(project) = project.as_deref() {
+            headers.push(("OpenAI-Project", project));
+        }
+
+        ai_models::list_openai_compatible_models(
+            &client,
+            &endpoint,
+            Some(api_key),
+            headers.as_slice(),
+        )
+        .await
     }
 
     /// Build the system prompt with glossary and orchestration context.
@@ -306,14 +334,34 @@ mod tests {
 
     #[test]
     fn test_provider_name() {
-        let provider = OpenAiProvider::new("test-key".to_string(), None, None, None, None);
+        let provider = OpenAiProvider::new(
+            "test-key".to_string(),
+            Some("test-model".to_string()),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(provider.name(), "OpenAI");
     }
 
     #[test]
-    fn test_default_model_and_endpoint() {
-        let provider = OpenAiProvider::new("test-key".to_string(), None, None, None, None);
-        assert_eq!(provider.model, DEFAULT_MODEL);
+    fn test_requires_model_and_defaults_endpoint() {
+        let error = match OpenAiProvider::new("test-key".to_string(), None, None, None, None) {
+            Ok(_) => panic!("OpenAI provider should require an explicit model"),
+            Err(error) => error.to_string(),
+        };
+        assert!(error.contains("Select an OpenAI model"));
+
+        let provider = OpenAiProvider::new(
+            "test-key".to_string(),
+            Some("test-model".to_string()),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(provider.model, "test-model");
         assert_eq!(provider.endpoint, DEFAULT_ENDPOINT);
         assert_eq!(provider.organization, None);
         assert_eq!(provider.project, None);
@@ -327,7 +375,8 @@ mod tests {
             Some("https://custom.api.com/v1/chat".to_string()),
             Some("org_123".to_string()),
             Some("proj_456".to_string()),
-        );
+        )
+        .unwrap();
         assert_eq!(provider.model, "gpt-4o");
         assert_eq!(provider.endpoint, "https://custom.api.com/v1/chat");
         assert_eq!(provider.organization.as_deref(), Some("org_123"));
@@ -343,7 +392,8 @@ mod tests {
             &TranslationBatchContext::default(),
         );
         assert!(prompt.contains("\\V[n]") || prompt.contains("control codes"));
-        assert!(prompt.contains("\\N[n]") || prompt.contains("RPG Maker"));
+        assert!(prompt.contains("placeholders"));
+        assert!(prompt.contains("game text"));
     }
 
     #[test]
@@ -383,11 +433,12 @@ mod tests {
     fn test_empty_scoping_headers_are_normalized_to_none() {
         let provider = OpenAiProvider::new(
             "test-key".to_string(),
-            None,
+            Some("test-model".to_string()),
             None,
             Some("   ".to_string()),
             Some(String::new()),
-        );
+        )
+        .unwrap();
         assert_eq!(provider.organization, None);
         assert_eq!(provider.project, None);
     }
@@ -396,11 +447,12 @@ mod tests {
     fn test_apply_auth_headers_includes_optional_scoping() {
         let provider = OpenAiProvider::new(
             "test-key".to_string(),
-            None,
+            Some("test-model".to_string()),
             None,
             Some("org_123".to_string()),
             Some("proj_456".to_string()),
-        );
+        )
+        .unwrap();
 
         let request = provider
             .apply_auth_headers(provider.client.post(&provider.endpoint))

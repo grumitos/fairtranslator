@@ -49,6 +49,12 @@ export interface ApiKeyInfo {
   isConfigured?: boolean;
 }
 
+export interface ProviderModel {
+  id: string;
+  ownedBy?: string;
+  created?: number;
+}
+
 export interface CodexRuntimeStatus {
   state: "ready" | "loginRequired" | "notInstalled" | "error" | string;
   effectiveCommandPath: string;

@@ -1,6 +1,6 @@
 /// Trait defining the interface for translation API providers.
 ///
-/// Each provider (OpenAI, DeepL, Google) implements this trait so the batch
+/// Each provider implements this trait so the batch
 /// translation system can work with any backend transparently.
 use serde::{Deserialize, Serialize};
 

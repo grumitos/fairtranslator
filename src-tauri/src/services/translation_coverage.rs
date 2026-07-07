@@ -166,7 +166,7 @@ pub fn validate_project_translation_coverage(
                 continue;
             }
 
-            if has_source_script_residue(project, entry, translation) {
+            if has_source_script_residue(project, file.relative_path.as_str(), entry, translation) {
                 source_script_residue += 1;
                 push_issue(
                     &mut issues,
@@ -237,10 +237,16 @@ fn push_issue(issues: &mut Vec<CoverageIssue>, max_issues: usize, issue: Coverag
 
 fn has_source_script_residue(
     project: &Project,
+    file_path: &str,
     entry: &TranslationEntry,
     translation: &str,
 ) -> bool {
     if is_japanese_language(&project.target_lang) {
+        return false;
+    }
+    if normalize_visible(&entry.original) == normalize_visible(translation)
+        && is_allowed_unchanged_exception(file_path, entry, &entry.original)
+    {
         return false;
     }
 
@@ -259,7 +265,7 @@ fn is_unchanged_translatable_text(
         return false;
     }
 
-    if is_allowed_unchanged_exception(file_path, entry, &original) {
+    if is_allowed_unchanged_exception(file_path, entry, &entry.original) {
         return false;
     }
 
@@ -280,6 +286,9 @@ fn is_allowed_unchanged_exception(
         || is_shared_spanish_term(visible_text)
         || is_bracketed_proper_name_cue(visible_text)
         || is_enemy_or_troop_proper_name_list(entry, visible_text)
+        || is_contextual_proper_name(entry, visible_text)
+        || is_variable_text_proper_name(entry, visible_text)
+        || is_nonlexical_dialogue(visible_text)
 }
 
 fn is_game_title_entry(file_path: &str, entry: &TranslationEntry) -> bool {
@@ -365,6 +374,150 @@ fn is_enemy_or_troop_proper_name_list(entry: &TranslationEntry, value: &str) -> 
         .all(is_likely_proper_name_token)
 }
 
+fn is_contextual_proper_name(entry: &TranslationEntry, value: &str) -> bool {
+    let id = entry.id.to_ascii_lowercase();
+    if !(id.starts_with("items:name:") || id.contains(":choice:")) {
+        return false;
+    }
+
+    looks_like_proper_name(value)
+}
+
+fn is_variable_text_proper_name(entry: &TranslationEntry, value: &str) -> bool {
+    if !entry.id.to_ascii_lowercase().contains(":variabletext:") {
+        return false;
+    }
+
+    let tokens = value
+        .split(|ch: char| !ch.is_ascii_alphabetic())
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>();
+    if tokens.is_empty() || tokens.len() > 4 {
+        return false;
+    }
+
+    tokens.iter().all(|token| {
+        let normalized = token.to_ascii_lowercase();
+        if matches!(
+            normalized.as_str(),
+            "city"
+                | "waste"
+                | "plant"
+                | "treatment"
+                | "center"
+                | "pool"
+                | "hotel"
+                | "academy"
+                | "shop"
+                | "station"
+                | "library"
+                | "specialty"
+                | "retailer"
+                | "indoor"
+                | "public"
+                | "bath"
+                | "hotspring"
+                | "shrine"
+                | "park"
+                | "apartment"
+                | "cafe"
+                | "karaoke"
+                | "dorm"
+                | "bus"
+        ) {
+            return false;
+        }
+
+        matches!(
+            normalized.as_str(),
+            "bar" | "gachapon" | "oniisan" | "oneesan" | "chan" | "san" | "kun" | "sama"
+        ) || token.len() > 1 && token.chars().all(|ch| ch.is_ascii_uppercase())
+            || is_likely_proper_name_token(token)
+    })
+}
+
+fn looks_like_proper_name(value: &str) -> bool {
+    let tokens = value
+        .split(|ch: char| !ch.is_alphabetic())
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>();
+    if tokens.is_empty() || tokens.len() > 3 {
+        return false;
+    }
+
+    let normalized = tokens.join(" ").to_ascii_lowercase();
+    if matches!(
+        normalized.as_str(),
+        "yes" | "no" | "maybe" | "back" | "cancel" | "continue" | "exit"
+    ) {
+        return false;
+    }
+
+    tokens.iter().all(|token| {
+        token.len() == 1 && token.chars().all(|ch| ch.is_uppercase())
+            || token.chars().next().is_some_and(|ch| ch.is_uppercase())
+                && token.chars().skip(1).all(|ch| ch.is_lowercase())
+    })
+}
+
+fn is_nonlexical_dialogue(value: &str) -> bool {
+    let lines = value
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    if lines.len() < 2 {
+        return false;
+    }
+    let speaker = lines[0];
+    if !looks_like_proper_name(speaker) {
+        return false;
+    }
+
+    let rest = lines[1..].join(" ");
+    let tokens = rest
+        .split(|ch: char| !ch.is_alphabetic())
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>();
+    if tokens.is_empty() {
+        return true;
+    }
+
+    tokens.iter().enumerate().all(|(index, token)| {
+        let normalized = token.to_ascii_lowercase();
+        matches!(
+            normalized.as_str(),
+            "ah" | "ahh"
+                | "ahhh"
+                | "ahhhh"
+                | "ahmm"
+                | "agh"
+                | "hah"
+                | "hmm"
+                | "hmmm"
+                | "hmph"
+                | "huff"
+                | "mmm"
+                | "no"
+                | "wah"
+                | "chan"
+                | "san"
+                | "kun"
+                | "sama"
+                | "oniisan"
+                | "oneesan"
+        ) || token.len() == 1 && token.chars().all(|ch| ch.is_uppercase())
+            || token.chars().count() <= 2
+            || token.chars().next().is_some_and(|ch| ch.is_uppercase())
+                && tokens.get(index + 1).is_some_and(|next| {
+                    matches!(
+                        next.to_ascii_lowercase().as_str(),
+                        "chan" | "san" | "kun" | "sama"
+                    )
+                })
+    })
+}
+
 fn is_likely_proper_name_token(token: &str) -> bool {
     let normalized = token.to_ascii_lowercase();
     if normalized.len() < 2 || !normalized.chars().all(|ch| ch.is_ascii_alphabetic()) {
@@ -441,7 +594,7 @@ fn normalize_visible(value: &str) -> String {
 }
 
 fn contains_japanese_script(value: &str) -> bool {
-    value.chars().any(|ch| {
+    value.chars().filter(|ch| *ch != '彡').any(|ch| {
         matches!(
             ch as u32,
             0x3040..=0x309F
@@ -637,6 +790,55 @@ mod tests {
     }
 
     #[test]
+    fn allows_contextual_names_and_nonlexical_dialogue_only() {
+        let item = entry("Items:name:2", "Monsta", "Monsta", EntryStatus::Reviewed);
+        let choice = entry(
+            "CommonEvents:76:choice:68:0",
+            "Alexander",
+            "Alexander",
+            EntryStatus::Reviewed,
+        );
+        let command = entry(
+            "CommonEvents:76:choice:68:0",
+            "Yes",
+            "Yes",
+            EntryStatus::Reviewed,
+        );
+        let cocktail = entry(
+            "CommonEvents:76:choice:68:2",
+            "X・Y・Z",
+            "X・Y・Z",
+            EntryStatus::Reviewed,
+        );
+
+        assert!(is_contextual_proper_name(&item, "Monsta"));
+        assert!(is_contextual_proper_name(&choice, "Alexander"));
+        assert!(!is_contextual_proper_name(&command, "Yes"));
+        assert!(!has_source_script_residue(
+            &project(Vec::new()),
+            "data/CommonEvents.json",
+            &cocktail,
+            &cocktail.translation
+        ));
+        assert!(is_nonlexical_dialogue("Akane\n............"));
+        assert!(is_nonlexical_dialogue(
+            "Izumi\nY-Yuna-chan... Hah... Hmm... Hmmm...\nAhhhh........."
+        ));
+        assert!(!is_nonlexical_dialogue("Akane\nHello there"));
+        let pause = entry(
+            "CommonEvents:128:text:19",
+            "Akane\n............",
+            "Akane\n............",
+            EntryStatus::Reviewed,
+        );
+        assert!(!is_unchanged_translatable_text(
+            "data/CommonEvents.json",
+            &pause,
+            &pause.translation
+        ));
+    }
+
+    #[test]
     fn unchanged_enemy_names_allow_proper_names_but_not_english_compounds() {
         let project = project(vec![
             entry("Enemies:name:1", "DORCUS", "DORCUS", EntryStatus::Reviewed),
@@ -673,6 +875,38 @@ mod tests {
         assert_eq!(strict.error_count, 2);
         assert_eq!(strict.issues[0].original_preview, "FIREHOUND");
         assert_eq!(strict.issues[1].original_preview, "MASTERBOATER");
+    }
+
+    #[test]
+    fn variable_text_allows_names_and_brands_but_not_english_locations() {
+        let named = entry(
+            "CommonEvents:70:variableText:2",
+            "Hamataro Zein",
+            "Hamataro Zein",
+            EntryStatus::Reviewed,
+        );
+        let brand = entry(
+            "CommonEvents:59:variableText:394",
+            "SEICOUE MART (08:00)",
+            "SEICOUE MART (08:00)",
+            EntryStatus::Reviewed,
+        );
+        let location = entry(
+            "CommonEvents:2:variableText:93",
+            "Waste Plant",
+            "Waste Plant",
+            EntryStatus::Reviewed,
+        );
+
+        assert!(is_variable_text_proper_name(&named, &named.original));
+        assert!(is_variable_text_proper_name(&brand, &brand.original));
+        assert!(!is_variable_text_proper_name(&location, &location.original));
+        assert!(!is_variable_text_proper_name(
+            &location,
+            "Specialty Retailer"
+        ));
+        assert!(!contains_japanese_script("Besito (´ε‵ )☆彡"));
+        assert!(contains_japanese_script("こんにちは"));
     }
 
     #[test]

@@ -15,7 +15,7 @@ This repo is already beyond an early prototype:
 - Glossary support exists
 - Batch translation exists
 - External AI batch export/apply exists
-- Codex support exists through the Codex CLI runtime
+- OpenAI, OpenCode Go, DeepL, Google, and Codex CLI provider flows exist
 
 At the same time, the project is not yet broad enough to justify claims beyond the supported RPG Maker engine set.
 

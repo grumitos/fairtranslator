@@ -101,13 +101,31 @@
       "capabilities": {
         "openai": "Usa todo el contexto del proyecto: guía de estilo, glosario, términos protegidos, memoria y lotes cercanos.",
         "codex": "Usa el mismo contexto que OpenAI con el CLI local de Codex.",
+        "opencode": "Usa el contexto completo del proyecto mediante OpenCode Go y el modelo elegido para esta ejecución.",
         "deepl": "Se ejecuta en la app. Usa glosario y guía de estilo limitados; no usa memoria del proyecto ni contexto por lote.",
         "google": "Se ejecuta en la app. Protege términos del glosario y códigos de control; no usa memoria del proyecto."
       },
       "openai": "OpenAI",
       "deepl": "DeepL",
       "google": "Google Translate",
-      "codex": "Codex"
+      "codex": "Codex",
+      "opencode": "OpenCode"
+    },
+    "models": {
+      "title": "Modelo para esta ejecución",
+      "selected": "Seleccionado: {{model}}",
+      "codexDefault": "Codex usará el modelo predeterminado del CLI.",
+      "noneSelected": "Selecciona un modelo antes de traducir.",
+      "manualPlaceholder": "Escribe un modelo o refresca la lista",
+      "selectPlaceholder": "Selecciona un modelo",
+      "refresh": "Refrescar",
+      "refreshed": "Modelos actualizados",
+      "refreshFailed": "No se pudieron refrescar los modelos",
+      "count": "{{count}} modelos disponibles",
+      "count_one": "{{count}} modelo disponible",
+      "count_other": "{{count}} modelos disponibles",
+      "required": "Selecciona un modelo para este proveedor.",
+      "currentManual": "Modelo escrito manualmente"
     },
     "selectFiles": "Archivos a traducir",
     "allFiles": "Todos los archivos",
@@ -132,7 +150,7 @@
     "ai": {
       "description": "Exporta las entradas sin traducir, envía el prompt a una IA y pega el JSON con el mismo projectId y batchId.",
       "maxEntries": "Máx. entradas por lote para IA",
-      "invalidMaxEntries": "El máximo de entradas debe ser un número positivo.",
+      "invalidMaxEntries": "El máximo de entradas debe ser un entero positivo.",
       "export": "Exportar lote para IA",
       "exported": "Lote para IA exportado",
       "exportedDetail": "Exportadas: {{exported}}/{{total}}",

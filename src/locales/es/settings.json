@@ -20,6 +20,12 @@
       "label": "Google Translate",
       "placeholder": "Tu clave de API de Google"
     },
+    "opencode": {
+      "label": "OpenCode",
+      "placeholder": "Tu clave de API de OpenCode",
+      "endpointPlaceholder": "https://opencode.ai/zen/go/v1",
+      "authNote": "OpenCode usa la API key de OpenCode Go. Por ahora solo se aceptan endpoints Go."
+    },
     "codex": {
       "label": "Codex",
       "commandPath": "Ruta del ejecutable de Codex",
@@ -55,7 +61,17 @@
     "invalid": "Falló la validación del proveedor",
     "apiKey": "Clave de API",
     "model": "Modelo",
-    "modelPlaceholder": "gpt-4o-mini / gpt-5.4",
+    "modelPlaceholder": "Selecciona o escribe un modelo",
+    "models": {
+      "refresh": "Refrescar",
+      "refreshed": "Modelos actualizados",
+      "refreshFailed": "No se pudieron refrescar los modelos",
+      "count": "{{count}} modelos disponibles",
+      "count_one": "{{count}} modelo disponible",
+      "count_other": "{{count}} modelos disponibles",
+      "selectPlaceholder": "Selecciona un modelo",
+      "currentManual": "Modelo escrito manualmente"
+    },
     "endpoint": "URL personalizada",
     "endpointPlaceholder": "URL del endpoint (opcional)",
     "noKey": "Sin clave configurada",

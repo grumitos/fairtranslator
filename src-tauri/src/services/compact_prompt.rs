@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::OnceLock;
 
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -304,13 +306,24 @@ pub fn parse_provider_response(
     raw_response: &str,
     entry_refs: &[ChunkEntryRef],
 ) -> Result<Vec<TranslationResponse>, AppError> {
-    let normalized = strip_markdown_fences(raw_response);
+    let normalized = normalize_json_response(raw_response);
 
-    if let Ok(parsed) = serde_json::from_str::<CompactResponseEnvelope>(normalized) {
+    if let Ok(parsed) = serde_json::from_str::<CompactResponseEnvelope>(&normalized) {
         return parse_compact_provider_response(parsed, entry_refs);
     }
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&normalized) {
+        if let Ok(parsed) = serde_json::from_value::<CompactResponseEnvelope>(value) {
+            return parse_compact_provider_response(parsed, entry_refs);
+        }
+    }
+    let repaired = repair_redundant_translation_value(&normalized);
+    if repaired != normalized {
+        if let Ok(parsed) = serde_json::from_str::<CompactResponseEnvelope>(&repaired) {
+            return parse_compact_provider_response(parsed, entry_refs);
+        }
+    }
 
-    let legacy: LegacyProviderEnvelope = serde_json::from_str(normalized).map_err(|error| {
+    let legacy: LegacyProviderEnvelope = serde_json::from_str(&normalized).map_err(|error| {
         AppError::Api(format!(
             "No se pudo leer la respuesta del proveedor: {error}"
         ))
@@ -324,16 +337,23 @@ pub fn parse_external_ai_response(
     expected_batch_id: Option<&str>,
     entry_refs: Option<&[AiBatchResponseRef]>,
 ) -> Result<Vec<AiBatchTranslation>, AppError> {
-    let normalized = strip_markdown_fences(raw_response);
-    let value: serde_json::Value = serde_json::from_str(normalized)?;
+    let normalized = normalize_json_response(raw_response);
+    let value: serde_json::Value = serde_json::from_str(&normalized)?;
 
     match value {
-        serde_json::Value::Array(items) => serde_json::from_value(serde_json::Value::Array(items))
-            .map_err(|error| {
+        serde_json::Value::Array(items) => {
+            if expected_project_id.is_some() || expected_batch_id.is_some() {
+                return Err(AppError::Parse(
+                    "La respuesta de IA debe incluir projectId/batchId cuando el lote exportado los define"
+                        .into(),
+                ));
+            }
+            serde_json::from_value(serde_json::Value::Array(items)).map_err(|error| {
                 AppError::Parse(format!(
                     "El esquema de la respuesta de IA no es válido: {error}"
                 ))
-            }),
+            })
+        }
         serde_json::Value::Object(map) => {
             let object = serde_json::Value::Object(map.clone());
             let looks_legacy = map.contains_key("projectId")
@@ -719,11 +739,17 @@ fn build_system_prompt(
     target_lang: &str,
 ) -> String {
     let response_shape = match provider_kind {
+        ProviderKind::InApp => r#"{"translations":[{"k":1,"t":"translated text"}]}"#,
+        ProviderKind::ExternalAi => {
+            r#"{"p":"project-id","b":"batch-id","translations":[{"k":1,"t":"translated text","n":"","s":false}]}"#
+        }
+    };
+    let payload_description = match provider_kind {
         ProviderKind::InApp => {
-            "{\"translations\":[{\"k\":1,\"t\":\"...\"}]}"
+            "The user message is a compact JSON payload with m=metadata, c=context and e=entries.\n"
         }
         ProviderKind::ExternalAi => {
-            "{\"p\":\"project-id\",\"b\":\"batch-id\",\"translations\":[{\"k\":1,\"t\":\"...\",\"n\":\"optional short note\",\"s\":false}]}"
+            "The user message contains an editable JSON translation sheet; translate reference field o into target field t.\n"
         }
     };
 
@@ -742,21 +768,27 @@ fn build_system_prompt(
 
     format!(
         concat!(
-            "You are translating RPG Maker game text from {source_lang} to {target_lang}.\n",
-            "The user message is a compact JSON payload with metadata, context and entries.\n",
+            "You are localizing game text from {source_lang} to {target_lang}.\n",
+            "{payload_description}",
+            "Goal: natural playable localization, not a literal transcript. Preserve meaning, intent, subtext, emotional beat, character relationship and gameplay function.\n",
             "Preserve control codes, placeholders and escape sequences exactly.\n",
             "Masked placeholders such as __K1_CC0__ must survive unchanged and in the same count.\n",
             "Preserve choice/plugin condition prefixes such as if(s[12]) and en(s[20]) exactly; translate only the visible label after them.\n",
-            "Do not add, remove or rename RPG Maker script commands, tags, variables, event logic or decorative formatting; return translated text only.\n",
+            "Do not add, remove or rename engine script commands, tags, variables, internal keys, labels, event logic or decorative formatting; return translated text only.\n",
             "Each entry includes oc=original visible chars, ol=original line count and tb=target visible character budget with cushion. Stay near or below tb for dialogue/UI by adapting and condensing instead of literal expansion.\n",
             "Keep line breaks only when they are structural or necessary; do not add extra dialogue lines, extra boxes or explanatory text.\n",
             "Use glossary/style/context when relevant, but do not add commentary or markdown.\n",
+            "If an entry is a speaker/name/title line, translate only that label and keep it separate from following dialogue. Do not prepend speakers to dialogue, merge names with dialogue or duplicate speaker names.\n",
+            "Keep character voice consistent across nearby lines. Rewrite literal or stiff phrasing into natural in-game dialogue while preserving meaning, intensity and relationship dynamics.\n",
+            "Adapt jokes, teasing, intimacy, fear, anger, hesitation and politeness into target-language phrasing that reads like spoken dialogue, not dictionary output.\n",
+            "Avoid fansub calques, clinical wording, regional slang, voseo, over-formal phrasing and awkward source-language word order unless the source character clearly uses that register.\n",
             "{language_rules}",
             "{extra_rules}",
-            "Respond ONLY with valid JSON in this exact shape: {response_shape}"
+            "Respond ONLY with valid JSON in this shape:\n{response_shape}"
         ),
         source_lang = source_lang,
         target_lang = target_lang,
+        payload_description = payload_description,
         language_rules = language_rules,
         extra_rules = extra_rules,
         response_shape = response_shape
@@ -766,19 +798,21 @@ fn build_system_prompt(
 fn language_pair_prompt_rules(source_lang: &str, target_lang: &str) -> &'static str {
     if is_japanese_language(source_lang) && is_spanish_language(target_lang) {
         concat!(
-            "For Spanish targets, translate visible RPG Maker database names, enemy/troop names, skill/item/armor names, game titles, menu terms and meaningful compact labels into Spanish.\n",
+            "For Spanish targets, translate visible game database names, enemy/troop names, skill/item/armor names, game titles, menu terms and meaningful compact labels into Spanish.\n",
             "Do not leave English words unchanged just because they are short, uppercase or concatenated; split compounds naturally when needed, such as FIREHOUND to Sabueso de fuego.\n",
             "Preserve only clear proper names, staff names, handles, control codes, script/plugin identifiers, file names, variable names, placeholders and common RPG acronyms such as HP, MP, TP and EXP.\n",
             "For Japanese to Spanish, write natural neutral Spanish instead of literal calques.\n",
             "Examples: 学校の帰り道 is de vuelta de la escuela, not de regreso a la escuela; 一人称 in settings is forma de referirse a sí mismo, not primera persona.\n",
+            "Adapt family-role terms as natural address or relationship language in context; avoid repeating phrases like tu hermana mayor when Spanish would use a name, pronoun, affectionate title or omission.\n",
+            "Adapt sighs, moans and onomatopoeia into readable Spanish sound effects instead of leaving romaji or mechanical literal sounds.\n",
             "Adapt dialogue like dubbing or subtitles: preserve intent and timing, prefer compact Spanish that fits the original text box/window over word-for-word completeness.\n",
-            "Keep UI and choice labels short enough for RPG Maker windows; avoid sentence-length labels when a concise command works.\n",
+            "Keep UI and choice labels short enough for the original game UI/text windows; avoid sentence-length labels when a concise command works.\n",
             "Use Spanish punctuation in Spanish text; avoid Japanese punctuation such as 。, ？, ！, 「」 unless it is part of a preserved name or source-only artifact.\n",
             "For credits/staff rolls, translate role headings but preserve names, circles, brand names and supporter handles.\n"
         )
     } else if is_spanish_language(target_lang) {
         concat!(
-            "For Spanish targets, translate visible RPG Maker database names, enemy/troop names, skill/item/armor names, game titles, menu terms and meaningful compact labels into Spanish.\n",
+            "For Spanish targets, translate visible game database names, enemy/troop names, skill/item/armor names, game titles, menu terms and meaningful compact labels into Spanish.\n",
             "Do not leave English words unchanged just because they are short, uppercase or concatenated; split compounds naturally when needed, such as FIREHOUND to Sabueso de fuego.\n",
             "Preserve only clear proper names, staff names, handles, control codes, script/plugin identifiers, file names, variable names, placeholders and common RPG acronyms such as HP, MP, TP and EXP.\n"
         )
@@ -876,6 +910,73 @@ fn strip_markdown_fences(raw: &str) -> &str {
         .rsplit_once("```")
         .map(|(body, _)| body.trim())
         .unwrap_or(without_open.trim())
+}
+
+fn normalize_json_response(raw: &str) -> String {
+    let trimmed = strip_markdown_fences(raw);
+    if trimmed.starts_with('{') || trimmed.starts_with('[') {
+        return trimmed.to_string();
+    }
+
+    extract_balanced_json(trimmed)
+        .unwrap_or(trimmed)
+        .trim()
+        .to_string()
+}
+
+fn repair_redundant_translation_value(raw: &str) -> String {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r#""t":"(?:[^"\\]|\\.)*":"#).unwrap())
+        .replace_all(raw, "\"t\":")
+        .into_owned()
+}
+
+fn extract_balanced_json(raw: &str) -> Option<&str> {
+    for (start, ch) in raw.char_indices() {
+        if ch != '{' && ch != '[' {
+            continue;
+        }
+
+        let mut stack = vec![matching_json_close(ch)];
+        let mut in_string = false;
+        let mut escaping = false;
+        for (offset, current) in raw[start + ch.len_utf8()..].char_indices() {
+            if in_string {
+                if escaping {
+                    escaping = false;
+                } else if current == '\\' {
+                    escaping = true;
+                } else if current == '"' {
+                    in_string = false;
+                }
+                continue;
+            }
+
+            match current {
+                '"' => in_string = true,
+                '{' | '[' => stack.push(matching_json_close(current)),
+                '}' | ']' => {
+                    if stack.pop() != Some(current) {
+                        break;
+                    }
+                    if stack.is_empty() {
+                        let end = start + ch.len_utf8() + offset + current.len_utf8();
+                        return Some(&raw[start..end]);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
+fn matching_json_close(open: char) -> char {
+    match open {
+        '{' => '}',
+        '[' => ']',
+        _ => unreachable!("only JSON object/array openers are supported"),
+    }
 }
 
 fn non_empty(value: &str) -> Option<String> {
@@ -1031,6 +1132,92 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_provider_response_extracts_json_after_reasoning() {
+        let bundle = build_provider_bundle(
+            "ja",
+            "es",
+            &[TranslationRequest {
+                entry_id: "entry-1".into(),
+                file_context: "ctx".into(),
+                text: "Hello".into(),
+                notes: String::new(),
+            }],
+            &[],
+            &sample_context(),
+        )
+        .unwrap();
+
+        let parsed = parse_provider_response(
+            r#"<think>
+I should return the required JSON.
+</think>
+{"translations":[{"k":1,"t":"Hola"}]}
+"#,
+            &bundle.entry_refs,
+        )
+        .unwrap();
+
+        assert_eq!(parsed[0].entry_id, "entry-1");
+        assert_eq!(parsed[0].translated_text, "Hola");
+    }
+
+    #[test]
+    fn test_parse_provider_response_keeps_last_duplicate_translation_field() {
+        let bundle = build_provider_bundle(
+            "en",
+            "es",
+            &[TranslationRequest {
+                entry_id: "entry-1".into(),
+                file_context: "ctx".into(),
+                text: "Hello".into(),
+                notes: String::new(),
+            }],
+            &[],
+            &sample_context(),
+        )
+        .unwrap();
+
+        let parsed = parse_provider_response(
+            r#"{"translations":[{"k":1,"t":"Speaker","t":"Speaker\nHola"}]}"#,
+            &bundle.entry_refs,
+        )
+        .unwrap();
+
+        assert_eq!(parsed[0].translated_text, "Speaker\nHola");
+    }
+
+    #[test]
+    fn test_parse_provider_response_repairs_redundant_translation_prefix() {
+        assert_eq!(
+            repair_redundant_translation_value(
+                r#"{"translations":[{"k":1,"t":"Speaker":"Speaker\nHola"}]}"#
+            ),
+            r#"{"translations":[{"k":1,"t":"Speaker\nHola"}]}"#
+        );
+        let bundle = build_provider_bundle(
+            "en",
+            "es",
+            &[TranslationRequest {
+                entry_id: "entry-1".into(),
+                file_context: "ctx".into(),
+                text: "Hello".into(),
+                notes: String::new(),
+            }],
+            &[],
+            &sample_context(),
+        )
+        .unwrap();
+
+        let parsed = parse_provider_response(
+            r#"{"translations":[{"k":1,"t":"Speaker":"Speaker\nHola"}]}"#,
+            &bundle.entry_refs,
+        )
+        .unwrap();
+
+        assert_eq!(parsed[0].translated_text, "Speaker\nHola");
+    }
+
+    #[test]
     fn test_parse_external_ai_response_accepts_compact_response_map() {
         let project = Project {
             id: "project-1".into(),
@@ -1082,6 +1269,21 @@ mod tests {
         assert_eq!(parsed[0].file_path, "data/CommonEvents.json");
         assert_eq!(parsed[0].entry_id, "entry-1");
         assert_eq!(parsed[0].translation, "Hola");
+    }
+
+    #[test]
+    fn test_parse_external_ai_response_rejects_legacy_array_when_ids_are_expected() {
+        let error = parse_external_ai_response(
+            r#"[{"filePath":"data/CommonEvents.json","entryId":"entry-1","translation":"Hola"}]"#,
+            Some("project-1"),
+            Some("batch-1"),
+            None,
+        )
+        .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("projectId/batchId cuando el lote exportado los define"));
     }
 
     #[test]
@@ -1145,11 +1347,21 @@ mod tests {
         )
         .unwrap();
 
+        assert!(!bundle.system_prompt.contains("RPG Maker game text"));
         assert!(bundle.system_prompt.contains("natural neutral Spanish"));
+        assert!(bundle
+            .system_prompt
+            .contains("natural playable localization"));
+        assert!(bundle.system_prompt.contains("speaker/name/title line"));
         assert!(bundle.system_prompt.contains("dubbing or subtitles"));
         assert!(bundle.system_prompt.contains("de vuelta de la escuela"));
         assert!(bundle
             .system_prompt
             .contains("forma de referirse a sí mismo"));
+        assert!(bundle.system_prompt.contains("family-role terms"));
+        assert!(bundle
+            .system_prompt
+            .contains("readable Spanish sound effects"));
+        assert!(bundle.system_prompt.contains("fansub calques"));
     }
 }

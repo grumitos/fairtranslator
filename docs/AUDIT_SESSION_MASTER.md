@@ -61,14 +61,14 @@ fresh code/config/test evidence:
   `styleGuide` still load with an empty style guide.
 - Project safety: dirty-state tracking and discard confirmation protect
   destructive open/create flows.
-- Translation planning: OpenAI, Codex, and External AI share prompt-budgeted
+- Translation planning: OpenAI, OpenCode, Codex, and External AI share prompt-budgeted
   planning with compact prompt serialization and response remapping.
 - Translation integrity: provider apply, external-AI apply, and export preflight
   share validation for control codes, placeholders, line drift, blank
   translations, and compact-field heuristics.
 - Export: MV/MZ export includes `js/plugins.js`; the exporter restores copied
   asset references and returns warning details.
-- Provider disclosure: UI copy now distinguishes OpenAI/Codex full contextual
+- Provider disclosure: UI copy now distinguishes OpenAI/OpenCode/Codex full contextual
   orchestration from DeepL/Google best-effort/basic MT paths.
 - Google hardening: glossary/control-code/newline protection is boundary-aware
   instead of naive substring replacement.
