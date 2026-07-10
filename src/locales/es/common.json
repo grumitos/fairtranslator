@@ -75,6 +75,21 @@
     "warning": "Exportación completada con advertencias",
     "warningDetail": "Revisiones pendientes: {{count}}.",
     "noTranslations": "No hay traducciones para exportar",
-    "errorNoProject": "No hay proyecto abierto"
+    "errorNoProject": "No hay proyecto abierto",
+    "readiness": {
+      "title": "Revisar antes de exportar",
+      "description": "El proyecto todavía contiene entradas pendientes o borradores. Puedes revisarlos o exportar la copia de todos modos.",
+      "untranslated": "Sin traducir: {{count}}",
+      "draft": "Borradores: {{count}}",
+      "reviewed": "Revisadas: {{count}}",
+      "final": "Finales: {{count}}",
+      "reviewDrafts": "Revisar borradores",
+      "exportAnyway": "Exportar de todos modos"
+    },
+    "result": {
+      "destination": "Carpeta de destino",
+      "warnings": "Advertencias: {{count}}",
+      "noWarnings": "La exportación no produjo advertencias."
+    }
   }
 }

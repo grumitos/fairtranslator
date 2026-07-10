@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { open as dialogOpen } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
@@ -18,6 +18,15 @@ import {
   Moon,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useProject } from "@/hooks/useProject";
@@ -29,7 +38,13 @@ import { GlossaryPanel } from "@/components/layout/GlossaryPanel";
 import { StyleGuidePanel } from "@/components/layout/StyleGuidePanel";
 import { BatchTranslatePanel } from "@/components/layout/BatchTranslatePanel";
 import { IconAction } from "@/components/layout/toolbar/IconAction";
-import type { EntryStatus } from "@/types/domain";
+import { isTranslatableEntry } from "@/lib/translationMetrics";
+import type { EntryStatus, ExportResult } from "@/types/domain";
+
+interface ExportSummary {
+  outputDir: string;
+  result: ExportResult;
+}
 
 export function Toolbar() {
   const { t } = useTranslation(["common", "editor"]);
@@ -47,6 +62,25 @@ export function Toolbar() {
   const [showGlossary, setShowGlossary] = useState(false);
   const [showStyleGuide, setShowStyleGuide] = useState(false);
   const [showBatchTranslate, setShowBatchTranslate] = useState(false);
+  const [showExportReadiness, setShowExportReadiness] = useState(false);
+  const [exportSummary, setExportSummary] = useState<ExportSummary | null>(null);
+
+  const exportStatusCounts = useMemo<Record<EntryStatus, number>>(() => {
+    const counts: Record<EntryStatus, number> = {
+      untranslated: 0,
+      draft: 0,
+      reviewed: 0,
+      final: 0,
+    };
+    for (const file of project?.files ?? []) {
+      for (const entry of file.entries) {
+        if (isTranslatableEntry(entry)) {
+          counts[entry.status] += 1;
+        }
+      }
+    }
+    return counts;
+  }, [project]);
 
   const handleSave = useCallback(async () => {
     try {
@@ -75,25 +109,12 @@ export function Toolbar() {
     }
   }, [isDirty, open, t]);
 
-  const handleExport = useCallback(async () => {
+  const runExport = useCallback(async () => {
     const selected = await dialogOpen({ directory: true, title: t("common:export.selectFolder") });
     if (selected && typeof selected === "string") {
       try {
         const result = await exportProject(selected);
-        toast.success(t("common:export.success"), {
-          description: t("common:export.successDetail", {
-            files: result.filesExported,
-            applied: result.entriesApplied,
-            total: result.totalEntries,
-          }),
-        });
-        if (result.warnings.length > 0) {
-          toast.warning(t("common:export.warning"), {
-            description: `${t("common:export.warningDetail", {
-              count: result.warnings.length,
-            })} ${result.warnings.slice(0, 2).join(" ")}`.trim(),
-          });
-        }
+        setExportSummary({ outputDir: selected, result });
       } catch (error) {
         toast.error(t("common:error"), {
           description: error instanceof Error ? error.message : String(error),
@@ -101,6 +122,14 @@ export function Toolbar() {
       }
     }
   }, [exportProject, t]);
+
+  const handleExport = useCallback(() => {
+    if (exportStatusCounts.untranslated > 0 || exportStatusCounts.draft > 0) {
+      setShowExportReadiness(true);
+      return;
+    }
+    void runExport();
+  }, [exportStatusCounts, runExport]);
 
   const handleThemeToggle = useCallback(() => {
     setTheme(theme === "dark" ? "light" : "dark");
@@ -224,6 +253,114 @@ export function Toolbar() {
       <GlossaryPanel open={showGlossary} onOpenChange={setShowGlossary} />
       <StyleGuidePanel open={showStyleGuide} onOpenChange={setShowStyleGuide} />
       <BatchTranslatePanel open={showBatchTranslate} onOpenChange={setShowBatchTranslate} />
+
+      <Dialog open={showExportReadiness} onOpenChange={setShowExportReadiness}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{t("common:export.readiness.title")}</DialogTitle>
+            <DialogDescription>{t("common:export.readiness.description")}</DialogDescription>
+          </DialogHeader>
+          <div className="grid grid-cols-2 gap-2 text-sm">
+            <p className="rounded-md border bg-muted/35 px-3 py-2">
+              {t("common:export.readiness.untranslated", { count: exportStatusCounts.untranslated })}
+            </p>
+            <p className="rounded-md border bg-muted/35 px-3 py-2">
+              {t("common:export.readiness.draft", { count: exportStatusCounts.draft })}
+            </p>
+            <p className="rounded-md border bg-muted/35 px-3 py-2">
+              {t("common:export.readiness.reviewed", { count: exportStatusCounts.reviewed })}
+            </p>
+            <p className="rounded-md border bg-muted/35 px-3 py-2">
+              {t("common:export.readiness.final", { count: exportStatusCounts.final })}
+            </p>
+          </div>
+          <DialogFooter className="sm:flex-wrap">
+            <Button variant="outline" onClick={() => setShowExportReadiness(false)}>
+              {t("common:cancel")}
+            </Button>
+            <Button
+              variant="secondary"
+              disabled={exportStatusCounts.draft === 0}
+              onClick={() => {
+                setStatusFilter("draft");
+                setShowExportReadiness(false);
+              }}
+            >
+              {t("common:export.readiness.reviewDrafts")}
+            </Button>
+            <Button
+              onClick={() => {
+                setShowExportReadiness(false);
+                void runExport();
+              }}
+            >
+              {t("common:export.readiness.exportAnyway")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={exportSummary !== null}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setExportSummary(null);
+        }}
+      >
+        {exportSummary && (
+          <DialogContent className="sm:max-w-lg">
+            <DialogHeader>
+              <DialogTitle>
+                {t(exportSummary.result.warnings.length > 0
+                  ? "common:export.warning"
+                  : "common:export.success")}
+              </DialogTitle>
+              <DialogDescription>
+                {t("common:export.successDetail", {
+                  files: exportSummary.result.filesExported,
+                  applied: exportSummary.result.entriesApplied,
+                  total: exportSummary.result.totalEntries,
+                })}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3 text-sm">
+              <div>
+                <p className="text-xs font-medium text-muted-foreground">
+                  {t("common:export.result.destination")}
+                </p>
+                <p className="mt-1 break-all rounded-md border bg-muted/35 px-3 py-2 select-text">
+                  {exportSummary.outputDir}
+                </p>
+              </div>
+              {exportSummary.result.warnings.length > 0 ? (
+                <div
+                  className="max-h-48 overflow-y-auto rounded-md border p-3"
+                  aria-label={t("common:export.result.warnings", {
+                    count: exportSummary.result.warnings.length,
+                  })}
+                >
+                  <p className="mb-2 text-xs font-medium text-warning">
+                    {t("common:export.result.warnings", {
+                      count: exportSummary.result.warnings.length,
+                    })}
+                  </p>
+                  <ul className="list-disc space-y-1 pl-4 text-xs text-muted-foreground">
+                    {exportSummary.result.warnings.map((warning, index) => (
+                      <li key={`${index}-${warning}`}>{warning}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : (
+                <p className="rounded-md border bg-muted/35 px-3 py-2 text-xs text-muted-foreground">
+                  {t("common:export.result.noWarnings")}
+                </p>
+              )}
+            </div>
+            <DialogFooter>
+              <Button onClick={() => setExportSummary(null)}>{t("common:close")}</Button>
+            </DialogFooter>
+          </DialogContent>
+        )}
+      </Dialog>
     </>
   );
 }

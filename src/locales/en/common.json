@@ -75,6 +75,21 @@
     "warning": "Export completed with warnings",
     "warningDetail": "Checks needing review: {{count}}.",
     "noTranslations": "No translations to export",
-    "errorNoProject": "No project open"
+    "errorNoProject": "No project open",
+    "readiness": {
+      "title": "Review before export",
+      "description": "The project still contains pending entries or drafts. Review them now or export the copy anyway.",
+      "untranslated": "Untranslated: {{count}}",
+      "draft": "Drafts: {{count}}",
+      "reviewed": "Reviewed: {{count}}",
+      "final": "Final: {{count}}",
+      "reviewDrafts": "Review drafts",
+      "exportAnyway": "Export anyway"
+    },
+    "result": {
+      "destination": "Destination folder",
+      "warnings": "Warnings: {{count}}",
+      "noWarnings": "The export produced no warnings."
+    }
   }
 }
