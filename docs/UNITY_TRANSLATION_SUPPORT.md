@@ -1,11 +1,12 @@
-# Unity Translation Support Plan
+# Unity Loose JSON v0 Support Boundary
 
-FairTranslator does not yet ship first-class Unity support. This document defines
-the safe support boundary before adding `Engine::Unity` to the product.
+FairTranslator has one experimental Unity compatibility profile: **Unity
+(Loose JSON v0)**. It handles a deliberately narrow Windows Mono layout with
+one loose localization JSON file. This is not generic Unity support.
 
 ## Sources
 
-Unity references used for this plan:
+Unity references used for this support boundary:
 
 - Scripting backends: <https://docs.unity3d.com/Manual/scripting-backends.html>
 - IL2CPP: <https://docs.unity3d.com/6000.5/Documentation/Manual/scripting-backends-il2cpp.html>
@@ -16,125 +17,112 @@ Unity references used for this plan:
 - Localization String Tables: <https://docs.unity3d.com/Packages/com.unity.localization%401.5/api/UnityEngine.Localization.Tables.StringTable.html>
 - CSV import/export for String Tables: <https://docs.unity3d.com/6000.4/Documentation/Manual/best-practice-guides/ui-toolkit-for-advanced-unity-developers/localization.html>
 
-## Unity Game Types
+## Current Experimental Profile
 
-Classify Unity games by these axes, not by a single version number:
+A game is accepted only when all of these conditions hold:
 
-| Axis | Cases | Translation impact |
-| --- | --- | --- |
-| Scripting backend | Mono, IL2CPP | Mono may expose `Managed/Assembly-CSharp.dll`; IL2CPP compiles ahead-of-time to native code and must not be treated like a DLL string patch. |
-| Platform | Windows, Linux, macOS, Android, iOS, WebGL | Folder layout and writable/replaceable files vary. Start with desktop builds only. |
-| Content packaging | `resources.assets`, `sharedassets*.assets`, AssetBundles, Addressables, `StreamingAssets`, loose files | Text may live in multiple containers. Export must patch a copied game tree only. |
-| Text format | TextAsset JSON/CSV/YAML/TXT/XML, custom script DSL, Unity Localization String Tables, scene/prefab serialized text, managed `ldstr`, images | TextAsset is the first viable editable target. Managed strings and scenes need stricter context. Images are out of scope for parser support. |
-| Delivery | local files, DLC, remote Addressables/catalogs, cached bundles | Local files are viable. Remote/cached content is inventory-only until there is a repeatable download/update path. |
-| Protection | plain, obfuscated, encrypted, packed | Plain is viable. Obfuscated/encrypted should be reported, not guessed around. |
+- It is a Windows Unity Mono build.
+- The selected game root contains `UnityPlayer.dll` and exactly one root-level
+  `*_Data` directory.
+- That data directory contains `globalgamemanagers`,
+  `Managed/Assembly-CSharp.dll`, and `StreamingAssets`.
+- `StreamingAssets` contains exactly one `.json` candidate whose path or
+  filename starts with `localization`, `locales`, `lang`, `i18n`, or
+  `strings` (optionally followed by `-`, `_`, or `.`).
+- The candidate is at most 8 MiB, is UTF-8 with an optional UTF-8 BOM, and its
+  top level is a flat object whose keys and values are strings.
+- Keys are non-empty stable IDs without control characters. Blank values are
+  retained in the file but are not offered for translation; at least one value
+  must contain translatable text.
 
-## What To Support First
+The bounded `StreamingAssets` scan stops at 8 directory levels, 2,048
+directories, or 50,000 entries. Symbolic links and Windows reparse points are
+rejected instead of being followed outside the selected game.
 
-Phase 1 should support a narrow, repeatable Unity slice:
+Entries use JSON Pointer-escaped keys as stable IDs. The Mono DLL is only a
+layout marker; FairTranslator never reads or patches its strings.
 
-- Desktop Unity builds with a detectable `*_Data` folder.
-- Copy original game to the export folder before patching.
-- Detect `globalgamemanagers`, `resources.assets`, `sharedassets*.assets`,
-  `StreamingAssets`, `Managed/Assembly-CSharp.dll`, `GameAssembly.dll`, and
+## Export Safety
+
+Unity export follows the same immutable-source rule as the RPG Maker exporters:
+
+1. Reparse the source and reject export if any recognized original text drifted
+   after import.
+2. Copy the game tree to a separate output directory.
+3. Update only the recognized JSON values in that copy, and only when their
+   current values still match the project's originals.
+4. Preserve an existing UTF-8 BOM.
+5. Reopen the copied game and verify every applied translation.
+
+If copy, patch, or readback verification fails, the incomplete output is
+removed. The source game folder is never modified.
+
+## Explicitly Unsupported
+
+Unity Loose JSON v0 does **not** support:
+
+- IL2CPP builds, including games with `GameAssembly.dll` or
   `il2cpp_data/Metadata/global-metadata.dat`.
-- Extract editable entries from TextAssets in local AssetBundles/Addressables
-  when their content decodes as clear UTF-8/UTF-16 text.
-- Produce an editor/AI-friendly work file with stable IDs, context, source text
-  as read-only reference and a separate translation field. Do not make users or
-  agents rewrite the source text inline.
-- Preserve file/container metadata enough to write back to the same copied
-  asset.
-- For local Addressables bundles, update the catalog CRC/hash after a bundle is
-  rewritten; otherwise Unity rejects the bundle before gameplay scripts load.
-- Reopen patched assets and verify translated strings are present.
+- AssetBundles, Addressables bundles or catalogs, `resources.assets`,
+  `sharedassets*.assets`, scenes, prefabs, or other Unity serialized assets.
+- `Assembly-CSharp.dll` string extraction or patching.
+- Unity Localization String Tables stored inside assets or bundles.
+- Nested JSON objects, arrays, CSV, YAML, XML, TXT, or custom script formats.
+- Linux, macOS, Android, iOS, WebGL, consoles, or any platform beyond Windows.
+- Remote content, DLC, caches, encrypted or obfuscated data, and image text.
 
-This is the Unity equivalent of the existing RPG Maker parser/exporter contract:
-detect, parse visible text, translate, copy, patch copy, validate.
+Detection of a Unity executable or `*_Data` directory alone does not imply
+support. Product copy must use the full name **Unity (Loose JSON v0)** and keep
+the experimental label until the profile has real-game validation.
 
-## Read-Only Inventory First
+## Why The Boundary Is Narrow
 
-These should be detected and reported before any write support:
+`StreamingAssets` loose files can be copied and rewritten without pretending
+that arbitrary Unity containers share one safe format. AssetBundles,
+Addressables, serialized objects, managed strings, and IL2CPP metadata each
+need different identity, writeback, and integrity rules. Guessing across those
+boundaries risks corrupting the exported game or translating internal keys.
 
-- Mono managed DLL strings. They can contain visible UI, but identical `ldstr`
-  values may be shared by visible text and internal keys.
-- IL2CPP metadata/native strings. Treat as unsupported for patching.
-- Unity Localization Package String Tables inside assets/bundles.
-- Scenes, prefabs, and generic serialized assets.
-- Remote Addressables catalogs and bundles.
+The existing `Project -> TranslationFile -> TranslationEntry` contract is
+enough for this profile. A generic plugin system is intentionally deferred
+until at least two proven engine formats need the same extension point.
 
-## Out Of Scope For The First Product Slice
+## Research Notes From RJ01625259
 
-- Generic `Assembly-CSharp.dll` patching.
-- IL2CPP binary patching.
-- Scene/prefab editing without a validated Unity asset writer.
-- WebGL/Android/iOS patching.
-- Encrypted, obfuscated, or custom-packed assets.
-- Image/sprite text replacement.
+The RJ01625259 prototype remains useful research, not a claim of product
+support:
 
-## Lessons From RJ01625259
+- Its Addressables bundle exposed 21 TextAsset scripts and produced 1,546
+  script rows.
+- UnityPy could rewrite a copied TextAsset bundle, and a separate helper could
+  patch selected Mono DLL strings.
+- Rewritten Addressables content also required catalog CRC/hash updates.
+- A focused script work file was substantially safer than exposing raw
+  assembly/internal-key inventories.
 
-What worked:
+Those results do not belong in Loose JSON v0. Hardcoded bundle paths, line-only
+IDs, broad DLL replacement, source-folder mutation, and undocumented
+Python/UnityPy/C# runtime requirements remain unacceptable product shortcuts.
 
-- Addressables bundle `novelscripts_assets_all_*.bundle` contained 21 `TextAsset`
-  script files.
-- Extraction produced 1,546 script rows and 213 assembly-string rows.
-- UnityPy could patch a copied TextAsset bundle.
-- A Mono.Cecil helper could patch selected `Assembly-CSharp.dll` strings.
-- A script-only reinjection path can patch the bundle and update
-  `catalog.bin`/`catalog.hash` with the Unity payload CRC.
-- A clean TSV work file with only script rows avoids assembly/internal-key noise
-  for AI or manual editing.
+## Roadmap Beyond v0
 
-What must not become product debt:
+Before promoting Loose JSON v0 out of experimental status:
 
-- Hardcoded bundle path/name.
-- IDs based only on script line numbers.
-- Patching all matching DLL strings without method/class context.
-- Exporting raw technical inventories as the primary translation work surface.
-- Modifying the original game instead of a copied output.
-- Depending on Python/UnityPy/C# helper as an undocumented runtime requirement.
+- Validate import, export, readback, and source immutability on multiple real
+  Windows Mono games using this exact loose-JSON layout.
+- Keep positive fixtures plus negative IL2CPP, ambiguous-candidate, nested-JSON,
+  oversized-file, deep-tree, and symbolic-link fixtures.
+- Document recovery guidance for games rejected by the profile.
 
-## Agent Review Result
+Any broader Unity work should land as a separately named, tested profile:
 
-A read-only gpt-5.5 xhigh review of the RJ01625259 prototype agreed with the
-same boundary: ship Unity only after a copy-first TextAsset
-AssetBundle/Addressables path exists, and keep Mono DLL strings as inventory
-until method/class context and safe replacement rules are implemented. The
-prototype is useful as a fixture, not as product architecture.
+1. Inventory unsupported local formats without promising write support.
+2. Add a container reader/writer only after real fixtures prove stable object
+   identity and copy-first round trips.
+3. Treat AssetBundles and Addressables catalog updates as their own integrity
+   boundary.
+4. Keep managed DLL and IL2CPP patching out of scope until each has a dedicated
+   safety design and verification strategy.
 
-## Recommended Architecture
-
-Do not add `Engine::Unity` until the first parser/exporter slice exists.
-
-Minimal future shape:
-
-```text
-src-tauri/src/parser/unity.rs
-  detect_unity_game_dir()
-  parse_unity_game() -> TranslationFile entries for supported TextAssets
-
-src-tauri/src/services/exporter.rs
-  UnityExporter copies source tree and patches only supported copied assets
-
-src-tauri/src/models/mod.rs
-  Engine::Unity only when parser/exporter are both wired and tested
-```
-
-Keep Unity support behind the same `Project -> TranslationFile -> TranslationEntry`
-contract. Add metadata only when the exporter truly needs it; avoid a generic
-plugin system until at least two real Unity fixtures require the same extension
-point.
-
-## Minimum Fixtures
-
-Before declaring Unity support:
-
-- One Mono desktop build with clear TextAsset files.
-- One IL2CPP desktop build with clear TextAsset files and no DLL patching.
-- One Addressables local bundle fixture.
-- One negative fixture with encrypted/unsupported content that reports a clear
-  unsupported reason.
-
-Each fixture must verify import, translation apply, export copy, reopen/readback,
-and source-folder immutability.
+No roadmap item broadens the current support claim until its parser, exporter,
+fixtures, failure cleanup, and readback checks are shipped together.

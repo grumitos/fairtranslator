@@ -1,14 +1,15 @@
 # FairTranslator
 
-FairTranslator is a desktop application for translating RPG Maker games without locking core workflows behind subscriptions or hosted accounts. It scans a supported game, extracts translatable text into a `.fairtl` project, lets you edit or batch-translate entries, and exports a translated copy of the game without modifying the source folder.
+FairTranslator is a desktop application for translating supported game formats without locking core workflows behind subscriptions or hosted accounts. It scans a compatible game, extracts translatable text into a `.fairtl` project, lets you edit or batch-translate entries, and exports a translated copy without modifying the source folder.
 
 This repository is private and proprietary. Source code access is limited to authorized collaborators. Commercial builds are intended to be distributed to customers under a paid perpetual end-user license rather than a subscription model.
 
 ## Current Scope
 
-FairTranslator currently targets the RPG Maker family, not every RPG engine.
+RPG Maker is the supported product family. Unity support is limited to one experimental compatibility profile; it is not a generic Unity translator.
 
 - Supported engines: RPG Maker MZ, MV, VX Ace, VX, and XP
+- Experimental engine profile: Unity (Loose JSON v0) for Windows Mono builds with exactly one flat localization JSON under `*_Data/StreamingAssets`
 - Project format: `.fairtl`
 - Translation workflows: manual editing, batch translation through built-in providers, and external AI batch export/apply
 - Built-in providers: OpenAI, OpenCode Go, DeepL, Google Translate, and Codex
@@ -17,7 +18,7 @@ FairTranslator currently targets the RPG Maker family, not every RPG engine.
 
 ## What The App Already Does
 
-- Detects supported RPG Maker game roots, including nested folders
+- Detects supported game roots, including nested RPG Maker and Unity Loose JSON folders
 - Extracts translatable text from database files, maps, common events, troops, and system terms where supported by the engine parser/exporter
 - Stores translation progress, notes, statuses, and glossary terms inside the project
 - Applies glossary guidance during provider-based translation
@@ -49,24 +50,26 @@ For the standard release workflow, assume option `1` or `3`. Sidecar builds are 
 
 The truthful product promise today is:
 
-> A desktop translator for RPG Maker games.
+> A desktop translator for supported RPG Maker games, with experimental Unity Loose JSON v0 support for a narrow Windows Mono layout.
 
 What it should not claim yet:
 
-- It is not yet a translator for arbitrary RPG engines beyond the supported RPG Maker set
-- It does not yet ship with a generalized parser/exporter plugin system for non-RPG Maker engines
+- It is not a translator for arbitrary RPG engines or arbitrary Unity games
+- Unity support does not cover AssetBundles, Addressables, serialized assets, managed DLL strings, IL2CPP, or platforms beyond Windows
+- It does not ship with a generalized parser/exporter plugin system
 - A Codex sidecar can be prepared for release builds, but the distribution story still needs release-policy decisions
 
-If the long-term goal later expands beyond RPG Maker, FairTranslator will need additional engine adapters, parser/exporter pairs, real fixtures, and QA coverage outside the RPG Maker ecosystem before that broader claim is defensible.
+The Unity Loose JSON v0 exporter follows the same source-safety rule as RPG Maker: it copies the game first, changes only the single recognized JSON in the output, and reopens the result for readback verification. Broader engine claims require additional parser/exporter pairs, real fixtures, and QA coverage before they are defensible.
 
 ## First Public Release
 
-The first public release line is `0.9.x`, starting with `0.9.0`, with positioning explicitly limited to RPG Maker support.
+The first public release line is `0.9.x`, starting with `0.9.0`, which launched with positioning explicitly limited to RPG Maker support. Unity Loose JSON v0 remains experimental and does not broaden the stable support promise.
 
 Why `0.9.0` is the right release point:
 
 - The app already has an end-to-end workflow: import, edit, translate, review, save, and export
 - It supports five RPG Maker engine variants
+- It has a copy-first experimental Unity path for one strict loose-JSON layout
 - It has multiple provider integrations, including a Codex runtime path
 - The repo already contains Rust and frontend test coverage plus QA helper binaries
 
@@ -81,6 +84,7 @@ Why not `1.0.0` yet:
 The practical gate for `1.0.0` should be:
 
 - Repeated import/export validation on multiple real projects for MZ, MV, VX Ace, VX, and XP
+- Continued real-build validation of Unity Loose JSON v0 before considering it stable
 - A stable release packaging story for the supported desktop platform
 - Clear provider support and failure-recovery expectations in the UI and docs
 - Regression fixtures for parser and exporter edge cases
@@ -141,7 +145,7 @@ npm run tauri:build:codex-sidecar
 - Release/version strategy: [docs/versioning-and-roadmap.md](./docs/versioning-and-roadmap.md)
 - Run hygiene: [docs/run-hygiene.md](./docs/run-hygiene.md)
 - AI agent translation workflow: [docs/AI_AGENT_TRANSLATION_WORKFLOW.md](./docs/AI_AGENT_TRANSLATION_WORKFLOW.md)
-- Unity support plan: [docs/UNITY_TRANSLATION_SUPPORT.md](./docs/UNITY_TRANSLATION_SUPPORT.md)
+- Experimental Unity support boundary: [docs/UNITY_TRANSLATION_SUPPORT.md](./docs/UNITY_TRANSLATION_SUPPORT.md)
 - Latest release notes: [docs/releases/v0.9.2.md](./docs/releases/v0.9.2.md)
 - Previous release notes: [docs/releases/v0.9.1.md](./docs/releases/v0.9.1.md)
 - Initial release notes: [docs/releases/v0.9.0.md](./docs/releases/v0.9.0.md)

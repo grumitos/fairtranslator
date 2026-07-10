@@ -10,22 +10,24 @@ validated.
 Supported product flow today:
 
 - RPG Maker MV, MZ, VX Ace, VX, and XP through FairTranslator parsers/exporters.
+- Experimental Unity (Loose JSON v0) for the exact Windows Mono layout defined
+  in `docs/UNITY_TRANSLATION_SUPPORT.md`.
 - UI provider translation through OpenAI, OpenCode Go, Codex CLI, DeepL,
   Google, or the External AI export/apply flow.
 - Headless QA runners under `src-tauri/src/bin`. `qa_translate_provider`
   currently supports Codex CLI and OpenCode Go. Use `qa_prepare`/`qa_apply` for
   external AI agents and the app UI for OpenAI, DeepL, and Google runs.
 
-Unity is not a first-class FairTranslator engine yet. Use
-`docs/UNITY_TRANSLATION_SUPPORT.md` for the current Unity plan and compatibility
-limits.
+Unity support is not generic: AssetBundles, Addressables, DLL strings, IL2CPP,
+and platforms beyond Windows remain unsupported. Read
+`docs/UNITY_TRANSLATION_SUPPORT.md` before inventorying or promising Unity work.
 
 ## Inputs
 
 Required:
 
 - Original game folder. Prefer the folder containing the launcher, but the
-  resolver can handle nested RPG Maker roots.
+  resolver can handle nested supported game roots.
 - Source and target language.
 - Provider credentials available locally. Never print keys.
 - Workspace outside the source game, usually under `D:\FairTranslatorRuns`.

@@ -23,10 +23,10 @@ impl AppState {
     }
 }
 
-/// Create a new translation project from an RPG Maker game directory.
+/// Create a new translation project from a supported game directory.
 ///
-/// Parses all JSON files in the game's /data/ directory, extracts translatable
-/// entries, and returns the new Project. The project is NOT saved to disk yet —
+/// Resolves the engine-specific game root, extracts supported translatable
+/// entries, and returns the new Project. The project is NOT saved to disk yet;
 /// call `project_save` to persist it.
 #[tauri::command]
 pub async fn project_create(

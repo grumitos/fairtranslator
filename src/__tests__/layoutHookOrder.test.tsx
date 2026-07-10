@@ -66,6 +66,19 @@ describe("layout project transitions", () => {
     expect(screen.getByText("100%")).toBeInTheDocument();
   });
 
+  it("labels the narrow Unity engine profile", async () => {
+    render(<StatusBar />);
+
+    await act(async () => {
+      useProjectStore.getState().setProject(
+        { ...makeProject(), engine: "unity" },
+        { markDirty: false },
+      );
+    });
+
+    expect(screen.getByText("Engine: Unity (Loose JSON v0)")).toBeInTheDocument();
+  });
+
   it("keeps Sidebar hook order stable when a project opens", async () => {
     const { container } = render(<Sidebar />);
     expect(container).toBeEmptyDOMElement();

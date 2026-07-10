@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-/// Supported RPG Maker engine types
+/// Supported game engine types.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
@@ -10,6 +10,7 @@ pub enum Engine {
     VxAce,
     Vx,
     Xp,
+    Unity,
 }
 
 /// Translation status for individual entries

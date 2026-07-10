@@ -42,17 +42,17 @@
   },
   "welcome": {
     "title": "Welcome to FairTranslator",
-    "subtitle": "Modern translator for RPG Maker games",
+    "subtitle": "Translator for supported RPG Maker games · experimental Unity Loose JSON",
     "newProject": "Create new project",
     "openProject": "Open existing project",
     "settings": "Settings",
     "toggleTheme": "Toggle theme",
-    "newProjectDesc": "Select an RPG Maker game folder to start translating",
+    "newProjectDesc": "Select a supported game folder (Unity Loose JSON is experimental)",
     "openProjectDesc": "Open a saved .fairtl project"
   },
   "newProjectDialog": {
     "title": "New Project",
-    "description": "Set up a project from an RPG Maker folder.",
+    "description": "Set up a project from a supported RPG Maker or Unity Loose JSON folder. Unity support is experimental.",
     "name": "Project name",
     "namePlaceholder": "My translation",
     "gameDir": "Game folder",

@@ -17,6 +17,8 @@ function formatEngineLabel(engine: Engine): string {
       return "VX";
     case "xp":
       return "XP";
+    case "unity":
+      return "Unity (Loose JSON v0)";
   }
 }
 
@@ -74,8 +76,10 @@ export function StatusBar() {
   return (
     <footer className="flex h-7 items-center justify-between gap-3 border-t bg-card/95 px-3 text-xs text-muted-foreground">
       <div className="flex min-w-0 items-center gap-3">
-        <span>{t("statusBar.engine", { engine: formatEngineLabel(project.engine) })}</span>
-        <span>
+        <span className="truncate">
+          {t("statusBar.engine", { engine: formatEngineLabel(project.engine) })}
+        </span>
+        <span className="shrink-0">
           {project.sourceLang.toUpperCase()} &rarr; {project.targetLang.toUpperCase()}
         </span>
       </div>

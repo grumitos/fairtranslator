@@ -83,6 +83,7 @@ struct MvMzExporter;
 struct VxAceExporter;
 struct VxExporter;
 struct XpExporter;
+struct UnityExporter;
 
 impl EngineExporter for MvMzExporter {
     fn export_project(
@@ -124,10 +125,21 @@ impl EngineExporter for XpExporter {
     }
 }
 
+impl EngineExporter for UnityExporter {
+    fn export_project(
+        &self,
+        project: &Project,
+        output_dir: &Path,
+    ) -> Result<ExportResult, AppError> {
+        export_unity_project(project, output_dir)
+    }
+}
+
 static MV_MZ_EXPORTER: MvMzExporter = MvMzExporter;
 static VXACE_EXPORTER: VxAceExporter = VxAceExporter;
 static VX_EXPORTER: VxExporter = VxExporter;
 static XP_EXPORTER: XpExporter = XpExporter;
+static UNITY_EXPORTER: UnityExporter = UnityExporter;
 
 fn exporter_for_engine(engine: &Engine) -> Result<&'static dyn EngineExporter, AppError> {
     match engine {
@@ -135,6 +147,7 @@ fn exporter_for_engine(engine: &Engine) -> Result<&'static dyn EngineExporter, A
         Engine::VxAce => Ok(&VXACE_EXPORTER),
         Engine::Vx => Ok(&VX_EXPORTER),
         Engine::Xp => Ok(&XP_EXPORTER),
+        Engine::Unity => Ok(&UNITY_EXPORTER),
     }
 }
 
@@ -269,6 +282,153 @@ fn export_xp_project(project: &Project, output_dir: &Path) -> Result<ExportResul
     export_legacy_project(project, output_dir)
 }
 
+fn export_unity_project(project: &Project, output_dir: &Path) -> Result<ExportResult, AppError> {
+    let game_dir = PathBuf::from(&project.game_dir);
+    let validation = translation_integrity::validate_project_for_export(project);
+    if validation.has_errors() {
+        return Err(AppError::Project(
+            translation_integrity::summarize_export_errors(&validation.errors),
+        ));
+    }
+
+    prepare_export_destination(&game_dir, output_dir)?;
+    if let Err(error) = copy_dir_recursive(&game_dir, output_dir) {
+        let _ = std::fs::remove_dir_all(output_dir);
+        return Err(error);
+    }
+
+    let export_result = (|| {
+        let inventory = parser::unity::inventory_unity_game(output_dir)?;
+        if project.files.len() != 1
+            || project.files[0].relative_path != inventory.localization_file_relative_path
+        {
+            return Err(AppError::Project(format!(
+                "Unity Loose JSON v0 project must contain only '{}'. Re-import the game before exporting.",
+                inventory.localization_file_relative_path
+            )));
+        }
+
+        let project_file = &project.files[0];
+        let copied_path = output_dir.join(&project_file.relative_path);
+        let bytes = std::fs::read(&copied_path)?;
+        let has_bom = bytes.starts_with(&[0xef, 0xbb, 0xbf]);
+        let json_bytes = if has_bom { &bytes[3..] } else { &bytes[..] };
+        let json_text = std::str::from_utf8(json_bytes).map_err(|error| {
+            AppError::Parse(format!(
+                "Unity localization JSON '{}' must be UTF-8: {error}",
+                project_file.relative_path
+            ))
+        })?;
+        let mut json: Value = serde_json::from_str(json_text)?;
+        let object = json.as_object_mut().ok_or_else(|| {
+            AppError::Parse(format!(
+                "Unity localization JSON '{}' must be a flat string-to-string object.",
+                project_file.relative_path
+            ))
+        })?;
+
+        let mut entries_applied = 0usize;
+        let mut expected_readback = HashMap::new();
+        for entry in &project_file.entries {
+            if entry.status == EntryStatus::Untranslated || entry.translation.trim().is_empty() {
+                continue;
+            }
+
+            let key = decode_unity_json_id(&entry.id)?;
+            let value = object.get_mut(&key).ok_or_else(|| {
+                AppError::Project(format!(
+                    "Unity source entry '{}' is missing from '{}'. Re-import the game before exporting.",
+                    entry.id, project_file.relative_path
+                ))
+            })?;
+            let current = value.as_str().ok_or_else(|| {
+                AppError::Project(format!(
+                    "Unity source entry '{}' is no longer a string. Re-import the game before exporting.",
+                    entry.id
+                ))
+            })?;
+            if current != entry.original {
+                return Err(AppError::Project(format!(
+                    "Unity source entry '{}' changed after export preflight. Re-import the game before exporting.",
+                    entry.id
+                )));
+            }
+
+            *value = Value::String(entry.translation.clone());
+            expected_readback.insert(entry.id.clone(), entry.translation.clone());
+            entries_applied += 1;
+        }
+
+        let rendered = serde_json::to_vec_pretty(&json)?;
+        let mut output_bytes = Vec::with_capacity(rendered.len() + usize::from(has_bom) * 3);
+        if has_bom {
+            output_bytes.extend_from_slice(&[0xef, 0xbb, 0xbf]);
+        }
+        output_bytes.extend_from_slice(&rendered);
+        std::fs::write(&copied_path, output_bytes)?;
+
+        let readback = parser::unity::parse_unity_game(output_dir)?;
+        let readback_entries = readback
+            .iter()
+            .flat_map(|file| file.entries.iter())
+            .map(|entry| (entry.id.as_str(), entry.original.as_str()))
+            .collect::<HashMap<_, _>>();
+        for (id, translation) in &expected_readback {
+            if readback_entries.get(id.as_str()).copied() != Some(translation.as_str()) {
+                return Err(AppError::Project(format!(
+                    "Unity export verification failed for entry '{id}'. The incomplete output was removed."
+                )));
+            }
+        }
+
+        Ok(ExportResult {
+            files_exported: 1,
+            entries_applied,
+            total_entries: project_file.entries.len(),
+            warnings: validation.warnings.clone(),
+        })
+    })();
+
+    if export_result.is_err() {
+        let _ = std::fs::remove_dir_all(output_dir);
+    }
+
+    export_result
+}
+
+fn decode_unity_json_id(id: &str) -> Result<String, AppError> {
+    let encoded = id.strip_prefix("UnityJson:/").ok_or_else(|| {
+        AppError::Project(format!(
+            "Unsupported Unity entry ID '{id}'. Re-import the game before exporting."
+        ))
+    })?;
+    if encoded.is_empty() || encoded.contains('/') {
+        return Err(AppError::Project(format!(
+            "Unsupported Unity JSON Pointer '{id}'. Unity Loose JSON v0 accepts one flat key segment."
+        )));
+    }
+
+    let mut decoded = String::with_capacity(encoded.len());
+    let mut chars = encoded.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '~' {
+            decoded.push(ch);
+            continue;
+        }
+        match chars.next() {
+            Some('0') => decoded.push('~'),
+            Some('1') => decoded.push('/'),
+            _ => {
+                return Err(AppError::Project(format!(
+                    "Invalid Unity JSON Pointer escape in entry ID '{id}'. Re-import the game before exporting."
+                )))
+            }
+        }
+    }
+
+    Ok(decoded)
+}
+
 fn export_legacy_project(project: &Project, output_dir: &Path) -> Result<ExportResult, AppError> {
     let game_dir = PathBuf::from(&project.game_dir);
     let validation = translation_integrity::validate_project_for_export(project);
@@ -341,6 +501,7 @@ fn prepare_export_destination(game_dir: &Path, output_dir: &Path) -> Result<(), 
     }
 
     if output_dir.exists() {
+        reject_symlink_or_reparse(output_dir)?;
         if !output_dir.is_dir() {
             return Err(AppError::Project(format!(
                 "Export destination is not a directory: {}",
@@ -457,23 +618,63 @@ fn validate_project_source_snapshot(project: &Project, game_dir: &Path) -> Resul
 }
 
 fn copy_dir_recursive(source_dir: &Path, target_dir: &Path) -> Result<(), AppError> {
+    reject_symlink_or_reparse(source_dir)?;
+    let source_metadata = std::fs::symlink_metadata(source_dir)?;
+    if !source_metadata.is_dir() {
+        return Err(AppError::Project(format!(
+            "Export source is not a directory: {}",
+            source_dir.display()
+        )));
+    }
+
     for entry in std::fs::read_dir(source_dir)? {
         let entry = entry?;
         let source_path = entry.path();
         let target_path = target_dir.join(entry.file_name());
+        reject_symlink_or_reparse(&source_path)?;
+        let metadata = std::fs::symlink_metadata(&source_path)?;
 
-        if source_path.is_dir() {
+        if metadata.is_dir() {
             std::fs::create_dir_all(&target_path)?;
             copy_dir_recursive(&source_path, &target_path)?;
-        } else if source_path.is_file() {
+        } else if metadata.is_file() {
             if let Some(parent) = target_path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
             std::fs::copy(&source_path, &target_path)?;
+        } else {
+            return Err(AppError::Project(format!(
+                "Export refuses non-regular source path '{}'.",
+                source_path.display()
+            )));
         }
     }
 
     Ok(())
+}
+
+fn reject_symlink_or_reparse(path: &Path) -> Result<(), AppError> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || metadata_is_reparse_point(&metadata) {
+        return Err(AppError::Project(format!(
+            "Export refuses symbolic link or reparse point '{}'; copy real files into the source tree first.",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn metadata_is_reparse_point(metadata: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn metadata_is_reparse_point(_metadata: &std::fs::Metadata) -> bool {
+    false
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1092,11 +1293,39 @@ fn trim_ascii_whitespace_range(text: &str, start: usize, end: usize) -> (usize, 
 }
 
 fn is_same_or_nested(base_dir: &Path, candidate_dir: &Path) -> Result<bool, AppError> {
-    let normalized_base = normalize_path(base_dir)?;
-    let normalized_candidate = normalize_path(candidate_dir)?;
+    let normalized_base = resolve_existing_path_prefix(base_dir)?;
+    let normalized_candidate = resolve_existing_path_prefix(candidate_dir)?;
 
     Ok(normalized_candidate == normalized_base
         || normalized_candidate.starts_with(&normalized_base))
+}
+
+fn resolve_existing_path_prefix(path: &Path) -> Result<PathBuf, AppError> {
+    let absolute = normalize_path(path)?;
+    let mut existing = absolute.clone();
+    let mut missing_segments = Vec::new();
+
+    while !existing.exists() {
+        let segment = existing.file_name().ok_or_else(|| {
+            AppError::Project(format!(
+                "Could not resolve export path '{}'.",
+                path.display()
+            ))
+        })?;
+        missing_segments.push(segment.to_os_string());
+        if !existing.pop() {
+            return Err(AppError::Project(format!(
+                "Could not resolve export path '{}'.",
+                path.display()
+            )));
+        }
+    }
+
+    let mut resolved = std::fs::canonicalize(existing)?;
+    while let Some(segment) = missing_segments.pop() {
+        resolved.push(segment);
+    }
+    Ok(normalize_lexically(&resolved))
 }
 
 fn normalize_path(path: &Path) -> Result<PathBuf, AppError> {
@@ -2483,6 +2712,62 @@ mod tests {
     fn write_mv_engine_marker(game_dir: &Path) {
         fs::create_dir_all(game_dir.join("js")).unwrap();
         fs::write(game_dir.join("js").join("rpg_core.js"), "").unwrap();
+    }
+
+    fn write_unity_mono_fixture(root: &Path, localization_bytes: &[u8]) -> PathBuf {
+        let data_dir = root.join("Sample_Data");
+        let localization_path = data_dir
+            .join("StreamingAssets")
+            .join("Localization")
+            .join("strings.json");
+        fs::create_dir_all(data_dir.join("Managed")).unwrap();
+        fs::create_dir_all(localization_path.parent().unwrap()).unwrap();
+        fs::write(root.join("UnityPlayer.dll"), []).unwrap();
+        fs::write(data_dir.join("globalgamemanagers"), []).unwrap();
+        fs::write(data_dir.join("Managed/Assembly-CSharp.dll"), []).unwrap();
+        fs::write(&localization_path, localization_bytes).unwrap();
+        localization_path
+    }
+
+    fn unity_project_from_source(root: &Path) -> Project {
+        let parsed = crate::parser::parse_game(root).unwrap();
+        assert_eq!(parsed.engine, Engine::Unity);
+        Project {
+            id: "unity-test".into(),
+            name: "Unity Loose JSON".into(),
+            source_lang: "en".into(),
+            target_lang: "es".into(),
+            engine: parsed.engine,
+            game_dir: root.to_string_lossy().into(),
+            files: parsed.files,
+            glossary: vec![],
+            style_guide: vec![],
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    fn snapshot_file_tree(root: &Path) -> Vec<(String, Vec<u8>)> {
+        fn visit(root: &Path, directory: &Path, files: &mut Vec<(String, Vec<u8>)>) {
+            for entry in fs::read_dir(directory).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    visit(root, &path, files);
+                } else if path.is_file() {
+                    let relative = path
+                        .strip_prefix(root)
+                        .unwrap()
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    files.push((relative, fs::read(path).unwrap()));
+                }
+            }
+        }
+
+        let mut files = Vec::new();
+        visit(root, root, &mut files);
+        files.sort_by(|left, right| left.0.cmp(&right.0));
+        files
     }
 
     #[test]
@@ -3918,6 +4203,21 @@ mod tests {
         let _ = fs::remove_dir_all(&temp_dir);
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn test_nested_output_detection_is_case_insensitive_on_windows() {
+        let root = std::env::temp_dir().join(format!(
+            "fairtl_export_path_case_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let differently_cased = PathBuf::from(root.to_string_lossy().to_uppercase()).join("output");
+
+        assert!(is_same_or_nested(&root, &differently_cased).unwrap());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
     #[test]
     fn test_export_project_rejects_source_drift_before_creating_output() {
         let temp_dir = std::env::temp_dir().join(format!(
@@ -4500,6 +4800,166 @@ mod tests {
 
         let _ = fs::remove_dir_all(&temp_dir);
         let _ = fs::remove_dir_all(&output_dir);
+    }
+
+    #[test]
+    fn test_export_unity_loose_json_roundtrip_preserves_bom_and_source() {
+        let root = std::env::temp_dir().join(format!(
+            "fairtl_export_unity_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        let mut source = vec![0xef, 0xbb, 0xbf];
+        source.extend_from_slice(br#"{"ui/menu~title":"Play","quit":"Quit","blank":"  "}"#);
+        write_unity_mono_fixture(&root, &source);
+        let mut project = unity_project_from_source(&root);
+        let entry = project.files[0]
+            .entries
+            .iter_mut()
+            .find(|entry| entry.id == "UnityJson:/ui~1menu~0title")
+            .unwrap();
+        entry.translation = "Jugar".into();
+        entry.status = EntryStatus::Reviewed;
+        let source_snapshot = snapshot_file_tree(&root);
+
+        let output_dir = std::env::temp_dir().join(format!(
+            "fairtl_export_unity_out_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        let result = export_project(&project, &output_dir).unwrap();
+
+        assert_eq!(result.files_exported, 1);
+        assert_eq!(result.entries_applied, 1);
+        assert_eq!(result.total_entries, 2);
+        assert_eq!(snapshot_file_tree(&root), source_snapshot);
+
+        let output_path = output_dir.join(&project.files[0].relative_path);
+        let output_bytes = fs::read(&output_path).unwrap();
+        assert!(output_bytes.starts_with(&[0xef, 0xbb, 0xbf]));
+        let readback = crate::parser::parse_game(&output_dir).unwrap();
+        assert_eq!(readback.engine, Engine::Unity);
+        let readback_entries = readback.files[0]
+            .entries
+            .iter()
+            .map(|entry| (entry.id.as_str(), entry.original.as_str()))
+            .collect::<HashMap<_, _>>();
+        assert_eq!(
+            readback_entries.get("UnityJson:/ui~1menu~0title"),
+            Some(&"Jugar")
+        );
+        assert_eq!(readback_entries.get("UnityJson:/quit"), Some(&"Quit"));
+
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(output_dir);
+    }
+
+    #[test]
+    fn test_export_unity_rejects_source_drift_before_creating_output() {
+        let root = std::env::temp_dir().join(format!(
+            "fairtl_export_unity_drift_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        let source_path = write_unity_mono_fixture(&root, br#"{"play":"Play"}"#);
+        let mut project = unity_project_from_source(&root);
+        project.files[0].entries[0].translation = "Jugar".into();
+        project.files[0].entries[0].status = EntryStatus::Reviewed;
+        let changed_source = br#"{"play":"Launch"}"#;
+        fs::write(&source_path, changed_source).unwrap();
+
+        let output_dir = std::env::temp_dir().join(format!(
+            "fairtl_export_unity_drift_out_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        let error = export_project(&project, &output_dir)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("Source game changed since import"));
+        assert!(error.contains("original text changed"));
+        assert!(!output_dir.exists());
+        assert_eq!(fs::read(&source_path).unwrap(), changed_source);
+
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(output_dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_export_rejects_source_symlink_and_cleans_output() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!(
+            "fairtl_export_unity_symlink_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        write_unity_mono_fixture(&root, br#"{"play":"Play"}"#);
+        let mut project = unity_project_from_source(&root);
+        project.files[0].entries[0].translation = "Jugar".into();
+        project.files[0].entries[0].status = EntryStatus::Reviewed;
+        let external = std::env::temp_dir().join(format!(
+            "fairtl_export_external_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        fs::write(&external, "outside").unwrap();
+        symlink(&external, root.join("outside-link.txt")).unwrap();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fairtl_export_unity_symlink_out_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+
+        let error = export_project(&project, &output_dir)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("symbolic link") || error.contains("reparse point"));
+        assert!(!output_dir.exists());
+        assert_eq!(fs::read_to_string(&external).unwrap(), "outside");
+
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(output_dir);
+        let _ = fs::remove_file(external);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_export_rejects_source_symlink_and_cleans_output_when_windows_allows_creation() {
+        use std::io::ErrorKind;
+        use std::os::windows::fs::symlink_file;
+
+        let root = std::env::temp_dir().join(format!(
+            "fairtl_export_unity_symlink_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        write_unity_mono_fixture(&root, br#"{"play":"Play"}"#);
+        let mut project = unity_project_from_source(&root);
+        project.files[0].entries[0].translation = "Jugar".into();
+        project.files[0].entries[0].status = EntryStatus::Reviewed;
+        let external = std::env::temp_dir().join(format!(
+            "fairtl_export_external_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        fs::write(&external, "outside").unwrap();
+        let link = root.join("outside-link.txt");
+        match symlink_file(&external, &link) {
+            Ok(()) => {
+                let output_dir = std::env::temp_dir().join(format!(
+                    "fairtl_export_unity_symlink_out_{}",
+                    uuid::Uuid::new_v4().as_simple()
+                ));
+                let error = export_project(&project, &output_dir)
+                    .unwrap_err()
+                    .to_string();
+                assert!(error.contains("symbolic link") || error.contains("reparse point"));
+                assert!(!output_dir.exists());
+                assert_eq!(fs::read_to_string(&external).unwrap(), "outside");
+                let _ = fs::remove_dir_all(output_dir);
+            }
+            Err(error)
+                if error.kind() == ErrorKind::PermissionDenied
+                    || error.raw_os_error() == Some(1314) => {}
+            Err(error) => panic!("could not create export symlink fixture: {error}"),
+        }
+
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_file(external);
     }
 
     #[test]

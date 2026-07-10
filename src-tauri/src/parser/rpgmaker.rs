@@ -192,7 +192,7 @@ fn is_mv_mz_root(dir: &Path) -> bool {
     has_engine && has_data
 }
 
-fn is_rpgmaker_root(dir: &Path) -> bool {
+pub(super) fn is_rpgmaker_root(dir: &Path) -> bool {
     is_mv_mz_root(dir) || detect_legacy_engine(dir).is_some()
 }
 
