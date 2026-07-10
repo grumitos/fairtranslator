@@ -28,4 +28,46 @@ describe("SettingsPanel providers", () => {
     expect(screen.getByTestId("provider-form")).toHaveTextContent("openai");
     expect(screen.getAllByTestId("provider-form")).toHaveLength(1);
   }, 10_000);
+
+  it("opens directly on the provider requested by the translation flow", () => {
+    render(
+      <SettingsPanel
+        open
+        onOpenChange={() => undefined}
+        initialProvider="google"
+      />,
+    );
+
+    expect(screen.getByTestId("provider-form")).toHaveTextContent("google");
+    expect(screen.getByRole("button", { name: /Google Translate/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  }, 10_000);
+
+  it("resets to OpenCode when reopened manually after a provider request", () => {
+    const { rerender } = render(
+      <SettingsPanel
+        open
+        onOpenChange={() => undefined}
+        initialProvider="google"
+      />,
+    );
+    expect(screen.getByTestId("provider-form")).toHaveTextContent("google");
+
+    rerender(
+      <SettingsPanel
+        open={false}
+        onOpenChange={() => undefined}
+        initialProvider="google"
+      />,
+    );
+    rerender(<SettingsPanel open onOpenChange={() => undefined} />);
+
+    expect(screen.getByTestId("provider-form")).toHaveTextContent("opencode");
+    expect(screen.getByRole("button", { name: /OpenCode/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  }, 10_000);
 });

@@ -154,7 +154,7 @@ describe("BatchTranslatePanel", () => {
     expect(screen.getByText("Sin configurar")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Iniciar traducción" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Configurar proveedor" }));
-    expect(mocks.configureProvider).toHaveBeenCalledOnce();
+    expect(mocks.configureProvider).toHaveBeenCalledWith("google");
     expect(mocks.startBatch).not.toHaveBeenCalled();
   }, 10_000);
 
@@ -167,7 +167,7 @@ describe("BatchTranslatePanel", () => {
     expect(await screen.findByText("No se pudo cargar la configuración")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Iniciar traducción" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Configurar proveedor" }));
-    expect(mocks.configureProvider).toHaveBeenCalledOnce();
+    expect(mocks.configureProvider).toHaveBeenCalledWith("google");
     expect(mocks.startBatch).not.toHaveBeenCalled();
   }, 10_000);
 

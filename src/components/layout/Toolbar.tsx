@@ -39,7 +39,7 @@ import { StyleGuidePanel } from "@/components/layout/StyleGuidePanel";
 import { BatchTranslatePanel } from "@/components/layout/BatchTranslatePanel";
 import { IconAction } from "@/components/layout/toolbar/IconAction";
 import { isTranslatableEntry } from "@/lib/translationMetrics";
-import type { EntryStatus, ExportResult } from "@/types/domain";
+import type { EntryStatus, ExportResult, ProviderType } from "@/types/domain";
 
 interface ExportSummary {
   outputDir: string;
@@ -59,6 +59,7 @@ export function Toolbar() {
   const setTheme = useSettingsStore((s) => s.setTheme);
   const [showNewDialog, setShowNewDialog] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [settingsProvider, setSettingsProvider] = useState<ProviderType>();
   const [showGlossary, setShowGlossary] = useState(false);
   const [showStyleGuide, setShowStyleGuide] = useState(false);
   const [showBatchTranslate, setShowBatchTranslate] = useState(false);
@@ -232,7 +233,13 @@ export function Toolbar() {
           <IconAction label={t("editor:toolbar.toggleTheme")} onClick={handleThemeToggle}>
             {theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}
           </IconAction>
-          <IconAction label={t("editor:toolbar.settings")} onClick={() => setShowSettings(true)}>
+          <IconAction
+            label={t("editor:toolbar.settings")}
+            onClick={() => {
+              setSettingsProvider(undefined);
+              setShowSettings(true);
+            }}
+          >
             <Settings className="size-4" />
           </IconAction>
           {project && (
@@ -249,13 +256,18 @@ export function Toolbar() {
       </header>
 
       <NewProjectDialog open={showNewDialog} onOpenChange={setShowNewDialog} />
-      <SettingsPanel open={showSettings} onOpenChange={setShowSettings} />
+      <SettingsPanel
+        open={showSettings}
+        onOpenChange={setShowSettings}
+        initialProvider={settingsProvider}
+      />
       <GlossaryPanel open={showGlossary} onOpenChange={setShowGlossary} />
       <StyleGuidePanel open={showStyleGuide} onOpenChange={setShowStyleGuide} />
       <BatchTranslatePanel
         open={showBatchTranslate}
         onOpenChange={setShowBatchTranslate}
-        onConfigureProvider={() => {
+        onConfigureProvider={(provider) => {
+          setSettingsProvider(provider);
           setShowBatchTranslate(false);
           setShowSettings(true);
         }}

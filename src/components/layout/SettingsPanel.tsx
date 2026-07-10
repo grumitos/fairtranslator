@@ -1,4 +1,4 @@
-import { type CSSProperties, useState } from "react";
+import { type CSSProperties, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -30,6 +30,7 @@ import { cn } from "@/lib/utils";
 interface SettingsPanelProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  initialProvider?: ProviderType;
 }
 
 const PROVIDERS: {
@@ -70,7 +71,7 @@ const PROVIDERS: {
   },
 ];
 
-export function SettingsPanel({ open, onOpenChange }: SettingsPanelProps) {
+export function SettingsPanel({ open, onOpenChange, initialProvider }: SettingsPanelProps) {
   const { t } = useTranslation(["settings", "common"]);
   const theme = useSettingsStore((s) => s.theme);
   const language = useSettingsStore((s) => s.language);
@@ -78,9 +79,15 @@ export function SettingsPanel({ open, onOpenChange }: SettingsPanelProps) {
   const setTheme = useSettingsStore((s) => s.setTheme);
   const setLanguage = useSettingsStore((s) => s.setLanguage);
   const setWordWrapColumn = useSettingsStore((s) => s.setWordWrapColumn);
-  const [selectedProvider, setSelectedProvider] = useState<ProviderType>("opencode");
+  const [selectedProvider, setSelectedProvider] = useState<ProviderType>(initialProvider ?? "opencode");
   const selectedProviderConfig =
     PROVIDERS.find((provider) => provider.id === selectedProvider) ?? PROVIDERS[0];
+
+  useEffect(() => {
+    if (open) {
+      setSelectedProvider(initialProvider ?? "opencode");
+    }
+  }, [initialProvider, open]);
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>

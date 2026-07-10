@@ -33,7 +33,7 @@ import type { AiBatchExport, ApiKeyInfo, ProviderModel, ProviderType } from "@/t
 interface BatchTranslatePanelProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onConfigureProvider: () => void;
+  onConfigureProvider: (provider: ProviderType) => void;
 }
 
 type BatchMode = "providers" | "externalAi";
@@ -480,7 +480,14 @@ export function BatchTranslatePanel({
                           : "editor:batch.providers.configuration.notConfigured",
                       )}
                     </p>
-                    <Button type="button" size="sm" variant="outline" onClick={onConfigureProvider}>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        if (provider) onConfigureProvider(provider);
+                      }}
+                    >
                       {t("editor:batch.providers.configuration.action")}
                     </Button>
                   </div>

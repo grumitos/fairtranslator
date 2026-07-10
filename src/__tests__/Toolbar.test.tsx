@@ -3,7 +3,7 @@ import i18n from "@/lib/i18n";
 import { Toolbar } from "@/components/layout/Toolbar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useEditorStore } from "@/stores/editorStore";
-import type { Project } from "@/types/domain";
+import type { Project, ProviderType } from "@/types/domain";
 
 const mocks = vi.hoisted(() => ({
   project: null as Project | null,
@@ -27,8 +27,21 @@ vi.mock("@/hooks/useProject", () => ({
 
 vi.mock("@/components/layout/NewProjectDialog", () => ({ NewProjectDialog: () => null }));
 vi.mock("@/components/layout/SettingsPanel", () => ({
-  SettingsPanel: ({ open }: { open: boolean }) => open
-    ? <div role="dialog" aria-label="Settings panel mock" />
+  SettingsPanel: ({
+    open,
+    initialProvider,
+    onOpenChange,
+  }: {
+    open: boolean;
+    initialProvider?: ProviderType;
+    onOpenChange: (open: boolean) => void;
+  }) => open
+    ? (
+        <div role="dialog" aria-label="Settings panel mock">
+          <span>{initialProvider ?? "opencode"}</span>
+          <button type="button" onClick={() => onOpenChange(false)}>Close settings mock</button>
+        </div>
+      )
     : null,
 }));
 vi.mock("@/components/layout/GlossaryPanel", () => ({ GlossaryPanel: () => null }));
@@ -39,9 +52,13 @@ vi.mock("@/components/layout/BatchTranslatePanel", () => ({
     onConfigureProvider,
   }: {
     open: boolean;
-    onConfigureProvider?: () => void;
+    onConfigureProvider?: (provider: ProviderType) => void;
   }) => open
-    ? <button type="button" onClick={onConfigureProvider}>Configure provider mock</button>
+    ? (
+        <button type="button" onClick={() => onConfigureProvider?.("google")}>
+          Configure provider mock
+        </button>
+      )
     : null,
 }));
 
@@ -178,6 +195,19 @@ describe("Toolbar export readiness", () => {
     fireEvent.click(screen.getByRole("button", { name: "Configure provider mock" }));
 
     expect(screen.queryByRole("button", { name: "Configure provider mock" })).not.toBeInTheDocument();
-    expect(screen.getByRole("dialog", { name: "Settings panel mock" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Settings panel mock" })).toHaveTextContent("google");
+  });
+
+  it("resets the provider when Settings is reopened manually", () => {
+    renderToolbar();
+
+    fireEvent.click(screen.getByRole("button", { name: "Traducción por lotes" }));
+    fireEvent.click(screen.getByRole("button", { name: "Configure provider mock" }));
+    expect(screen.getByRole("dialog", { name: "Settings panel mock" })).toHaveTextContent("google");
+
+    fireEvent.click(screen.getByRole("button", { name: "Close settings mock" }));
+    fireEvent.click(screen.getByRole("button", { name: "Configuración" }));
+
+    expect(screen.getByRole("dialog", { name: "Settings panel mock" })).toHaveTextContent("opencode");
   });
 });
