@@ -26,10 +26,24 @@ vi.mock("@/hooks/useProject", () => ({
 }));
 
 vi.mock("@/components/layout/NewProjectDialog", () => ({ NewProjectDialog: () => null }));
-vi.mock("@/components/layout/SettingsPanel", () => ({ SettingsPanel: () => null }));
+vi.mock("@/components/layout/SettingsPanel", () => ({
+  SettingsPanel: ({ open }: { open: boolean }) => open
+    ? <div role="dialog" aria-label="Settings panel mock" />
+    : null,
+}));
 vi.mock("@/components/layout/GlossaryPanel", () => ({ GlossaryPanel: () => null }));
 vi.mock("@/components/layout/StyleGuidePanel", () => ({ StyleGuidePanel: () => null }));
-vi.mock("@/components/layout/BatchTranslatePanel", () => ({ BatchTranslatePanel: () => null }));
+vi.mock("@/components/layout/BatchTranslatePanel", () => ({
+  BatchTranslatePanel: ({
+    open,
+    onConfigureProvider,
+  }: {
+    open: boolean;
+    onConfigureProvider?: () => void;
+  }) => open
+    ? <button type="button" onClick={onConfigureProvider}>Configure provider mock</button>
+    : null,
+}));
 
 function makeProject(statuses: Array<"untranslated" | "draft" | "reviewed" | "final">): Project {
   return {
@@ -155,5 +169,15 @@ describe("Toolbar export readiness", () => {
     expect(screen.queryByRole("heading", { name: "Revisar antes de exportar" })).not.toBeInTheDocument();
     expect(mocks.exportProject).toHaveBeenCalledWith("C:/Exports/Toolbar");
     expect(await screen.findByRole("heading", { name: "Exportación completada" })).toBeInTheDocument();
+  });
+
+  it("closes batch translation and opens Settings from provider configuration", () => {
+    renderToolbar();
+
+    fireEvent.click(screen.getByRole("button", { name: "Traducción por lotes" }));
+    fireEvent.click(screen.getByRole("button", { name: "Configure provider mock" }));
+
+    expect(screen.queryByRole("button", { name: "Configure provider mock" })).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Settings panel mock" })).toBeInTheDocument();
   });
 });

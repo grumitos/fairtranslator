@@ -33,6 +33,7 @@ import type { AiBatchExport, ApiKeyInfo, ProviderModel, ProviderType } from "@/t
 interface BatchTranslatePanelProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onConfigureProvider: () => void;
 }
 
 type BatchMode = "providers" | "externalAi";
@@ -48,6 +49,7 @@ const PROVIDERS: { id: ProviderType; labelKey: string }[] = [
 export function BatchTranslatePanel({
   open,
   onOpenChange,
+  onConfigureProvider,
 }: BatchTranslatePanelProps) {
   const { t } = useTranslation(["editor", "common"]);
   const { isTranslating, progress, error, startBatch, cancelBatch } = useTranslationHook();
@@ -55,6 +57,7 @@ export function BatchTranslatePanel({
   const replaceProject = useProjectStore((s) => s.replaceProject);
   const [provider, setProvider] = useState<ProviderType | "">("");
   const [providerConfig, setProviderConfig] = useState<ApiKeyInfo | null>(null);
+  const [providerConfigLoadFailed, setProviderConfigLoadFailed] = useState(false);
   const [runModel, setRunModel] = useState("");
   const [providerModels, setProviderModels] = useState<ProviderModel[]>([]);
   const [isRefreshingModels, setIsRefreshingModels] = useState(false);
@@ -303,6 +306,7 @@ export function BatchTranslatePanel({
     let isActive = true;
     setProviderModels([]);
     setProviderConfig(null);
+    setProviderConfigLoadFailed(false);
     setRunModel("");
 
     if (!provider) {
@@ -315,11 +319,13 @@ export function BatchTranslatePanel({
       .then((info) => {
         if (!isActive) return;
         setProviderConfig(info);
+        setProviderConfigLoadFailed(false);
         setRunModel(info.model ?? "");
       })
       .catch(() => {
         if (!isActive) return;
         setProviderConfig(null);
+        setProviderConfigLoadFailed(true);
         setRunModel("");
       });
 
@@ -460,6 +466,25 @@ export function BatchTranslatePanel({
                   </SelectContent>
                 </Select>
               </div>
+
+              {requiresProviderConfig &&
+                (providerConfigLoadFailed || providerConfig?.isConfigured === false) && (
+                  <div
+                    className="ft-callout-warning flex items-center justify-between gap-3 p-3"
+                    role={providerConfigLoadFailed ? "alert" : "status"}
+                  >
+                    <p className="text-xs font-medium">
+                      {t(
+                        providerConfigLoadFailed
+                          ? "editor:batch.providers.configuration.loadFailed"
+                          : "editor:batch.providers.configuration.notConfigured",
+                      )}
+                    </p>
+                    <Button type="button" size="sm" variant="outline" onClick={onConfigureProvider}>
+                      {t("editor:batch.providers.configuration.action")}
+                    </Button>
+                  </div>
+                )}
 
               {providerCapabilityKey && (
                 <div className="rounded-md border border-border/70 bg-muted/40 p-3 text-[11px] text-muted-foreground">

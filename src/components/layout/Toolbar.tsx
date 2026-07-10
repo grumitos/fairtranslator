@@ -252,7 +252,14 @@ export function Toolbar() {
       <SettingsPanel open={showSettings} onOpenChange={setShowSettings} />
       <GlossaryPanel open={showGlossary} onOpenChange={setShowGlossary} />
       <StyleGuidePanel open={showStyleGuide} onOpenChange={setShowStyleGuide} />
-      <BatchTranslatePanel open={showBatchTranslate} onOpenChange={setShowBatchTranslate} />
+      <BatchTranslatePanel
+        open={showBatchTranslate}
+        onOpenChange={setShowBatchTranslate}
+        onConfigureProvider={() => {
+          setShowBatchTranslate(false);
+          setShowSettings(true);
+        }}
+      />
 
       <Dialog open={showExportReadiness} onOpenChange={setShowExportReadiness}>
         <DialogContent className="sm:max-w-md">

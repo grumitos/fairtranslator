@@ -100,6 +100,11 @@
       "modeDescription": "Traduce en FairTranslator y aplica los resultados a este proyecto.",
       "modeFeatures": "El contexto varía por proveedor; revisa la nota antes de empezar.",
       "capabilityTitle": "Nota del proveedor seleccionado",
+      "configuration": {
+        "notConfigured": "Sin configurar",
+        "loadFailed": "No se pudo cargar la configuración",
+        "action": "Configurar proveedor"
+      },
       "capabilities": {
         "openai": "Usa todo el contexto del proyecto: guía de estilo, glosario, términos protegidos, memoria y lotes cercanos.",
         "codex": "Usa el mismo contexto que OpenAI con el CLI local de Codex.",

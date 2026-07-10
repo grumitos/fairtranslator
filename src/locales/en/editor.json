@@ -100,6 +100,11 @@
       "modeDescription": "Translate in FairTranslator and apply results to this project.",
       "modeFeatures": "Context varies by provider; check the note before starting.",
       "capabilityTitle": "Selected provider note",
+      "configuration": {
+        "notConfigured": "Not configured",
+        "loadFailed": "Could not load configuration",
+        "action": "Configure provider"
+      },
       "capabilities": {
         "openai": "Uses full project context: style guide, glossary, protected terms, memory, and neighboring batches.",
         "codex": "Uses the same context as OpenAI through the local Codex CLI.",

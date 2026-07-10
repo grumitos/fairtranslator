@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   apikeyLoad: vi.fn(),
   startBatch: vi.fn(),
   cancelBatch: vi.fn(),
+  configureProvider: vi.fn(),
   translation: {
     isTranslating: false,
     progress: null as BatchProgress | null,
@@ -124,6 +125,7 @@ describe("BatchTranslatePanel", () => {
     }));
     mocks.startBatch.mockReset();
     mocks.cancelBatch.mockReset();
+    mocks.configureProvider.mockReset();
     mocks.cancelBatch.mockResolvedValue(true);
     mocks.translation.isTranslating = false;
     mocks.translation.progress = null;
@@ -138,22 +140,39 @@ describe("BatchTranslatePanel", () => {
   });
 
   it("gives the provider selector an accessible name", () => {
-    render(<BatchTranslatePanel open onOpenChange={() => undefined} />);
+    render(<BatchTranslatePanel open onOpenChange={() => undefined} onConfigureProvider={mocks.configureProvider} />);
 
     expect(screen.getByRole("combobox", { name: "Proveedor" })).toBeInTheDocument();
   }, 10_000);
 
-  it("keeps translation disabled when Google has no configured API key", async () => {
-    render(<BatchTranslatePanel open onOpenChange={() => undefined} />);
+  it("offers provider configuration without starting when Google has no API key", async () => {
+    render(<BatchTranslatePanel open onOpenChange={() => undefined} onConfigureProvider={mocks.configureProvider} />);
 
     await selectProvider("Google Translate");
 
     await waitFor(() => expect(mocks.apikeyLoad).toHaveBeenCalledWith("google"));
+    expect(screen.getByText("Sin configurar")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Iniciar traducción" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Configurar proveedor" }));
+    expect(mocks.configureProvider).toHaveBeenCalledOnce();
+    expect(mocks.startBatch).not.toHaveBeenCalled();
+  }, 10_000);
+
+  it("surfaces provider configuration load failures with the same CTA", async () => {
+    mocks.apikeyLoad.mockRejectedValueOnce(new Error("credential store unavailable"));
+    render(<BatchTranslatePanel open onOpenChange={() => undefined} onConfigureProvider={mocks.configureProvider} />);
+
+    await selectProvider("Google Translate");
+
+    expect(await screen.findByText("No se pudo cargar la configuración")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Iniciar traducción" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Configurar proveedor" }));
+    expect(mocks.configureProvider).toHaveBeenCalledOnce();
+    expect(mocks.startBatch).not.toHaveBeenCalled();
   }, 10_000);
 
   it("identifies OpenCode as the integrated API and labels its single model field", async () => {
-    render(<BatchTranslatePanel open onOpenChange={() => undefined} />);
+    render(<BatchTranslatePanel open onOpenChange={() => undefined} onConfigureProvider={mocks.configureProvider} />);
 
     await selectProvider("OpenCode Go · API integrada");
 
@@ -164,7 +183,7 @@ describe("BatchTranslatePanel", () => {
   it("offers cooperative cancellation for the active run", async () => {
     mocks.translation.isTranslating = true;
     mocks.translation.progress = makeProgress();
-    render(<BatchTranslatePanel open onOpenChange={() => undefined} />);
+    render(<BatchTranslatePanel open onOpenChange={() => undefined} onConfigureProvider={mocks.configureProvider} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Cancelar" }));
 
@@ -177,7 +196,7 @@ describe("BatchTranslatePanel", () => {
       chunksProcessed: 1,
       entriesTranslated: 1,
     });
-    render(<BatchTranslatePanel open onOpenChange={() => undefined} />);
+    render(<BatchTranslatePanel open onOpenChange={() => undefined} onConfigureProvider={mocks.configureProvider} />);
 
     expect(screen.getByText("Traducción cancelada")).toBeInTheDocument();
     expect(screen.getByText("Traducidas antes de cancelar: 1/3")).toBeInTheDocument();
