@@ -22,6 +22,16 @@ pub const DB_TEXT_FIELDS: &[&str] = &[
     "message4",
 ];
 
+/// Visible vocabulary stored directly on System.json outside `terms`.
+pub const SYSTEM_TEXT_FIELDS: &[&str] = &[
+    "currencyUnit",
+    "elements",
+    "skillTypes",
+    "weaponTypes",
+    "armorTypes",
+    "equipTypes",
+];
+
 /// Files in /data/ that are treated as database arrays
 const DATABASE_FILES: &[&str] = &[
     "Actors", "Armors", "Classes", "Enemies", "Items", "Skills", "States", "Weapons",
@@ -29,6 +39,7 @@ const DATABASE_FILES: &[&str] = &[
 
 /// Event command codes that contain translatable text
 pub const CODE_SHOW_TEXT: i64 = 401;
+pub const CODE_SHOW_TEXT_HEADER: i64 = 101;
 pub const CODE_SHOW_CHOICES: i64 = 102;
 pub const CODE_SCROLL_TEXT: i64 = 405;
 pub const CODE_CHANGE_NAME: i64 = 320;
@@ -628,7 +639,7 @@ fn extract_troops_entries(json: &Value) -> Result<Vec<TranslationEntry>, AppErro
 }
 
 // ---------------------------------------------------------------------------
-// System.json — gameTitle + terms
+// System.json — gameTitle + visible vocabulary + terms
 // ---------------------------------------------------------------------------
 
 fn extract_system_entries(json: &Value) -> Result<Vec<TranslationEntry>, AppError> {
@@ -647,6 +658,17 @@ fn extract_system_entries(json: &Value) -> Result<Vec<TranslationEntry>, AppErro
                 "System > gameTitle",
                 title.clone(),
             ));
+        }
+    }
+
+    for field in SYSTEM_TEXT_FIELDS {
+        if let Some(value) = obj.get(*field) {
+            extract_terms_recursive(
+                value,
+                &format!("System:{field}"),
+                &format!("System > {field}"),
+                &mut entries,
+            );
         }
     }
 
@@ -1030,6 +1052,7 @@ fn extract_terms_recursive(
 /// Extract translatable entries from an event command list.
 ///
 /// Supported codes:
+/// - 101: Show Text header speaker name (MZ parameters[4])
 /// - 401: Show Text (continuation lines)
 /// - 102: Show Choices
 /// - 405: Scrolling Text (continuation lines)
@@ -1079,6 +1102,19 @@ fn extract_event_commands(
         }
 
         match code {
+            CODE_SHOW_TEXT_HEADER => {
+                if let Some(Value::Array(p)) = params {
+                    if let Some(Value::String(speaker_name)) = p.get(4) {
+                        if !speaker_name.trim().is_empty() {
+                            entries.push(make_entry(
+                                &format!("{id_prefix}:speakerName:{cmd_idx}"),
+                                &format!("{context_prefix} > speakerName"),
+                                speaker_name.clone(),
+                            ));
+                        }
+                    }
+                }
+            }
             CODE_SHOW_TEXT => {
                 // parameters[0] is the text line
                 if let Some(Value::Array(p)) = params {
@@ -1321,6 +1357,57 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_event_commands_mz_speaker_name_keeps_text_grouping() {
+        let list: Value = serde_json::from_str(
+            r#"[
+                {"code": 101, "parameters": ["Actor1", 0, 0, 2, "Alice"]},
+                {"code": 401, "parameters": ["First line"]},
+                {"code": 401, "parameters": ["Second line"]},
+                {"code": 101, "parameters": ["Actor2", 1, 0, 2, ""]},
+                {"code": 401, "parameters": ["Without a speaker"]},
+                {"code": 0, "parameters": []}
+            ]"#,
+        )
+        .unwrap();
+
+        let entries = extract_event_commands(
+            list.as_array().unwrap(),
+            "Map001:1:0",
+            "Map001 > Event 1 > Page 1",
+        );
+
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].id, "Map001:1:0:speakerName:0");
+        assert_eq!(entries[0].original, "Alice");
+        assert_eq!(entries[1].id, "Map001:1:0:text:1");
+        assert_eq!(entries[1].original, "First line\nSecond line");
+        assert_eq!(entries[2].id, "Map001:1:0:text:4");
+        assert_eq!(entries[2].original, "Without a speaker");
+    }
+
+    #[test]
+    fn test_extract_event_commands_mv_header_has_no_speaker_name() {
+        let list: Value = serde_json::from_str(
+            r#"[
+                {"code": 101, "parameters": ["Actor1", 0, 0, 2]},
+                {"code": 401, "parameters": ["MV text"]},
+                {"code": 0, "parameters": []}
+            ]"#,
+        )
+        .unwrap();
+
+        let entries = extract_event_commands(
+            list.as_array().unwrap(),
+            "Map001:1:0",
+            "Map001 > Event 1 > Page 1",
+        );
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, "Map001:1:0:text:1");
+        assert_eq!(entries[0].original, "MV text");
+    }
+
+    #[test]
     fn test_extract_event_commands_choices() {
         let list: Value = serde_json::from_str(
             r#"[
@@ -1368,6 +1455,12 @@ mod tests {
         let json: Value = serde_json::from_str(
             r#"{
                 "gameTitle": "My RPG Adventure",
+                "currencyUnit": "G",
+                "elements": ["", "Fire", "Ice"],
+                "skillTypes": ["", "Magic"],
+                "weaponTypes": ["", "Sword"],
+                "armorTypes": ["", "Shield"],
+                "equipTypes": ["", "Weapon"],
                 "terms": {
                     "basic": ["Level", "Lv", "HP", "MP"],
                     "commands": ["Fight", "Escape"],
@@ -1381,10 +1474,21 @@ mod tests {
         .unwrap();
 
         let entries = extract_system_entries(&json).unwrap();
-        // gameTitle + 4 basic + 2 commands + 2 messages = 9
-        assert_eq!(entries.len(), 9);
+        assert_eq!(entries.len(), 16);
         assert_eq!(entries[0].id, "System:gameTitle");
         assert_eq!(entries[0].original, "My RPG Adventure");
+        let by_id = entries
+            .iter()
+            .map(|entry| (entry.id.as_str(), entry.original.as_str()))
+            .collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(by_id.get("System:currencyUnit"), Some(&"G"));
+        assert_eq!(by_id.get("System:elements.1"), Some(&"Fire"));
+        assert_eq!(by_id.get("System:elements.2"), Some(&"Ice"));
+        assert_eq!(by_id.get("System:skillTypes.1"), Some(&"Magic"));
+        assert_eq!(by_id.get("System:weaponTypes.1"), Some(&"Sword"));
+        assert_eq!(by_id.get("System:armorTypes.1"), Some(&"Shield"));
+        assert_eq!(by_id.get("System:equipTypes.1"), Some(&"Weapon"));
+        assert!(!by_id.contains_key("System:elements.0"));
     }
 
     #[test]

@@ -11,7 +11,8 @@ use crate::models::{Engine, EntryStatus, Project};
 use crate::parser::rpgmaker::{
     classify_file, classify_relative_path, parse_mv_mz_game, parse_plugins_js, render_plugins_js,
     FileKind, CODE_CHANGE_NAME, CODE_CHANGE_NICKNAME, CODE_CHANGE_PROFILE, CODE_CONTROL_VARIABLES,
-    CODE_SCROLL_TEXT, CODE_SHOW_CHOICES, CODE_SHOW_TEXT, DB_TEXT_FIELDS,
+    CODE_SCROLL_TEXT, CODE_SHOW_CHOICES, CODE_SHOW_TEXT, CODE_SHOW_TEXT_HEADER, DB_TEXT_FIELDS,
+    SYSTEM_TEXT_FIELDS,
 };
 use crate::services::message_wrapping::{
     join_overflow_message_lines, wrap_mv_mz_message_translation,
@@ -2097,7 +2098,7 @@ fn apply_troops(
 }
 
 // ---------------------------------------------------------------------------
-// System (gameTitle + terms)
+// System (gameTitle + visible vocabulary + terms)
 // ---------------------------------------------------------------------------
 
 fn apply_system(
@@ -2117,6 +2118,12 @@ fn apply_system(
                 *val = Value::String(translation.clone());
                 applied += 1;
             }
+        }
+    }
+
+    for field in SYSTEM_TEXT_FIELDS {
+        if let Some(value) = obj.get_mut(*field) {
+            applied += apply_terms_recursive(value, &format!("System:{field}"), translations);
         }
     }
 
@@ -2186,6 +2193,21 @@ fn apply_event_commands(
         let code = list[i].get("code").and_then(|v| v.as_i64()).unwrap_or(0);
 
         match code {
+            CODE_SHOW_TEXT_HEADER => {
+                let entry_id = format!("{id_prefix}:speakerName:{i}");
+                if let Some(translation) = translations.get(&entry_id) {
+                    let has_speaker_name = list[i]
+                        .get("parameters")
+                        .and_then(Value::as_array)
+                        .and_then(|parameters| parameters.get(4))
+                        .and_then(Value::as_str)
+                        .is_some();
+                    if has_speaker_name {
+                        set_parameter(list, i, 4, translation);
+                        applied += 1;
+                    }
+                }
+            }
             CODE_SHOW_TEXT => {
                 // Collect consecutive 401 commands (multi-line text)
                 let start = i;
@@ -2942,10 +2964,46 @@ mod tests {
     }
 
     #[test]
+    fn test_apply_event_commands_mz_speaker_name_keeps_header_and_text_group() {
+        let mut json: Value = serde_json::from_str(
+            r#"[
+                {"code": 101, "parameters": ["Actor1", 2, 0, 2, "Alice"]},
+                {"code": 401, "parameters": ["First line"]},
+                {"code": 401, "parameters": ["Second line"]},
+                {"code": 0, "parameters": []}
+            ]"#,
+        )
+        .unwrap();
+
+        let mut translations = HashMap::new();
+        translations.insert("Map001:1:0:speakerName:0".into(), "Alicia".into());
+
+        let list = json.as_array_mut().unwrap();
+        let applied = apply_event_commands(list, "Map001:1:0", &translations, "Choose an option.");
+
+        assert_eq!(applied, 1);
+        assert_eq!(list[0]["parameters"], json!(["Actor1", 2, 0, 2, "Alicia"]));
+        assert_eq!(
+            list.iter()
+                .map(|command| command["code"].as_i64().unwrap())
+                .collect::<Vec<_>>(),
+            vec![101, 401, 401, 0]
+        );
+        assert_eq!(list[1]["parameters"][0], "First line");
+        assert_eq!(list[2]["parameters"][0], "Second line");
+    }
+
+    #[test]
     fn test_apply_system() {
         let mut json: Value = serde_json::from_str(
             r#"{
                 "gameTitle": "My RPG Adventure",
+                "currencyUnit": "G",
+                "elements": ["", "Fire"],
+                "skillTypes": ["", "Magic"],
+                "weaponTypes": ["", "Sword"],
+                "armorTypes": ["", "Shield"],
+                "equipTypes": ["", "Weapon"],
                 "terms": {
                     "basic": ["Level", "Lv"],
                     "messages": {
@@ -2958,6 +3016,12 @@ mod tests {
 
         let mut translations = HashMap::new();
         translations.insert("System:gameTitle".into(), "Mi Aventura RPG".into());
+        translations.insert("System:currencyUnit".into(), "Oro".into());
+        translations.insert("System:elements.1".into(), "Fuego".into());
+        translations.insert("System:skillTypes.1".into(), "Magia".into());
+        translations.insert("System:weaponTypes.1".into(), "Espada".into());
+        translations.insert("System:armorTypes.1".into(), "Escudo".into());
+        translations.insert("System:equipTypes.1".into(), "Arma".into());
         translations.insert("System:terms.basic.0".into(), "Nivel".into());
         translations.insert(
             "System:terms.messages.actionFailure".into(),
@@ -2965,8 +3029,14 @@ mod tests {
         );
 
         let applied = apply_system(&mut json, &translations).unwrap();
-        assert_eq!(applied, 3);
+        assert_eq!(applied, 9);
         assert_eq!(json["gameTitle"], "Mi Aventura RPG");
+        assert_eq!(json["currencyUnit"], "Oro");
+        assert_eq!(json["elements"], json!(["", "Fuego"]));
+        assert_eq!(json["skillTypes"], json!(["", "Magia"]));
+        assert_eq!(json["weaponTypes"], json!(["", "Espada"]));
+        assert_eq!(json["armorTypes"], json!(["", "Escudo"]));
+        assert_eq!(json["equipTypes"], json!(["", "Arma"]));
         assert_eq!(json["terms"]["basic"][0], "Nivel");
         assert_eq!(json["terms"]["basic"][1], "Lv"); // unchanged
         assert_eq!(
@@ -3763,6 +3833,122 @@ mod tests {
         assert!(msg.contains("must be outside"));
 
         let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_export_project_roundtrips_mz_system_vocabulary_and_speaker_name() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "fairtl_export_mz_visible_text_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        let data_dir = temp_dir.join("data");
+        let js_dir = temp_dir.join("js");
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::create_dir_all(&js_dir).unwrap();
+        fs::write(js_dir.join("rmmz_core.js"), "").unwrap();
+
+        let system_source = r#"{
+            "currencyUnit":"G",
+            "elements":["","Fire"],
+            "skillTypes":["","Magic"],
+            "weaponTypes":["","Sword"],
+            "armorTypes":["","Shield"],
+            "equipTypes":["","Weapon"],
+            "terms":{}
+        }"#;
+        let map_source = r#"{
+            "displayName":"",
+            "events":[null,{"id":1,"name":"EV001","pages":[{"list":[
+                {"code":101,"parameters":["Actor1",2,0,2,"Alice"]},
+                {"code":401,"parameters":["First line"]},
+                {"code":401,"parameters":["Second line"]},
+                {"code":0,"parameters":[]}
+            ]}]}]
+        }"#;
+        fs::write(data_dir.join("System.json"), system_source).unwrap();
+        fs::write(data_dir.join("Map001.json"), map_source).unwrap();
+
+        let mut files = parse_mv_mz_game(&temp_dir).unwrap();
+        let translations = HashMap::from([
+            ("System:currencyUnit", "Oro"),
+            ("System:elements.1", "Fuego"),
+            ("System:skillTypes.1", "Magia"),
+            ("System:weaponTypes.1", "Espada"),
+            ("System:armorTypes.1", "Escudo"),
+            ("System:equipTypes.1", "Arma"),
+            ("Map001:1:0:speakerName:0", "Alicia"),
+        ]);
+        let mut selected = 0;
+        for entry in files.iter_mut().flat_map(|file| file.entries.iter_mut()) {
+            if let Some(translation) = translations.get(entry.id.as_str()) {
+                entry.translation = (*translation).to_string();
+                entry.status = EntryStatus::Reviewed;
+                selected += 1;
+            }
+        }
+        assert_eq!(selected, translations.len());
+
+        let project = Project {
+            id: "test".into(),
+            name: "MZ Visible Text".into(),
+            source_lang: "en".into(),
+            target_lang: "es".into(),
+            engine: Engine::Mz,
+            game_dir: temp_dir.to_string_lossy().into(),
+            files,
+            glossary: vec![],
+            style_guide: vec![],
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        let output_dir = std::env::temp_dir().join(format!(
+            "fairtl_export_mz_visible_text_out_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+
+        let result = export_project(&project, &output_dir).unwrap();
+        assert_eq!(result.entries_applied, translations.len());
+
+        let readback = parse_mv_mz_game(&output_dir)
+            .unwrap()
+            .into_iter()
+            .flat_map(|file| file.entries)
+            .map(|entry| (entry.id, entry.original))
+            .collect::<HashMap<_, _>>();
+        for (id, translation) in &translations {
+            assert_eq!(readback.get(*id).map(String::as_str), Some(*translation));
+        }
+        assert!(!readback.contains_key("System:elements.0"));
+
+        let exported_map: Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("data").join("Map001.json")).unwrap(),
+        )
+        .unwrap();
+        let commands = exported_map["events"][1]["pages"][0]["list"]
+            .as_array()
+            .unwrap();
+        assert_eq!(
+            commands[0]["parameters"],
+            json!(["Actor1", 2, 0, 2, "Alicia"])
+        );
+        assert_eq!(
+            commands
+                .iter()
+                .map(|command| command["code"].as_i64().unwrap())
+                .collect::<Vec<_>>(),
+            vec![101, 401, 401, 0]
+        );
+        assert_eq!(
+            fs::read_to_string(data_dir.join("System.json")).unwrap(),
+            system_source
+        );
+        assert_eq!(
+            fs::read_to_string(data_dir.join("Map001.json")).unwrap(),
+            map_source
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+        let _ = fs::remove_dir_all(&output_dir);
     }
 
     #[test]
