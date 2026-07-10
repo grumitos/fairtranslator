@@ -30,6 +30,12 @@ const CODEX_RESPONSE_HEADROOM_TOKENS: usize = 2048;
 const CODEX_STATUS_TIMEOUT: Duration = Duration::from_secs(30);
 const CODEX_EXEC_TIMEOUT: Duration = Duration::from_secs(300);
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(25);
+const TERMINATOR_COMMAND_TIMEOUT: Duration = Duration::from_secs(4);
+const CHILD_EXIT_TIMEOUT: Duration = Duration::from_secs(2);
+const IO_CLEANUP_TIMEOUT: Duration = Duration::from_secs(2);
+const COMMAND_CANCELLATION_TIMEOUT: Duration = Duration::from_secs(20);
+
+type PrimaryTreeTerminator = fn(u32) -> bool;
 
 #[cfg(not(test))]
 type RuntimeAppHandle = AppHandle;
@@ -99,6 +105,7 @@ pub struct CodexProvider {
     model: Option<String>,
     profile: Option<String>,
     reasoning_effort: Option<String>,
+    primary_tree_terminator: PrimaryTreeTerminator,
 }
 
 impl CodexProvider {
@@ -140,7 +147,14 @@ impl CodexProvider {
             model: model.and_then(normalize_optional),
             profile: profile.and_then(normalize_optional),
             reasoning_effort: reasoning_effort.and_then(normalize_optional),
+            primary_tree_terminator: terminate_tree_with_taskkill,
         }
+    }
+
+    #[cfg(test)]
+    fn with_primary_tree_terminator_for_test(mut self, terminator: PrimaryTreeTerminator) -> Self {
+        self.primary_tree_terminator = terminator;
+        self
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -516,6 +530,7 @@ impl CodexProvider {
     ) -> Result<std::process::Output, AppError> {
         let current_dir = current_dir.map(Path::to_path_buf);
         let mut command = self.build_command(runtime, &args, current_dir.as_deref())?;
+        let primary_tree_terminator = self.primary_tree_terminator;
         let cancelled = Arc::new(AtomicBool::new(false));
         let worker_cancelled = Arc::clone(&cancelled);
         let (finished_tx, finished_rx) = mpsc::channel();
@@ -528,7 +543,13 @@ impl CodexProvider {
             command.stdout(Stdio::piped()).stderr(Stdio::piped());
 
             let child = command.spawn().map_err(AppError::from)?;
-            wait_with_optional_timeout(child, stdin_text, timeout, &worker_cancelled)
+            wait_with_optional_timeout(
+                child,
+                stdin_text,
+                timeout,
+                &worker_cancelled,
+                primary_tree_terminator,
+            )
         });
         let mut cancellation = CommandCancellationGuard::new(cancelled, finished_rx);
         let result = task
@@ -589,8 +610,12 @@ impl Drop for CommandCancellationGuard {
             return;
         };
         self.cancelled.store(true, Ordering::Release);
-        // Dropping the provider future must not release the batch run while its process still runs.
-        let _ = finished.recv();
+        if finished.recv_timeout(COMMAND_CANCELLATION_TIMEOUT).is_err() {
+            log::error!(
+                "Codex cancellation cleanup exceeded {} seconds; the worker may still be running",
+                COMMAND_CANCELLATION_TIMEOUT.as_secs()
+            );
+        }
     }
 }
 
@@ -605,6 +630,7 @@ fn wait_with_optional_timeout(
     stdin_text: Option<String>,
     timeout: Option<Duration>,
     cancelled: &AtomicBool,
+    primary_tree_terminator: PrimaryTreeTerminator,
 ) -> Result<std::process::Output, AppError> {
     let stdin_writer = child.stdin.take().map(|mut stdin| {
         thread::spawn(move || {
@@ -635,10 +661,10 @@ fn wait_with_optional_timeout(
             break ChildStop::Completed(status);
         }
         if cancelled.load(Ordering::Acquire) {
-            break ChildStop::Cancelled(terminate_child_tree(&mut child)?);
+            break ChildStop::Cancelled(terminate_child_tree(&mut child, primary_tree_terminator)?);
         }
         if timeout.is_some_and(|timeout| started_at.elapsed() >= timeout) {
-            break ChildStop::TimedOut(terminate_child_tree(&mut child)?);
+            break ChildStop::TimedOut(terminate_child_tree(&mut child, primary_tree_terminator)?);
         }
         thread::sleep(PROCESS_POLL_INTERVAL);
     };
@@ -678,6 +704,16 @@ fn join_io_thread<T>(
     let Some(handle) = handle else {
         return Ok(None);
     };
+    let started_at = Instant::now();
+    while !handle.is_finished() {
+        if started_at.elapsed() >= IO_CLEANUP_TIMEOUT {
+            return Err(AppError::Project(format!(
+                "Codex {stream} worker did not finish within {} seconds",
+                IO_CLEANUP_TIMEOUT.as_secs()
+            )));
+        }
+        thread::sleep(PROCESS_POLL_INTERVAL);
+    }
     handle
         .join()
         .map_err(|_| AppError::Project(format!("Codex {stream} worker panicked")))?
@@ -685,25 +721,133 @@ fn join_io_thread<T>(
         .map_err(AppError::from)
 }
 
-fn terminate_child_tree(child: &mut Child) -> Result<ExitStatus, AppError> {
+fn terminate_child_tree(
+    child: &mut Child,
+    primary_tree_terminator: PrimaryTreeTerminator,
+) -> Result<ExitStatus, AppError> {
     #[cfg(windows)]
     {
-        let taskkill = Command::new("taskkill")
-            .args(["/PID", &child.id().to_string(), "/T", "/F"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        if !taskkill.is_ok_and(|status| status.success()) {
+        let pid = child.id();
+        if !primary_tree_terminator(pid) {
+            let descendants_terminated = terminate_descendants_with_cim(pid);
             let _ = child.kill();
+            let status = wait_for_child_exit(child, pid)?;
+            if !descendants_terminated {
+                log::error!(
+                    "Codex process tree fallback failed for PID {pid}; the root process was terminated but descendants may remain"
+                );
+                return Err(AppError::Project(format!(
+                    "Failed to terminate every Codex descendant for PID {pid}"
+                )));
+            }
+            return Ok(status);
         }
+
+        return wait_for_child_exit(child, pid);
     }
 
     #[cfg(not(windows))]
     {
+        let _ = primary_tree_terminator;
         let _ = child.kill();
+        child.wait().map_err(AppError::from)
     }
+}
 
-    child.wait().map_err(AppError::from)
+#[cfg(windows)]
+fn terminate_tree_with_taskkill(pid: u32) -> bool {
+    let mut command = Command::new("taskkill");
+    command
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    command_succeeds_within(&mut command)
+}
+
+#[cfg(not(windows))]
+fn terminate_tree_with_taskkill(_pid: u32) -> bool {
+    false
+}
+
+#[cfg(windows)]
+fn terminate_descendants_with_cim(pid: u32) -> bool {
+    // ponytail: a bounded process snapshot avoids a Windows API dependency; use Job Objects
+    // if adversarial processes that continuously respawn descendants become a real workload.
+    const SCRIPT: &str = r#"
+$ErrorActionPreference = 'Stop'
+$rootPid = [uint32]$env:FAIRTRANSLATOR_CODEX_ROOT_PID
+$processes = @(Get-CimInstance -ClassName Win32_Process)
+$descendants = @()
+$parents = @($rootPid)
+while ($parents.Count -gt 0) {
+    $next = @()
+    foreach ($parentPid in $parents) {
+        $children = @($processes | Where-Object { [uint32]$_.ParentProcessId -eq [uint32]$parentPid })
+        $descendants += $children
+        $next += @($children | ForEach-Object { [uint32]$_.ProcessId })
+    }
+    $parents = $next
+}
+[array]::Reverse($descendants)
+foreach ($process in $descendants) {
+    $result = Invoke-CimMethod -InputObject $process -MethodName Terminate -Arguments @{ Reason = 1 }
+    if ([uint32]$result.ReturnValue -ne 0) { exit 1 }
+}
+"#;
+    let mut command = Command::new("powershell.exe");
+    command
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            SCRIPT,
+        ])
+        .env("FAIRTRANSLATOR_CODEX_ROOT_PID", pid.to_string())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    command_succeeds_within(&mut command)
+}
+
+#[cfg(windows)]
+fn command_succeeds_within(command: &mut Command) -> bool {
+    let Ok(mut helper) = command.spawn() else {
+        return false;
+    };
+    let started_at = Instant::now();
+    loop {
+        match helper.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) if started_at.elapsed() < TERMINATOR_COMMAND_TIMEOUT => {
+                thread::sleep(PROCESS_POLL_INTERVAL);
+            }
+            _ => {
+                let _ = helper.kill();
+                let _ = helper.wait();
+                return false;
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+fn wait_for_child_exit(child: &mut Child, pid: u32) -> Result<ExitStatus, AppError> {
+    let started_at = Instant::now();
+    loop {
+        if let Some(status) = child.try_wait().map_err(AppError::from)? {
+            return Ok(status);
+        }
+        if started_at.elapsed() >= CHILD_EXIT_TIMEOUT {
+            log::error!(
+                "Codex root process PID {pid} did not exit within {} seconds after termination",
+                CHILD_EXIT_TIMEOUT.as_secs()
+            );
+            return Err(AppError::Project(format!(
+                "Codex process PID {pid} did not exit after termination"
+            )));
+        }
+        thread::sleep(PROCESS_POLL_INTERVAL);
+    }
 }
 
 fn normalize_optional(value: String) -> Option<String> {
@@ -1054,7 +1198,7 @@ mod tests {
 
     #[cfg(windows)]
     #[tokio::test]
-    async fn cancelling_codex_kills_waits_cleans_up_and_allows_the_next_run() {
+    async fn cancelling_codex_falls_back_when_taskkill_fails_and_cleans_up() {
         use crate::services::batch_lifecycle::{BatchRunControl, BatchRunLifecycle};
         use std::sync::Arc;
 
@@ -1109,7 +1253,8 @@ powershell.exe -NoProfile -NonInteractive -Command "$stream = [IO.File]::Open((J
             None,
             None,
             None,
-        );
+        )
+        .with_primary_tree_terminator_for_test(|_| false);
         let requests = [TranslationRequest {
             entry_id: "entry-1".to_string(),
             file_context: String::new(),
@@ -1134,10 +1279,15 @@ powershell.exe -NoProfile -NonInteractive -Command "$stream = [IO.File]::Open((J
         });
         let mut first_lifecycle =
             BatchRunLifecycle::new(&control, first_run_id, &["Map001.json".to_string()]);
+        let cancel_started = Instant::now();
         assert!(first_lifecycle
             .wait_or_cancel(provider.translate_batch(&requests, "en", "es", &[], &context))
             .await
             .is_none());
+        assert!(
+            cancel_started.elapsed() < Duration::from_secs(10),
+            "cancel cleanup exceeded its deadline"
+        );
         cancel_task.await.unwrap();
         drop(first_lifecycle);
         drop(first_guard);
