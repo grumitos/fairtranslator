@@ -153,7 +153,7 @@ cargo run --manifest-path src-tauri\Cargo.toml --bin qa_prepare -- `
 
 For each sample, `qa_prepare` writes:
 
-- `manifest.json`: authoritative list of batches and paths.
+- `manifest.json`: authoritative list of batches, paths, and the versioned source-inventory fingerprint.
 - `batches\<n>.prompt.txt`: prompt to give the external agent.
 - `batches\<n>.entries.json`: source/reference entries for inspection.
 - `batches\<n>.response.template.json`: response skeleton.
@@ -170,6 +170,7 @@ cargo run --manifest-path src-tauri\Cargo.toml --bin qa_apply -- `
 
 Rules:
 
+- `qa_apply` rejects legacy/unknown fingerprints and any project or current source-inventory drift before applying responses.
 - The AI response must echo the project and batch IDs.
 - It must return every requested entry exactly once.
 - Legacy bare arrays are accepted only for older batches without expected IDs.

@@ -9,6 +9,8 @@ use app_lib::services::{ai_batch, exporter, persistence};
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 
+mod qa_inventory_fingerprint;
+
 #[derive(Debug)]
 struct Options {
     manifest: PathBuf,
@@ -28,6 +30,8 @@ struct BatchArtifactRow {
 #[serde(rename_all = "camelCase")]
 struct SampleManifest {
     sample_name: String,
+    #[serde(default)]
+    inventory_fingerprint: Option<String>,
     project_path: String,
     exports_dir: String,
     batch_dir: String,
@@ -143,6 +147,30 @@ fn resolve_response_path(template_path: &Path) -> PathBuf {
     template_path.to_path_buf()
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_manifest_loads_for_an_actionable_fingerprint_rejection() {
+        let manifest: SampleManifest = serde_json::from_value(serde_json::json!({
+            "sampleName": "sample",
+            "projectPath": "project.fairtl",
+            "exportsDir": "exports",
+            "batchDir": "ai-batches",
+            "batches": []
+        }))
+        .unwrap();
+
+        let error = qa_inventory_fingerprint::verify_project_inventory_fingerprint(
+            manifest.inventory_fingerprint.as_deref(),
+            &[],
+        )
+        .unwrap_err();
+        assert!(error.contains("qa_prepare"));
+    }
+}
+
 fn main() -> ExitCode {
     let options = match parse_args(env::args()) {
         Ok(options) => options,
@@ -177,6 +205,41 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
+
+    let expected_fingerprint = match qa_inventory_fingerprint::verify_project_inventory_fingerprint(
+        manifest.inventory_fingerprint.as_deref(),
+        &project.files,
+    ) {
+        Ok(fingerprint) => fingerprint,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(1);
+        }
+    };
+    let source = match parse_game(Path::new(&project.game_dir)) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            eprintln!(
+                "No se pudo verificar la fuente actual '{}': {}. No se aplicó ninguna respuesta.",
+                project.game_dir, error
+            );
+            return ExitCode::from(1);
+        }
+    };
+    if source.engine != project.engine {
+        eprintln!(
+            "El motor detectado en la fuente actual ({:?}) no coincide con el proyecto ({:?}). No se aplicó ninguna respuesta.",
+            source.engine, project.engine
+        );
+        return ExitCode::from(1);
+    }
+    if let Err(error) = qa_inventory_fingerprint::verify_source_inventory_fingerprint(
+        expected_fingerprint,
+        &source.files,
+    ) {
+        eprintln!("{error}");
+        return ExitCode::from(1);
+    }
 
     let expected_signature = inventory_signature(&project.files);
     let expected_entries = total_entries(&project.files);
@@ -285,15 +348,6 @@ fn main() -> ExitCode {
         validation_warnings.extend(result.warnings);
     }
 
-    if let Err(error) = persistence::save_project(&project, &project_path) {
-        eprintln!(
-            "No se pudo guardar proyecto '{}': {}",
-            project_path.display(),
-            error
-        );
-        return ExitCode::from(1);
-    }
-
     let export_dir =
         PathBuf::from(&manifest.exports_dir).join(Local::now().format("%Y%m%d-%H%M%S").to_string());
     let export_result = match exporter::export_project(&project, &export_dir) {
@@ -335,6 +389,15 @@ fn main() -> ExitCode {
         eprintln!(
             "Firma del export reabierto no coincide con el proyecto preparado '{}'",
             manifest.sample_name
+        );
+        return ExitCode::from(1);
+    }
+
+    if let Err(error) = persistence::save_project(&project, &project_path) {
+        eprintln!(
+            "No se pudo guardar proyecto '{}': {}",
+            project_path.display(),
+            error
         );
         return ExitCode::from(1);
     }

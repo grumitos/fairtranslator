@@ -10,6 +10,8 @@ use chrono::Local;
 use serde::Serialize;
 use serde_json::json;
 
+mod qa_inventory_fingerprint;
+
 #[derive(Debug)]
 struct Options {
     workspace: PathBuf,
@@ -41,6 +43,7 @@ struct SampleManifest {
     engine: String,
     files: usize,
     entries: usize,
+    inventory_fingerprint: String,
     source_lang: String,
     target_lang: String,
     stable_import: bool,
@@ -211,15 +214,6 @@ fn total_entries(files: &[TranslationFile]) -> usize {
     files.iter().map(|file| file.entries.len()).sum()
 }
 
-fn inventory_signature(files: &[TranslationFile]) -> Vec<(String, usize)> {
-    let mut signature = files
-        .iter()
-        .map(|file| (file.relative_path.clone(), file.entries.len()))
-        .collect::<Vec<_>>();
-    signature.sort_by(|left, right| left.0.cmp(&right.0));
-    signature
-}
-
 fn build_project(
     name: String,
     source_lang: &str,
@@ -276,7 +270,9 @@ fn prepare_sample(
             selected
         ));
     }
-    if inventory_signature(&parsed_a.files) != inventory_signature(&parsed_b.files) {
+    if qa_inventory_fingerprint::inventory_fingerprint(&parsed_a.files)
+        != qa_inventory_fingerprint::inventory_fingerprint(&parsed_b.files)
+    {
         return Err(format!(
             "Import inestable: firma de archivos distinta entre corridas para '{}'",
             selected
@@ -308,6 +304,7 @@ fn prepare_sample(
         &resolved,
         parsed_a,
     );
+    let inventory_fingerprint = qa_inventory_fingerprint::inventory_fingerprint(&project.files);
     persistence::save_project(&project, &project_dir).map_err(|error| error.to_string())?;
 
     let batches = ai_batch::export_ai_batches(&project, &[], Some(options.chunk_size))
@@ -359,6 +356,7 @@ fn prepare_sample(
         engine: format!("{:?}", project.engine),
         files,
         entries,
+        inventory_fingerprint,
         source_lang: options.source_lang.clone(),
         target_lang: options.target_lang.clone(),
         stable_import: true,
