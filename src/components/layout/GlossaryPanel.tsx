@@ -56,6 +56,9 @@ export function GlossaryPanel({ open, onOpenChange }: GlossaryPanelProps) {
 
   const handleRemove = useCallback(
     async (source: string) => {
+      if (!window.confirm(t("confirmDelete", { term: source }))) {
+        return;
+      }
       try {
         await remove(source);
         toast.success(t("removeSuccess"));
