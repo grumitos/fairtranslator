@@ -27,7 +27,8 @@
     "totalEntries": "{{count}} entradas",
     "totalEntries_one": "{{count}} entrada",
     "totalEntries_other": "{{count}} entradas",
-    "editTranslation": "Editar traducción"
+    "editTranslation": "Editar traducción",
+    "discardChanges": "Hay cambios sin guardar en esta entrada. ¿Descartarlos?"
   },
   "findReplace": {
     "find": "Buscar",

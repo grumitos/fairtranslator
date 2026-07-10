@@ -40,6 +40,8 @@ export function EditEntryDialog({
   const [status, setStatus] = useState<EntryStatus>(entry.status);
   const [notes, setNotes] = useState(entry.notes);
   const [isSaving, setIsSaving] = useState(false);
+  const hasUnsavedChanges =
+    translation !== entry.translation || status !== entry.status || notes !== entry.notes;
 
   useEffect(() => {
     setTranslation(entry.translation);
@@ -61,8 +63,19 @@ export function EditEntryDialog({
     }
   };
 
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (
+      !nextOpen
+      && hasUnsavedChanges
+      && !window.confirm(t("editor:grid.discardChanges"))
+    ) {
+      return;
+    }
+    onOpenChange(nextOpen);
+  };
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-2xl max-h-[80vh] overflow-auto">
         <DialogHeader>
           <DialogTitle className="text-sm font-medium">
@@ -151,7 +164,7 @@ export function EditEntryDialog({
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button variant="outline" onClick={() => handleOpenChange(false)}>
             {t("common:cancel")}
           </Button>
           <Button onClick={handleSave} disabled={isSaving}>

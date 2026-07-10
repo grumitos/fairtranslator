@@ -27,7 +27,8 @@
     "totalEntries": "{{count}} entries",
     "totalEntries_one": "{{count}} entry",
     "totalEntries_other": "{{count}} entries",
-    "editTranslation": "Edit translation"
+    "editTranslation": "Edit translation",
+    "discardChanges": "This entry has unsaved changes. Discard them?"
   },
   "findReplace": {
     "find": "Find",
