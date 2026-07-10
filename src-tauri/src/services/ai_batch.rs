@@ -19,6 +19,11 @@ pub const DEFAULT_AI_BATCH_MAX_ENTRIES: usize = 200;
 const EXTERNAL_AI_PROMPT_WRAPPER_TOKEN_OVERHEAD: usize = 96;
 const EXTERNAL_AI_RESPONSE_HEADROOM_TOKENS: usize = 2048;
 
+struct ExternalAiTranslationSheet {
+    editable: String,
+    compact: String,
+}
+
 const INSTRUCTION_PATTERNS: &[(&str, &str)] = &[
     ("press ", "mentions an input action"),
     ("click ", "mentions an input action"),
@@ -96,7 +101,7 @@ pub(crate) fn estimate_ai_batch_prompt_tokens(
     let translation_sheet =
         translation_sheet_for(project, "budget-estimate", &entries, context, &response_map)
             .expect("serializing external AI translation sheet should not fail");
-    let prompt = render_external_ai_prompt(&bundle.system_prompt, &translation_sheet);
+    let prompt = render_external_ai_prompt(&bundle.system_prompt, &translation_sheet.compact);
 
     approximate_token_count(&prompt)
         + EXTERNAL_AI_PROMPT_WRAPPER_TOKEN_OVERHEAD
@@ -162,7 +167,7 @@ fn make_ai_batch_export(
     let response_map = bundle.response_map();
     let translation_sheet =
         translation_sheet_for(project, &batch_id, &entries, &context, &response_map)?;
-    let prompt = render_external_ai_prompt(&bundle.system_prompt, &translation_sheet);
+    let prompt = render_external_ai_prompt(&bundle.system_prompt, &translation_sheet.compact);
 
     Ok(AiBatchExport {
         project_id: project.id.clone(),
@@ -176,7 +181,7 @@ fn make_ai_batch_export(
         entries,
         response_map,
         prompt,
-        translation_sheet,
+        translation_sheet: translation_sheet.editable,
     })
 }
 
@@ -192,7 +197,7 @@ fn translation_sheet_for(
     entries: &[AiBatchEntry],
     context: &TranslationBatchContext,
     response_map: &[AiBatchResponseRef],
-) -> Result<String, AppError> {
+) -> Result<ExternalAiTranslationSheet, AppError> {
     let rows = entries
         .iter()
         .zip(response_map.iter())
@@ -235,7 +240,10 @@ fn translation_sheet_for(
         "translations": rows
     });
 
-    serde_json::to_string_pretty(&sheet).map_err(AppError::from)
+    Ok(ExternalAiTranslationSheet {
+        editable: serde_json::to_string_pretty(&sheet)?,
+        compact: serde_json::to_string(&sheet)?,
+    })
 }
 
 pub fn export_ai_batch(
@@ -571,13 +579,13 @@ mod tests {
         assert_eq!(batch.entries.len(), 2);
         assert_eq!(batch.response_map.len(), 2);
         assert!(!batch.batch_id.is_empty());
-        assert!(batch.prompt.contains("\"p\": \"project-1\""));
+        assert!(batch.prompt.contains("\"p\":\"project-1\""));
         assert!(batch
             .prompt
-            .contains(&format!("\"b\": \"{}\"", batch.batch_id)));
-        assert!(batch.prompt.contains("\"k\": 1"));
-        assert!(batch.prompt.contains("\"o\": \"Welcome to town.\""));
-        assert!(batch.prompt.contains("\"t\": \"\""));
+            .contains(&format!("\"b\":\"{}\"", batch.batch_id)));
+        assert!(batch.prompt.contains("\"k\":1"));
+        assert!(batch.prompt.contains("\"o\":\"Welcome to town.\""));
+        assert!(batch.prompt.contains("\"t\":\"\""));
         assert!(batch.translation_sheet.contains("\"translations\""));
         assert!(batch
             .translation_sheet
@@ -585,9 +593,9 @@ mod tests {
         assert!(batch
             .prompt
             .contains("Keep the sibling tone natural in Spanish."));
-        assert!(batch.prompt.contains("\"source\": \"Onee-chan\""));
-        assert!(batch.prompt.contains("\"project\": \"AI Batch Test\""));
-        assert!(batch.prompt.contains("\"file\": \"data/Map001.json\""));
+        assert!(batch.prompt.contains("\"source\":\"Onee-chan\""));
+        assert!(batch.prompt.contains("\"project\":\"AI Batch Test\""));
+        assert!(batch.prompt.contains("\"file\":\"data/Map001.json\""));
 
         let tutorial = batch
             .entries
@@ -600,6 +608,32 @@ mod tests {
             .as_deref()
             .unwrap_or_default()
             .is_empty());
+    }
+
+    #[test]
+    fn test_external_ai_prompt_uses_minified_sheet_without_changing_editable_sheet() {
+        let mut project = make_test_project();
+        project.style_guide = vec!["Keep dialogue concise and natural.".into()];
+        project.glossary = vec![crate::models::GlossaryTerm {
+            source: "Castle".into(),
+            target: "Castillo".into(),
+            case_sensitive: false,
+        }];
+
+        let batch = export_ai_batch(&project, &[], Some(10)).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&batch.translation_sheet).unwrap();
+        let minified = serde_json::to_string(&parsed).unwrap();
+        eprintln!(
+            "external sheet bytes: pretty={}, minified={}, saved={}",
+            batch.translation_sheet.len(),
+            minified.len(),
+            batch.translation_sheet.len().saturating_sub(minified.len())
+        );
+
+        assert!(minified.len() < batch.translation_sheet.len());
+        assert!(batch.translation_sheet.contains('\n'));
+        assert!(batch.prompt.contains(&minified));
+        assert!(!batch.prompt.contains(&batch.translation_sheet));
     }
 
     #[test]
