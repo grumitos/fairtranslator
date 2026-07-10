@@ -1,14 +1,12 @@
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
-import type { TranslationEntry, EntryStatus } from "@/types/domain";
+import type { EntryStatus } from "@/types/domain";
 
 type FindReplaceTarget = "original" | "translation" | "both";
 
 interface EditorState {
   /** Search/filter query */
   searchQuery: string;
-  /** Currently selected entry for detail editing */
-  selectedEntry: TranslationEntry | null;
   /** Status filter */
   statusFilter: EntryStatus | null;
 
@@ -40,7 +38,6 @@ interface EditorState {
 
   // Actions
   setSearchQuery: (query: string) => void;
-  setSelectedEntry: (entry: TranslationEntry | null) => void;
   setStatusFilter: (status: EntryStatus | null) => void;
 
   // Find/Replace actions
@@ -51,7 +48,6 @@ interface EditorState {
   setMatchCase: (matchCase: boolean) => void;
   setUseRegex: (useRegex: boolean) => void;
   setSearchTarget: (target: FindReplaceTarget) => void;
-  setCurrentMatchIndex: (index: number) => void;
   setMatchCount: (count: number) => void;
   setScrollToEntryId: (id: string | null) => void;
   nextMatch: (totalMatches: number) => void;
@@ -65,7 +61,6 @@ interface EditorState {
 
 const initialState = {
   searchQuery: "",
-  selectedEntry: null,
   statusFilter: null,
   // Find/Replace
   showFindReplace: false,
@@ -89,11 +84,6 @@ export const useEditorStore = create<EditorState>()(
     setSearchQuery: (query) =>
       set((state) => {
         state.searchQuery = query;
-      }),
-
-    setSelectedEntry: (entry) =>
-      set((state) => {
-        state.selectedEntry = entry;
       }),
 
     setStatusFilter: (status) =>
@@ -153,11 +143,6 @@ export const useEditorStore = create<EditorState>()(
       set((state) => {
         state.searchTarget = target;
         state.currentMatchIndex = 0;
-      }),
-
-    setCurrentMatchIndex: (index) =>
-      set((state) => {
-        state.currentMatchIndex = index;
       }),
 
     setMatchCount: (count) =>

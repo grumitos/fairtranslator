@@ -45,6 +45,8 @@
     "subtitle": "Modern translator for RPG Maker games",
     "newProject": "Create new project",
     "openProject": "Open existing project",
+    "settings": "Settings",
+    "toggleTheme": "Toggle theme",
     "newProjectDesc": "Select an RPG Maker game folder to start translating",
     "openProjectDesc": "Open a saved .fairtl project"
   },
@@ -58,6 +60,7 @@
     "browse": "Browse",
     "sourceLang": "Source language",
     "targetLang": "Target language",
+    "languagesMustDiffer": "Source and target languages must be different.",
     "create": "Create project",
     "creating": "Creating project…",
     "selectFolder": "Select folder"

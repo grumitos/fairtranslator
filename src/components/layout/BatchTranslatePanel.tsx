@@ -38,11 +38,11 @@ interface BatchTranslatePanelProps {
 type BatchMode = "providers" | "externalAi";
 
 const PROVIDERS: { id: ProviderType; labelKey: string }[] = [
+  { id: "opencode", labelKey: "editor:batch.providers.opencode" },
   { id: "openai", labelKey: "editor:batch.providers.openai" },
   { id: "deepl", labelKey: "editor:batch.providers.deepl" },
   { id: "google", labelKey: "editor:batch.providers.google" },
   { id: "codex", labelKey: "editor:batch.providers.codex" },
-  { id: "opencode", labelKey: "editor:batch.providers.opencode" },
 ];
 
 export function BatchTranslatePanel({
@@ -86,28 +86,13 @@ export function BatchTranslatePanel({
   const supportsRunModel =
     provider === "openai" || provider === "opencode" || provider === "codex";
   const requiresRunModel = provider === "openai" || provider === "opencode";
-  const requiresProviderConfig =
-    provider === "openai" || provider === "deepl" || provider === "opencode";
+  const requiresProviderConfig = Boolean(provider && provider !== "codex");
   const canStartProviderRun =
     Boolean(provider) &&
     (!requiresProviderConfig || Boolean(providerConfig?.isConfigured)) &&
     (!requiresRunModel || Boolean(runModel.trim())) &&
     !isTranslating &&
     untranslatedCount > 0;
-  const selectedRunModelInOptions = useMemo(
-    () => providerModels.some((option) => option.id === runModel),
-    [providerModels, runModel],
-  );
-  const displayedRunModels = useMemo(() => {
-    if (!runModel || selectedRunModelInOptions) {
-      return providerModels;
-    }
-    return [
-      { id: runModel, ownedBy: t("editor:batch.models.currentManual") },
-      ...providerModels,
-    ];
-  }, [providerModels, runModel, selectedRunModelInOptions, t]);
-
   const handleToggleFile = useCallback((path: string) => {
     setSelectedFiles((prev) =>
       prev.includes(path) ? prev.filter((p) => p !== path) : [...prev, path],
@@ -430,9 +415,9 @@ export function BatchTranslatePanel({
               </div>
 
               <div className="space-y-2">
-                <Label>{t("editor:batch.provider")}</Label>
+                <Label id="batch-provider-label">{t("editor:batch.provider")}</Label>
                 <Select value={provider} onValueChange={(v) => setProvider(v as ProviderType)}>
-                  <SelectTrigger className="w-full">
+                  <SelectTrigger className="w-full" aria-labelledby="batch-provider-label">
                     <SelectValue placeholder={t("editor:batch.selectProvider")} />
                   </SelectTrigger>
                   <SelectContent>
@@ -458,9 +443,9 @@ export function BatchTranslatePanel({
                 <div className="space-y-2 rounded-md border border-border/70 bg-muted/30 p-3">
                   <div className="flex items-center justify-between gap-2">
                     <div className="min-w-0">
-                      <p className="text-xs font-medium text-foreground">
+                      <Label htmlFor="batch-provider-model" className="text-xs text-foreground">
                         {t("editor:batch.models.title")}
-                      </p>
+                      </Label>
                       <p className="truncate text-[11px] text-muted-foreground">
                         {runModel.trim()
                           ? t("editor:batch.models.selected", { model: runModel.trim() })
@@ -474,7 +459,10 @@ export function BatchTranslatePanel({
                       size="sm"
                       variant="outline"
                       onClick={() => void handleRefreshProviderModels()}
-                      disabled={isRefreshingModels}
+                      disabled={
+                        isRefreshingModels ||
+                        (requiresProviderConfig && !providerConfig?.isConfigured)
+                      }
                       className="h-7 shrink-0 gap-1 px-2 text-xs"
                     >
                       <RefreshCw className={`size-3.5 ${isRefreshingModels ? "animate-spin" : ""}`} />
@@ -482,28 +470,27 @@ export function BatchTranslatePanel({
                     </Button>
                   </div>
 
-                  {displayedRunModels.length > 0 && (
-                    <Select value={runModel} onValueChange={setRunModel}>
-                      <SelectTrigger className="w-full">
-                        <SelectValue placeholder={t("editor:batch.models.selectPlaceholder")} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {displayedRunModels.map((option) => (
-                          <SelectItem key={option.id} value={option.id}>
-                            {option.id}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  )}
-
                   <Input
+                    id="batch-provider-model"
                     name="batch-provider-model"
+                    list={providerModels.length > 0 ? "batch-provider-models" : undefined}
+                    autoComplete="off"
+                    autoCapitalize="none"
+                    spellCheck={false}
                     value={runModel}
                     onChange={(event) => setRunModel(event.target.value)}
                     placeholder={t("editor:batch.models.manualPlaceholder")}
                     className="text-xs"
                   />
+                  {providerModels.length > 0 && (
+                    <datalist id="batch-provider-models">
+                      {providerModels.map((option) => (
+                        <option key={option.id} value={option.id}>
+                          {option.ownedBy ?? ""}
+                        </option>
+                      ))}
+                    </datalist>
+                  )}
                 </div>
               )}
 

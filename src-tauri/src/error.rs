@@ -35,6 +35,17 @@ impl From<serde_json::Error> for AppError {
 
 impl From<reqwest::Error> for AppError {
     fn from(e: reqwest::Error) -> Self {
-        AppError::Api(e.to_string())
+        let message = if e.is_timeout() {
+            "La solicitud al proveedor agotó el tiempo de espera".to_string()
+        } else if e.is_connect() {
+            "No se pudo conectar con el proveedor".to_string()
+        } else if e.is_decode() {
+            "El proveedor devolvió una respuesta que no se pudo interpretar".to_string()
+        } else if let Some(status) = e.status() {
+            format!("La solicitud al proveedor falló con estado {status}")
+        } else {
+            "La solicitud al proveedor falló".to_string()
+        };
+        AppError::Api(message)
     }
 }

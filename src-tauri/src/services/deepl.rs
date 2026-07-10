@@ -132,10 +132,9 @@ impl TranslationProvider for DeepLProvider {
 
         if !response.status().is_success() {
             let status = response.status();
-            let body = response.text().await.unwrap_or_default();
             return Err(AppError::Api(format!(
-                "DeepL API validation failed ({}): {}",
-                status, body
+                "DeepL API validation failed ({})",
+                status
             )));
         }
 
@@ -200,11 +199,7 @@ impl TranslationProvider for DeepLProvider {
 
             if !response.status().is_success() {
                 let status = response.status();
-                let body = response.text().await.unwrap_or_default();
-                return Err(AppError::Api(format!(
-                    "DeepL API error ({}): {}",
-                    status, body
-                )));
+                return Err(AppError::Api(format!("DeepL API error ({})", status)));
             }
 
             let deepl_response: DeepLResponse = response.json().await?;

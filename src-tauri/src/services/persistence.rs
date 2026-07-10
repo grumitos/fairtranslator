@@ -403,7 +403,10 @@ mod tests {
     #[test]
     fn test_save_and_load_roundtrip() {
         let project = make_test_project();
-        let temp = std::env::temp_dir().join("fairtl_test_roundtrip.fairtl");
+        let temp = std::env::temp_dir().join(format!(
+            "fairtl_test_roundtrip_{}.fairtl",
+            uuid::Uuid::new_v4().as_simple()
+        ));
 
         // Clean up from any previous run
         if temp.exists() {
@@ -444,7 +447,10 @@ mod tests {
     #[test]
     fn test_save_overwrites_existing() {
         let mut project = make_test_project();
-        let temp = std::env::temp_dir().join("fairtl_test_overwrite.fairtl");
+        let temp = std::env::temp_dir().join(format!(
+            "fairtl_test_overwrite_{}.fairtl",
+            uuid::Uuid::new_v4().as_simple()
+        ));
 
         if temp.exists() {
             fs::remove_dir_all(&temp).unwrap();

@@ -31,6 +31,10 @@ fn replace_style_guide_and_save(
     state: &AppState,
     items: Vec<String>,
 ) -> Result<Vec<String>, AppError> {
+    let mut proj_guard = state
+        .project
+        .lock()
+        .map_err(|e| AppError::Project(format!("Lock error: {e}")))?;
     let save_path = {
         let path_guard = state
             .project_path
@@ -40,29 +44,17 @@ fn replace_style_guide_and_save(
             AppError::Project("No hay ruta de guardado. Guarda el proyecto primero.".into())
         })?
     };
-
-    let mut updated_project = {
-        let proj_guard = state
-            .project
-            .lock()
-            .map_err(|e| AppError::Project(format!("Lock error: {e}")))?;
-        proj_guard
-            .clone()
-            .ok_or_else(|| AppError::Project("No hay ningún proyecto abierto".into()))?
-    };
+    let mut updated_project = proj_guard
+        .clone()
+        .ok_or_else(|| AppError::Project("No hay ningún proyecto abierto".into()))?;
 
     updated_project.style_guide = normalize_items(items);
     updated_project.updated_at = persistence::now_iso8601();
 
+    // ponytail: keep the project lock through I/O; use revisioned snapshots if save latency matters.
     persistence::save_project(&updated_project, &save_path)?;
 
-    {
-        let mut proj_guard = state
-            .project
-            .lock()
-            .map_err(|e| AppError::Project(format!("Lock error: {e}")))?;
-        *proj_guard = Some(updated_project.clone());
-    }
+    *proj_guard = Some(updated_project.clone());
 
     Ok(updated_project.style_guide)
 }

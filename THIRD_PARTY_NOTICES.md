@@ -1,6 +1,6 @@
 FairTranslator Third-Party Notices
 
-Last updated: 2026-04-12
+Last updated: 2026-07-10
 
 FairTranslator includes third-party software components. Those components remain
 subject to their own licenses and copyright notices.
@@ -11,10 +11,10 @@ For commercial distributions of FairTranslator:
 - preserve upstream notices for MIT, Apache-2.0, ISC, and MPL-2.0 components
 - if you ever modify MPL-2.0-covered files and distribute the resulting build, make the modified MPL-covered source files available under MPL-2.0 as required by that license
 
-This notice file reflects the dependency set in the repository on 2026-04-12.
+This notice file reflects the dependency set in the repository on 2026-07-10.
 Regenerate and review it before each public release.
 
-Frontend and desktop runtime dependencies
+Frontend runtime and build tooling dependencies
 
 | Component | Version | License | Upstream |
 | --- | --- | --- | --- |
@@ -23,13 +23,11 @@ Frontend and desktop runtime dependencies
 | @tanstack/react-virtual | 3.13.19 | MIT | https://tanstack.com/virtual |
 | @tauri-apps/api | 2.10.1 | Apache-2.0 OR MIT | https://github.com/tauri-apps/tauri#readme |
 | @tauri-apps/plugin-dialog | 2.6.0 | MIT OR Apache-2.0 | https://github.com/tauri-apps/plugins-workspace |
-| @tauri-apps/plugin-store | 2.4.2 | MIT OR Apache-2.0 | https://github.com/tauri-apps/plugins-workspace |
 | class-variance-authority | 0.7.1 | Apache-2.0 | https://github.com/joe-bell/cva#readme |
 | clsx | 2.1.1 | MIT | https://github.com/lukeed/clsx |
 | i18next | 25.8.13 | MIT | https://www.i18next.com |
 | immer | 11.1.4 | MIT | https://github.com/immerjs/immer#readme |
 | lucide-react | 0.576.0 | ISC | https://lucide.dev |
-| next-themes | 0.4.6 | MIT | https://github.com/pacocoursey/next-themes |
 | radix-ui | 1.4.3 | MIT | https://radix-ui.com/primitives |
 | react | 19.2.4 | MIT | https://react.dev/ |
 | react-dom | 19.2.4 | MIT | https://react.dev/ |

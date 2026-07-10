@@ -137,7 +137,7 @@ export function StyleGuidePanel({ open, onOpenChange }: StyleGuidePanelProps) {
               ) : (
                 <div className="space-y-2">
                   {normalizedDraft.map((rule, index) => (
-                    <div key={`${rule}-${index}`} className="flex gap-2">
+                    <div key={index} className="flex gap-2">
                       <Input
                         aria-label={t("styleGuide.ruleInputLabel", { index: index + 1 })}
                         name={`style-guide-rule-${index + 1}`}

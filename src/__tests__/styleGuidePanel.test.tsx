@@ -65,4 +65,19 @@ describe("StyleGuidePanel", () => {
     expect(screen.queryByDisplayValue("Regla A")).not.toBeInTheDocument();
     expect(screen.getByDisplayValue("Regla C")).toBeInTheDocument();
   });
+
+  it("keeps focus while typing multiple characters into a rule", async () => {
+    render(<StyleGuidePanel open onOpenChange={() => undefined} />);
+
+    const rule = await screen.findByLabelText("Regla 1");
+    rule.focus();
+
+    fireEvent.change(rule, { target: { value: "Mantener nombres de menú cortos.X" } });
+    expect(screen.getByLabelText("Regla 1")).toHaveFocus();
+
+    fireEvent.change(screen.getByLabelText("Regla 1"), {
+      target: { value: "Mantener nombres de menú cortos.XY" },
+    });
+    expect(screen.getByLabelText("Regla 1")).toHaveFocus();
+  });
 });

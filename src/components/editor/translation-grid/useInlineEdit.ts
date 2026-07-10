@@ -1,4 +1,6 @@
 import { useCallback, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import type { Row } from "@tanstack/react-table";
 import type { Virtualizer } from "@tanstack/react-virtual";
 import { useProject } from "@/hooks/useProject";
@@ -10,6 +12,7 @@ interface UseInlineEditOptions {
 }
 
 export function useInlineEdit({ virtualizer }: UseInlineEditOptions) {
+  const { t } = useTranslation("common");
   const { updateEntry } = useProject();
   const [inlineEditingEntryId, setInlineEditingEntryId] = useState<string | null>(null);
   const [pendingEditRowIndex, setPendingEditRowIndex] = useState<number | null>(null);
@@ -30,10 +33,12 @@ export function useInlineEdit({ virtualizer }: UseInlineEditOptions) {
     setInlineEditingEntryId(null);
     try {
       await updateEntry(filePath, entryId, value, newStatus);
-    } catch {
-      // Error handled by useProject
+    } catch (error) {
+      toast.error(t("error"), {
+        description: error instanceof Error ? error.message : String(error),
+      });
     }
-  }, [updateEntry]);
+  }, [t, updateEntry]);
 
   const cancelEdit = useCallback(() => {
     setInlineEditingEntryId(null);

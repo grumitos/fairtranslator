@@ -14,17 +14,11 @@ import type {
  */
 export function useApiKeys() {
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async (provider: ProviderType): Promise<ApiKeyInfo> => {
     setIsLoading(true);
-    setError(null);
     try {
       return await ipc.apikeyLoad(provider);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setError(msg);
-      throw e;
     } finally {
       setIsLoading(false);
     }
@@ -43,7 +37,6 @@ export function useApiKeys() {
       authMode?: ProviderAuthMode,
     ) => {
       setIsLoading(true);
-      setError(null);
       try {
         await ipc.apikeySave(
           provider,
@@ -56,10 +49,6 @@ export function useApiKeys() {
           profile,
           authMode,
         );
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        setError(msg);
-        throw e;
       } finally {
         setIsLoading(false);
       }
@@ -69,13 +58,8 @@ export function useApiKeys() {
 
   const remove = useCallback(async (provider: ProviderType) => {
     setIsLoading(true);
-    setError(null);
     try {
       await ipc.apikeyDelete(provider);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setError(msg);
-      throw e;
     } finally {
       setIsLoading(false);
     }
@@ -83,13 +67,8 @@ export function useApiKeys() {
 
   const validate = useCallback(async (provider: ProviderType) => {
     setIsLoading(true);
-    setError(null);
     try {
       await ipc.apikeyValidate(provider);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setError(msg);
-      throw e;
     } finally {
       setIsLoading(false);
     }
@@ -107,7 +86,6 @@ export function useApiKeys() {
       profile?: string,
     ): Promise<ProviderModel[]> => {
       setIsLoading(true);
-      setError(null);
       try {
         return await ipc.apikeyModels(
           provider,
@@ -119,10 +97,6 @@ export function useApiKeys() {
           commandPath,
           profile,
         );
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        setError(msg);
-        throw e;
       } finally {
         setIsLoading(false);
       }
@@ -137,13 +111,8 @@ export function useApiKeys() {
       profile?: string,
     ): Promise<CodexRuntimeStatus> => {
       setIsLoading(true);
-      setError(null);
       try {
         return await ipc.codexStatus(commandPath, model, profile);
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        setError(msg);
-        throw e;
       } finally {
         setIsLoading(false);
       }
@@ -159,13 +128,8 @@ export function useApiKeys() {
       deviceAuth?: boolean,
     ): Promise<CodexRuntimeStatus> => {
       setIsLoading(true);
-      setError(null);
       try {
         return await ipc.codexLogin(commandPath, model, profile, deviceAuth);
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        setError(msg);
-        throw e;
       } finally {
         setIsLoading(false);
       }
@@ -175,7 +139,6 @@ export function useApiKeys() {
 
   return {
     isLoading,
-    error,
     load,
     save,
     remove,

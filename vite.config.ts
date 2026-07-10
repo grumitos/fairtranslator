@@ -45,7 +45,6 @@ export default defineConfig(async () => ({
             normalizedId.includes("/node_modules/radix-ui/") ||
             normalizedId.includes("/node_modules/lucide-react/") ||
             normalizedId.includes("/node_modules/sonner/") ||
-            normalizedId.includes("/node_modules/next-themes/") ||
             normalizedId.includes("/node_modules/class-variance-authority/") ||
             normalizedId.includes("/node_modules/tailwind-merge/")
           ) {

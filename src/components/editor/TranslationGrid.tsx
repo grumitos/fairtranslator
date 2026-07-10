@@ -190,6 +190,10 @@ export function TranslationGrid() {
   });
   const rows = table.getRowModel().rows;
   rowsRef.current = rows;
+  const activeRowId =
+    selectedRowIndex !== null && rows[selectedRowIndex]
+      ? `translation-grid-row-${rows[selectedRowIndex].id}`
+      : undefined;
 
   // Re-measure rows when word wrap changes
   useEffect(() => {
@@ -276,7 +280,10 @@ export function TranslationGrid() {
     <div
       className="ft-focus flex h-full flex-col rounded-sm outline-none"
       tabIndex={0}
+      role="grid"
       aria-label={t("grid.label")}
+      aria-rowcount={rows.length + 1}
+      aria-activedescendant={activeRowId}
       onKeyDown={handleGridKeyDown}
     >
       <TranslationGridTableView

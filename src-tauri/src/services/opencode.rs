@@ -8,6 +8,7 @@ use crate::error::AppError;
 use crate::models::GlossaryTerm;
 use crate::services::ai_models::{self, ProviderModel};
 use crate::services::compact_prompt;
+use crate::services::endpoint::normalize_https_endpoint_override;
 use crate::services::provider::{
     approximate_token_count, TranslationBatchContext, TranslationProvider, TranslationRequest,
     TranslationResponse,
@@ -54,8 +55,7 @@ impl OpenCodeProvider {
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
             .ok_or_else(|| AppError::Api("Select an OpenCode model before translating".into()))?;
-        let endpoint_base = endpoint_base.unwrap_or_else(|| DEFAULT_ENDPOINT_BASE.to_string());
-        ensure_go_endpoint(&endpoint_base)?;
+        let endpoint_base = normalize_opencode_endpoint(endpoint_base)?;
 
         Ok(Self {
             client: opencode_client()?,
@@ -97,8 +97,7 @@ impl OpenCodeProvider {
             ));
         }
         let client = opencode_client()?;
-        let endpoint = endpoint_base.unwrap_or_else(|| DEFAULT_ENDPOINT_BASE.to_string());
-        ensure_go_endpoint(&endpoint)?;
+        let endpoint = normalize_opencode_endpoint(endpoint_base)?;
         ai_models::list_openai_compatible_models(&client, &endpoint, Some(api_key), &[]).await
     }
 
@@ -279,7 +278,7 @@ impl OpenCodeProvider {
             if !response.status().is_success() {
                 let status = response.status();
                 let body = response.text().await.unwrap_or_default();
-                let safe_body = sanitize_error_body(&body);
+                let safe_body = sanitize_error_body(&body, &self.api_key);
                 let error = AppError::Api(format!(
                     "OpenCode API error via {:?} ({}): {}",
                     family, status, safe_body
@@ -453,8 +452,8 @@ impl TranslationProvider for OpenCodeProvider {
             let parsed = compact_prompt::parse_provider_response(&content, &bundle.entry_refs)
                 .map_err(|error| {
                     AppError::Api(format!(
-                        "Failed to parse OpenCode response as translation JSON: {}. Response: {}",
-                        error, content
+                        "Failed to parse OpenCode response as translation JSON: {}",
+                        error
                     ))
                 })?;
             all_responses.extend(parsed);
@@ -506,8 +505,11 @@ fn normalized_temperature(value: f32) -> f64 {
     ((value as f64) * 100.0).round() / 100.0
 }
 
-fn sanitize_error_body(body: &str) -> String {
+fn sanitize_error_body(body: &str, api_key: &str) -> String {
     let mut text = body.trim().to_string();
+    if !api_key.is_empty() {
+        text = text.replace(api_key, "[REDACTED]");
+    }
     const WORKSPACE_URL: &str = "https://opencode.ai/workspace/";
     while let Some(start) = text.find(WORKSPACE_URL) {
         let end = text[start..]
@@ -521,6 +523,13 @@ fn sanitize_error_body(body: &str) -> String {
         text.push_str("...");
     }
     text
+}
+
+fn normalize_opencode_endpoint(endpoint_base: Option<String>) -> Result<String, AppError> {
+    let endpoint = normalize_https_endpoint_override(endpoint_base)?
+        .unwrap_or_else(|| DEFAULT_ENDPOINT_BASE.to_string());
+    ensure_go_endpoint(&endpoint)?;
+    Ok(endpoint)
 }
 
 fn ensure_go_endpoint(endpoint_base: &str) -> Result<(), AppError> {
@@ -762,6 +771,19 @@ mod tests {
     }
 
     #[test]
+    fn rejects_http_go_endpoints_before_sending_api_keys() {
+        let error = OpenCodeProvider::new(
+            "key".into(),
+            Some("kimi-k2.6".into()),
+            Some("http://opencode.ai/zen/go/v1".into()),
+        )
+        .err()
+        .expect("HTTP endpoints must be rejected");
+
+        assert!(error.to_string().contains("HTTPS"));
+    }
+
+    #[test]
     fn parses_supported_response_shapes() {
         assert_eq!(
             parse_generation_text(
@@ -845,9 +867,21 @@ mod tests {
     fn sanitizes_workspace_urls_in_error_bodies() {
         let sanitized = sanitize_error_body(
             r#"{"type":"error","error":{"message":"Insufficient balance. Manage your billing here: https://opencode.ai/workspace/wrk_123/billing"}}"#,
+            "secret-value",
         );
 
         assert!(sanitized.contains("OpenCode billing page"));
         assert!(!sanitized.contains("wrk_123"));
+    }
+
+    #[test]
+    fn sanitizes_api_keys_in_error_bodies() {
+        let sanitized = sanitize_error_body(
+            r#"{"error":"API key secret-value was rejected"}"#,
+            "secret-value",
+        );
+
+        assert!(sanitized.contains("[REDACTED]"));
+        assert!(!sanitized.contains("secret-value"));
     }
 }

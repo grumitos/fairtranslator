@@ -142,7 +142,11 @@ export function FindReplaceBar() {
         updated,
         entry.status === "untranslated" ? "draft" : entry.status,
       );
-    } catch {}
+    } catch (error) {
+      toast.error(t("findReplace.replaceFailed"), {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    }
   }, [regex, matches, currentMatchIndex, entryByKey, replaceText, updateEntry, t]);
 
   const handleReplaceAll = useCallback(async () => {
@@ -181,7 +185,11 @@ export function FindReplaceBar() {
     try {
       await updateEntriesBatch(updates);
       toast.success(t("findReplace.replaced", { count: updates.length }));
-    } catch {}
+    } catch (error) {
+      toast.error(t("findReplace.replaceFailed"), {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    }
   }, [regex, matches, entryByKey, replaceText, updateEntriesBatch, t]);
 
   useEffect(() => {
@@ -203,7 +211,7 @@ export function FindReplaceBar() {
       : "";
 
   return (
-    <div className="flex flex-col gap-1.5 border-b bg-muted/30 px-2 py-1.5">
+    <div className="flex min-w-0 flex-col gap-1.5 border-b bg-muted/30 px-2 py-1.5">
       <FindControlsRow
         findInputRef={findInputRef}
         findQuery={findQuery}

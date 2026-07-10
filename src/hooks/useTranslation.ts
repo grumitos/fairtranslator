@@ -96,17 +96,10 @@ export function useTranslation() {
     [],
   );
 
-  const reset = useCallback(() => {
-    setProgress(null);
-    setError(null);
-    setIsTranslating(false);
-  }, []);
-
   return {
     isTranslating,
     progress,
     error,
     startBatch,
-    reset,
   };
 }

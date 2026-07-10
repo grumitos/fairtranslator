@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import {
   Dialog,
   DialogContent,
@@ -51,8 +52,10 @@ export function EditEntryDialog({
     try {
       await updateEntry(filePath, entry.id, translation, status, notes);
       onOpenChange(false);
-    } catch {
-      // Error handled by useProject
+    } catch (error) {
+      toast.error(t("common:error"), {
+        description: error instanceof Error ? error.message : String(error),
+      });
     } finally {
       setIsSaving(false);
     }

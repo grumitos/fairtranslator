@@ -188,10 +188,9 @@ impl TranslationProvider for OpenAiProvider {
 
         if !response.status().is_success() {
             let status = response.status();
-            let body = response.text().await.unwrap_or_default();
             return Err(AppError::Api(format!(
-                "OpenAI API validation failed ({}): {}",
-                status, body
+                "OpenAI API validation failed ({})",
+                status
             )));
         }
 
@@ -243,11 +242,7 @@ impl TranslationProvider for OpenAiProvider {
 
             if !response.status().is_success() {
                 let status = response.status();
-                let body = response.text().await.unwrap_or_default();
-                return Err(AppError::Api(format!(
-                    "OpenAI API error ({}): {}",
-                    status, body
-                )));
+                return Err(AppError::Api(format!("OpenAI API error ({})", status)));
             }
 
             let chat_response: ChatResponse = response.json().await?;
@@ -271,8 +266,8 @@ impl TranslationProvider for OpenAiProvider {
             let parsed = compact_prompt::parse_provider_response(json_str, &bundle.entry_refs)
                 .map_err(|error| {
                     AppError::Api(format!(
-                        "Failed to parse OpenAI response as JSON object: {}. Response: {}",
-                        error, content
+                        "Failed to parse OpenAI response as JSON object: {}",
+                        error
                     ))
                 })?;
             all_responses.extend(parsed);

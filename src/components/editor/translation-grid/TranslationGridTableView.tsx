@@ -55,18 +55,22 @@ export function TranslationGridTableView({
   return (
     <>
       {/* Header with resize handles */}
-      <div className="sticky top-0 z-10 overflow-hidden border-b bg-card/95 shadow-xs">
+      <div className="sticky top-0 z-10 overflow-hidden border-b bg-card/95 shadow-xs" role="rowgroup">
         <div
           ref={headerInnerRef}
+          data-ft-grid-row="header"
           className="flex h-9 text-[11px] font-semibold uppercase tracking-normal text-muted-foreground will-change-transform"
           style={{ width: totalGridWidth, minWidth: "100%" }}
+          role="row"
         >
           {table.getHeaderGroups().map((headerGroup) =>
             headerGroup.headers.map((header) => (
               <div
                 key={header.id}
+                data-ft-grid-column={header.column.id}
                 className="relative flex items-center border-r px-3 last:border-r-0 select-none"
                 style={{ width: header.getSize(), minWidth: header.getSize() }}
+                role="columnheader"
               >
                 {flexRender(header.column.columnDef.header, header.getContext())}
 
@@ -89,7 +93,12 @@ export function TranslationGridTableView({
       </div>
 
       {/* Virtualized rows */}
-      <div ref={parentRef} className="min-h-0 flex-1 overflow-auto bg-background/40" onScroll={handleRowsScroll}>
+      <div
+        ref={parentRef}
+        className="min-h-0 flex-1 overflow-auto bg-background/40"
+        onScroll={handleRowsScroll}
+        role="rowgroup"
+      >
         {rows.length === 0 ? (
           <div className="flex h-full items-center justify-center p-6">
             <div className="ft-empty-state" role="status">
@@ -108,7 +117,9 @@ export function TranslationGridTableView({
               return (
                 <div
                   key={virtualRow.key}
+                  id={`translation-grid-row-${row.id}`}
                   data-index={virtualRow.index}
+                  data-ft-grid-row="body"
                   ref={measureElement}
                   className={cn(
                     "absolute left-0 flex w-full cursor-pointer items-stretch border-b transition-[background-color,box-shadow] duration-150 hover:bg-accent/60",
@@ -129,6 +140,9 @@ export function TranslationGridTableView({
                     transform: `translateY(${virtualRow.start}px)`,
                   }}
                   onDoubleClick={() => onRowDoubleClick(row.original)}
+                  role="row"
+                  aria-rowindex={virtualRow.index + 2}
+                  aria-selected={isSelected}
                 >
                   {row.getVisibleCells().map((cell) => {
                     const isTranslationCol = cell.column.id === "translation";
@@ -136,6 +150,7 @@ export function TranslationGridTableView({
                     return (
                       <div
                         key={cell.id}
+                        data-ft-grid-column={cell.column.id}
                         className={cn(
                           "flex items-center border-r px-3 py-1.5 last:border-r-0",
                           isTranslationCol ? "overflow-visible" : "overflow-hidden",
@@ -149,6 +164,7 @@ export function TranslationGridTableView({
                           e.stopPropagation();
                           meta?.onOpenDialog?.(row.original);
                         } : undefined}
+                        role="gridcell"
                       >
                         {flexRender(cell.column.columnDef.cell, cell.getContext())}
                       </div>

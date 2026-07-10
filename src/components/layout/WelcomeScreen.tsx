@@ -5,12 +5,17 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { useProject } from "@/hooks/useProject";
 import { NewProjectDialog } from "@/components/layout/NewProjectDialog";
-import { FilePlus, FolderOpen } from "lucide-react";
+import { SettingsPanel } from "@/components/layout/SettingsPanel";
+import { useSettingsStore } from "@/stores/settingsStore";
+import { FilePlus, FolderOpen, Moon, Settings, Sun } from "lucide-react";
 
 export function WelcomeScreen() {
   const { t } = useTranslation("common");
   const { open } = useProject();
   const [showNewDialog, setShowNewDialog] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const theme = useSettingsStore((state) => state.theme);
+  const setTheme = useSettingsStore((state) => state.setTheme);
 
   const handleOpen = useCallback(async () => {
     const selected = await dialogOpen({
@@ -29,8 +34,34 @@ export function WelcomeScreen() {
     }
   }, [open, t]);
 
+  const handleThemeToggle = useCallback(() => {
+    setTheme(theme === "dark" ? "light" : "dark");
+  }, [setTheme, theme]);
+
   return (
-    <div className="flex min-h-dvh w-full min-w-0 flex-col items-center justify-center overflow-hidden bg-background p-4 text-foreground">
+    <div className="relative flex min-h-dvh w-full min-w-0 flex-col items-center justify-center overflow-hidden bg-background p-4 text-foreground">
+      <div className="absolute top-3 right-3 flex items-center gap-1">
+        <Button
+          type="button"
+          size="icon"
+          variant="ghost"
+          onClick={handleThemeToggle}
+          aria-label={t("welcome.toggleTheme")}
+          title={t("welcome.toggleTheme")}
+        >
+          {theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}
+        </Button>
+        <Button
+          type="button"
+          size="icon"
+          variant="ghost"
+          onClick={() => setShowSettings(true)}
+          aria-label={t("welcome.settings")}
+          title={t("welcome.settings")}
+        >
+          <Settings className="size-4" />
+        </Button>
+      </div>
       <div className="w-full max-w-sm min-w-0 rounded-lg border bg-card p-5 text-center shadow-sm">
         <div className="border-b pb-5">
           <h1 className="text-2xl font-semibold tracking-normal break-words">{t("welcome.title")}</h1>
@@ -66,6 +97,7 @@ export function WelcomeScreen() {
       </div>
 
       <NewProjectDialog open={showNewDialog} onOpenChange={setShowNewDialog} />
+      <SettingsPanel open={showSettings} onOpenChange={setShowSettings} />
     </div>
   );
 }

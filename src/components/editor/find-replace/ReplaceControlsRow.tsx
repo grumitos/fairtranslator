@@ -22,7 +22,7 @@ export function ReplaceControlsRow({
   const { t } = useTranslation("editor");
 
   return (
-    <div className="flex items-center gap-1">
+    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-1">
       <Input
         name="replace-text"
         value={replaceText}
@@ -30,7 +30,7 @@ export function ReplaceControlsRow({
         placeholder={t("findReplace.replacePlaceholder")}
         autoComplete="off"
         aria-label={t("findReplace.replace")}
-        className="h-7 flex-1 text-xs"
+        className="h-7 min-w-0 text-xs"
         onKeyDown={(e) => {
           if (e.key === "Enter") {
             onReplaceOne();

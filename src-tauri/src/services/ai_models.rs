@@ -107,10 +107,8 @@ pub async fn list_openai_compatible_models(
     let response = request.send().await?;
     if !response.status().is_success() {
         let status = response.status();
-        let body = response.text().await.unwrap_or_default();
         return Err(AppError::Api(format!(
-            "Model list request failed ({}): {}",
-            status, body
+            "Model list request failed ({status})"
         )));
     }
 

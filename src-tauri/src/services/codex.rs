@@ -205,8 +205,8 @@ impl CodexProvider {
             String::from_utf8_lossy(&login_output.stdout),
             String::from_utf8_lossy(&login_output.stderr)
         );
-        let is_authenticated = login_output.status.success()
-            || combined_output.to_ascii_lowercase().contains("logged in");
+        let is_authenticated =
+            login_is_authenticated(&combined_output, login_output.status.success());
 
         let (state, message) = if is_authenticated {
             (
@@ -217,7 +217,7 @@ impl CodexProvider {
                     "Codex CLI is installed and authenticated".to_string()
                 },
             )
-        } else if login_requires_auth(&combined_output) || login_output.status.success() {
+        } else if login_requires_auth(&combined_output) {
             (
                 "loginRequired".to_string(),
                 "Codex CLI is installed but not authenticated. Run `codex login` first".to_string(),
@@ -636,6 +636,11 @@ fn login_requires_auth(output: &str) -> bool {
         || normalized.contains("login required")
 }
 
+fn login_is_authenticated(output: &str, command_succeeded: bool) -> bool {
+    !login_requires_auth(output)
+        && (command_succeeded || output.to_ascii_lowercase().contains("logged in"))
+}
+
 fn looks_like_model_id(value: &str) -> bool {
     let value = value.trim();
     !value.is_empty()
@@ -833,41 +838,40 @@ impl TranslationProvider for CodexProvider {
         let temp_dir = temp_codex_dir();
         std::fs::create_dir_all(&temp_dir)?;
 
-        let schema_path = temp_dir.join("schema.json");
-        let output_path = temp_dir.join("result.json");
-        std::fs::write(
-            &schema_path,
-            serde_json::to_vec_pretty(
-                &bundle
-                    .response_schema
-                    .clone()
-                    .unwrap_or_else(Self::response_schema),
-            )?,
-        )?;
+        let result = async {
+            let schema_path = temp_dir.join("schema.json");
+            let output_path = temp_dir.join("result.json");
+            std::fs::write(
+                &schema_path,
+                serde_json::to_vec_pretty(
+                    &bundle
+                        .response_schema
+                        .clone()
+                        .unwrap_or_else(Self::response_schema),
+                )?,
+            )?;
 
-        let output = self
-            .run_exec(
-                &runtime.candidate,
-                prompt,
-                schema_path.clone(),
-                output_path.clone(),
-                temp_dir.clone(),
-            )
-            .await?;
+            let output = self
+                .run_exec(
+                    &runtime.candidate,
+                    prompt,
+                    schema_path,
+                    output_path.clone(),
+                    temp_dir.clone(),
+                )
+                .await?;
 
-        if !output.status.success() {
-            let _ = std::fs::remove_file(schema_path);
-            let _ = std::fs::remove_file(output_path);
-            let _ = std::fs::remove_dir_all(&temp_dir);
-            return Err(command_failure(&output, "Codex translation command failed"));
+            if !output.status.success() {
+                return Err(command_failure(&output, "Codex translation command failed"));
+            }
+
+            let raw_response = std::fs::read_to_string(output_path)?;
+            parse_exec_response(&raw_response, &bundle)
         }
-
-        let _ = std::fs::remove_file(schema_path);
-        let raw_response = std::fs::read_to_string(&output_path)?;
-        let _ = std::fs::remove_file(output_path);
+        .await;
         let _ = std::fs::remove_dir_all(&temp_dir);
 
-        parse_exec_response(&raw_response, &bundle)
+        result
     }
 }
 
@@ -1025,6 +1029,14 @@ mod tests {
         ));
         assert!(login_requires_auth("Authentication required"));
         assert!(!login_requires_auth("Logged in using ChatGPT"));
+    }
+
+    #[test]
+    fn test_not_logged_in_is_never_authenticated() {
+        assert!(!login_is_authenticated(
+            "Not logged in. Run `codex login` first.",
+            true,
+        ));
     }
 
     #[test]

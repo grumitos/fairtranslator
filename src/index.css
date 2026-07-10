@@ -55,21 +55,21 @@
   --card-foreground: #121212;
   --popover: #ffffff;
   --popover-foreground: #121212;
-  --primary: #d97757;
+  --primary: #b55338;
   --primary-foreground: #ffffff;
   --secondary: #efeeeb;
   --secondary-foreground: #1f1f1e;
   --muted: #efeeeb;
-  --muted-foreground: #7b7974;
+  --muted-foreground: #6b6964;
   --accent: #7b797426;
   --accent-foreground: #1f1f1e;
-  --destructive: #d97757;
+  --destructive: #b42318;
   --destructive-foreground: #ffffff;
-  --success: #373734;
+  --success: #1f7a45;
   --success-foreground: #ffffff;
-  --warning: #d97757;
+  --warning: #8a4b08;
   --warning-foreground: #ffffff;
-  --info: #2977d6;
+  --info: #1f66bd;
   --info-foreground: #ffffff;
   --border: #1f1f1e26;
   --input: #1f1f1e26;
@@ -81,7 +81,7 @@
   --chart-5: #1f1f1e;
   --sidebar: #efeeeb;
   --sidebar-foreground: #1f1f1e;
-  --sidebar-primary: #d97757;
+  --sidebar-primary: #b55338;
   --sidebar-primary-foreground: #ffffff;
   --sidebar-accent: #7b797426;
   --sidebar-accent-foreground: #1f1f1e;
@@ -106,22 +106,22 @@
   --card-foreground: #f8f8f6;
   --popover: #2c2c2a;
   --popover-foreground: #f8f8f6;
-  --primary: #d97757;
-  --primary-foreground: #ffffff;
+  --primary: #f08a68;
+  --primary-foreground: #121212;
   --secondary: #2c2c2a;
   --secondary-foreground: #e2e1da;
   --muted: #2c2c2a;
   --muted-foreground: #97958c;
   --accent: #97958c26;
   --accent-foreground: #f8f8f6;
-  --destructive: #d97757;
-  --destructive-foreground: #ffffff;
-  --success: #c3c2b7;
+  --destructive: #ff8077;
+  --destructive-foreground: #121212;
+  --success: #6fca8d;
   --success-foreground: #121212;
-  --warning: #d97757;
-  --warning-foreground: #ffffff;
-  --info: #3886e5;
-  --info-foreground: #ffffff;
+  --warning: #e7a64a;
+  --warning-foreground: #121212;
+  --info: #70aaff;
+  --info-foreground: #121212;
   --border: #e2e1da26;
   --input: #e2e1da26;
   --ring: #3886e5;
@@ -132,8 +132,8 @@
   --chart-5: #e2e1da;
   --sidebar: #121212;
   --sidebar-foreground: #e2e1da;
-  --sidebar-primary: #d97757;
-  --sidebar-primary-foreground: #ffffff;
+  --sidebar-primary: #f08a68;
+  --sidebar-primary-foreground: #121212;
   --sidebar-accent: #97958c26;
   --sidebar-accent-foreground: #f8f8f6;
   --sidebar-border: #e2e1da26;
@@ -153,9 +153,6 @@
   body {
     @apply bg-background text-foreground;
     font-family: "Inter", "IBM Plex Sans", "Aptos", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
-    /* Prevent text selection and context menu in app shell (desktop feel) */
-    -webkit-user-select: none;
-    user-select: none;
     overflow: hidden;
     text-rendering: geometricPrecision;
   }
@@ -192,13 +189,6 @@
   .ft-panel {
     @apply rounded-md border bg-card text-card-foreground;
     box-shadow: var(--shadow-panel);
-  }
-
-  .ft-control {
-    @apply transform-gpu rounded-md border bg-card/80 shadow-xs hover:bg-accent/45 active:scale-[0.995] disabled:pointer-events-none disabled:opacity-50;
-    transition-duration: var(--duration-ui);
-    transition-timing-function: var(--ease-ui);
-    transition-property: background-color, border-color, color, opacity, transform, box-shadow;
   }
 
   .ft-focus {
@@ -245,11 +235,6 @@
     @apply rounded-md border border-warning/30 bg-warning/10 text-foreground;
   }
 
-  .ft-toolbar-group {
-    @apply flex shrink-0 items-center gap-1 rounded-md border border-border bg-secondary/70 p-0.5;
-    box-shadow: var(--shadow-soft);
-  }
-
   .ft-empty-state {
     @apply rounded-md border border-dashed bg-muted/35 px-5 py-4 text-center;
   }
@@ -263,5 +248,23 @@
     transition-duration: 1ms !important;
     animation-duration: 1ms !important;
     animation-iteration-count: 1 !important;
+  }
+}
+
+@media (max-width: 767px) {
+  [data-ft-grid-row] {
+    width: 100% !important;
+    min-width: 100% !important;
+  }
+
+  [data-ft-grid-column="fileContext"],
+  [data-ft-grid-column="status"] {
+    display: none !important;
+  }
+
+  [data-ft-grid-column="original"],
+  [data-ft-grid-column="translation"] {
+    width: 50% !important;
+    min-width: 50% !important;
   }
 }

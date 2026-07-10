@@ -6,7 +6,10 @@
 /// Batch translation emits progress events via `app.emit()` so the
 /// frontend can display a progress bar.
 use serde_json::Value;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 use tauri::Emitter;
 use tauri_plugin_store::StoreExt;
 
@@ -16,7 +19,10 @@ use crate::models::{
     AiBatchApplyResult, AiBatchExport, AiBatchResponseRef, BatchProgress, EntryStatus,
     GlossaryTerm, Project, ProviderType,
 };
-use crate::services::provider::{TranslationBatchContext, TranslationProvider, TranslationRequest};
+use crate::services::provider::{
+    secret_update, ApiKeyInfo, ProviderInfo, TranslationBatchContext, TranslationProvider,
+    TranslationRequest,
+};
 use crate::services::{
     ai_batch, ai_models::ProviderModel, endpoint::normalize_https_endpoint_override, secrets,
     translation_apply, translation_orchestrator,
@@ -127,18 +133,22 @@ pub async fn apikey_save(
     _auth_mode: Option<String>,
 ) -> Result<(), AppError> {
     let endpoint = normalize_provider_endpoint_override(&provider, endpoint)?;
+    let api_key_update = secret_update(&api_key).map(str::to_string);
+
+    if api_key_update.is_none() && provider_requires_api_key(&provider) {
+        let _ = load_provider_info(app.clone(), provider.clone()).await?;
+    }
 
     let store = app
         .store(STORE_NAME)
         .map_err(|e| AppError::Project(format!("Failed to open key store: {}", e)))?;
 
-    let trimmed_api_key = api_key.trim();
-    if provider_requires_api_key(&provider) || !trimmed_api_key.is_empty() {
-        secrets::save_secret(&api_key_secret_id(&provider), trimmed_api_key)?;
-    } else {
-        secrets::delete_secret(&api_key_secret_id(&provider))?;
+    if let Some(api_key) = api_key_update.as_deref() {
+        secrets::save_secret(&api_key_secret_id(&provider), api_key)?;
     }
-    let _ = store.delete(api_key_for(&provider));
+    if api_key_update.is_some() || provider_requires_api_key(&provider) {
+        let _ = store.delete(api_key_for(&provider));
+    }
 
     if let Some(m) = model {
         store.set(model_key_for(&provider), Value::String(m));
@@ -183,13 +193,10 @@ pub async fn apikey_save(
     Ok(())
 }
 
-/// Load a saved API key for a given provider.
-/// Returns the key string, or null/empty if not set.
-#[tauri::command]
-pub async fn apikey_load(
+async fn load_provider_info(
     app: tauri::AppHandle,
     provider: ProviderType,
-) -> Result<ApiKeyInfo, AppError> {
+) -> Result<ProviderInfo, AppError> {
     let store = app
         .store(STORE_NAME)
         .map_err(|e| AppError::Project(format!("Failed to open key store: {}", e)))?;
@@ -251,7 +258,7 @@ pub async fn apikey_load(
         model.is_some() || command_path.is_some() || profile.is_some()
     };
 
-    Ok(ApiKeyInfo {
+    Ok(ProviderInfo {
         provider,
         api_key,
         model,
@@ -263,6 +270,15 @@ pub async fn apikey_load(
         auth_mode: Some(auth_mode),
         is_configured,
     })
+}
+
+/// Load non-secret provider configuration for the frontend.
+#[tauri::command]
+pub async fn apikey_load(
+    app: tauri::AppHandle,
+    provider: ProviderType,
+) -> Result<ApiKeyInfo, AppError> {
+    Ok(load_provider_info(app, provider).await?.into())
 }
 
 /// Delete a saved API key (and model/endpoint overrides) for a provider.
@@ -294,8 +310,7 @@ pub async fn apikey_validate(
     app: tauri::AppHandle,
     provider: ProviderType,
 ) -> Result<(), AppError> {
-    // Load the stored key info
-    let info = apikey_load(app.clone(), provider).await?;
+    let info = load_provider_info(app.clone(), provider).await?;
 
     if provider_requires_api_key(&info.provider) && info.api_key.is_empty() {
         return Err(AppError::Api(
@@ -319,8 +334,8 @@ pub async fn apikey_models(
     command_path: Option<String>,
     profile: Option<String>,
 ) -> Result<Vec<ProviderModel>, AppError> {
-    let mut info = apikey_load(app.clone(), provider).await?;
-    if let Some(api_key) = api_key {
+    let mut info = load_provider_info(app.clone(), provider).await?;
+    if let Some(api_key) = api_key.and_then(|value| secret_update(&value).map(str::to_string)) {
         info.api_key = api_key;
     }
     if model.is_some() {
@@ -404,22 +419,6 @@ pub async fn codex_login(
     provider.login(device_auth.unwrap_or(false)).await
 }
 
-/// Info returned by `apikey_load`
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ApiKeyInfo {
-    pub provider: ProviderType,
-    pub api_key: String,
-    pub model: Option<String>,
-    pub endpoint: Option<String>,
-    pub organization: Option<String>,
-    pub project: Option<String>,
-    pub command_path: Option<String>,
-    pub profile: Option<String>,
-    pub auth_mode: Option<String>,
-    pub is_configured: bool,
-}
-
 /// Prepare a structured batch that can be sent to an external AI and later re-imported.
 #[tauri::command]
 pub async fn translate_ai_batch_export(
@@ -478,6 +477,54 @@ const BATCH_PROGRESS_EVENT: &str = "translation:progress";
 /// Event name for batch translation completion
 const BATCH_COMPLETE_EVENT: &str = "translation:complete";
 
+static BATCH_TRANSLATION_RUNNING: AtomicBool = AtomicBool::new(false);
+
+struct BatchRunGuard<'a>(&'a AtomicBool);
+
+fn try_acquire_batch_run(running: &AtomicBool) -> Result<BatchRunGuard<'_>, AppError> {
+    if running.swap(true, Ordering::AcqRel) {
+        Err(AppError::Project(
+            "Ya hay una traducción batch en curso".into(),
+        ))
+    } else {
+        Ok(BatchRunGuard(running))
+    }
+}
+
+impl Drop for BatchRunGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+fn ensure_expected_project_id(
+    current_project_id: Option<&str>,
+    expected_project_id: &str,
+) -> Result<(), AppError> {
+    match current_project_id {
+        Some(current) if current == expected_project_id => Ok(()),
+        Some(_) => Err(AppError::Project(
+            "El proyecto abierto cambió durante la traducción batch".into(),
+        )),
+        None => Err(AppError::Project(
+            "El proyecto se cerró durante la traducción batch".into(),
+        )),
+    }
+}
+
+fn ensure_current_project_id(
+    project_state: &Arc<Mutex<Option<Project>>>,
+    expected_project_id: &str,
+) -> Result<(), AppError> {
+    let project = project_state
+        .lock()
+        .map_err(|e| AppError::Project(format!("Lock error: {e}")))?;
+    ensure_expected_project_id(
+        project.as_ref().map(|project| project.id.as_str()),
+        expected_project_id,
+    )
+}
+
 #[derive(Debug, Clone)]
 struct FileTranslationBatch {
     relative_path: String,
@@ -488,7 +535,7 @@ struct FileTranslationBatch {
 /// Create a boxed TranslationProvider from API key info
 fn create_provider(
     app: &tauri::AppHandle,
-    info: &ApiKeyInfo,
+    info: &ProviderInfo,
 ) -> Result<Box<dyn TranslationProvider>, AppError> {
     let endpoint = normalize_provider_endpoint_override(&info.provider, info.endpoint.clone())?;
 
@@ -575,6 +622,7 @@ fn push_warning(warnings: &mut Vec<String>, message: String) {
 async fn run_batch_translation(
     app: tauri::AppHandle,
     project_state: Arc<Mutex<Option<Project>>>,
+    expected_project_id: String,
     provider: Box<dyn TranslationProvider>,
     provider_name: String,
     source_lang: String,
@@ -612,7 +660,19 @@ async fn run_batch_translation(
     let mut file_chunks_processed = std::collections::HashMap::new();
 
     for file_batch in batches {
-        match provider
+        if let Err(error) = ensure_current_project_id(&project_state, &expected_project_id) {
+            let message = format!(
+                "Se canceló la traducción batch porque ya no se pudo validar el proyecto planificado: {error}"
+            );
+            log::warn!("{message}");
+            push_warning(&mut warnings, message);
+            failed_entries = total_entries.saturating_sub(entries_translated);
+            failed_batches =
+                failed_batches.saturating_add(total_chunks.saturating_sub(chunks_processed));
+            break;
+        }
+
+        let response_result = provider
             .translate_batch(
                 &file_batch.entries,
                 &source_lang,
@@ -620,8 +680,33 @@ async fn run_batch_translation(
                 &glossary,
                 &file_batch.context,
             )
-            .await
-        {
+            .await;
+
+        let mut proj_guard = match project_state
+            .lock()
+            .map_err(|e| AppError::Project(format!("Lock error: {e}")))
+            .and_then(|guard| {
+                ensure_expected_project_id(
+                    guard.as_ref().map(|project| project.id.as_str()),
+                    &expected_project_id,
+                )?;
+                Ok(guard)
+            }) {
+            Ok(guard) => guard,
+            Err(error) => {
+                let message = format!(
+                    "Se canceló la traducción batch porque ya no se pudo validar el proyecto planificado: {error}"
+                );
+                log::warn!("{message}");
+                push_warning(&mut warnings, message);
+                failed_entries = total_entries.saturating_sub(entries_translated);
+                failed_batches =
+                    failed_batches.saturating_add(total_chunks.saturating_sub(chunks_processed));
+                break;
+            }
+        };
+
+        match response_result {
             Ok(responses) => {
                 let mut chunk_had_failure = false;
                 let response_ids = responses
@@ -639,22 +724,19 @@ async fn run_batch_translation(
                     .map(|request| request.entry_id.as_str())
                     .collect::<std::collections::HashSet<_>>();
 
-                match {
-                    let proj_guard = project_state
-                        .lock()
-                        .map_err(|e| AppError::Project(format!("Lock error: {e}")));
-
-                    proj_guard.and_then(|mut guard| {
-                        let project = guard.as_mut().ok_or_else(|| {
-                            AppError::Project("No hay ningún proyecto abierto".into())
-                        })?;
+                let apply_result = proj_guard
+                    .as_mut()
+                    .ok_or_else(|| AppError::Project("No hay ningún proyecto abierto".into()))
+                    .and_then(|project| {
                         translation_apply::apply_provider_responses(
                             project,
                             &file_batch.relative_path,
                             &responses,
                         )
-                    })
-                } {
+                    });
+                drop(proj_guard);
+
+                match apply_result {
                     Ok(result) => {
                         entries_translated += result.applied_entries;
 
@@ -680,6 +762,18 @@ async fn run_batch_translation(
                                 result.missing_project_entries.len()
                             );
                             log::error!("{message}");
+                            push_warning(&mut warnings, message);
+                        }
+
+                        if !result.skipped_non_pending_entries.is_empty() {
+                            failed_entries += result.skipped_non_pending_entries.len();
+                            chunk_had_failure = true;
+                            let message = format!(
+                                "Se omitieron {} entradas traducidas en '{}' porque dejaron de estar pendientes durante la solicitud.",
+                                result.skipped_non_pending_entries.len(),
+                                file_batch.relative_path
+                            );
+                            log::warn!("{message}");
                             push_warning(&mut warnings, message);
                         }
 
@@ -730,6 +824,7 @@ async fn run_batch_translation(
                 }
             }
             Err(error) => {
+                drop(proj_guard);
                 failed_entries += file_batch.entries.len();
                 failed_batches += 1;
                 let message = format!(
@@ -817,12 +912,22 @@ pub async fn translate_batch_start(
     file_paths: Vec<String>,
     model: Option<String>,
 ) -> Result<BatchProgress, AppError> {
-    let mut info = apikey_load(app.clone(), provider).await?;
+    let run_guard = try_acquire_batch_run(&BATCH_TRANSLATION_RUNNING)?;
+    let mut info = load_provider_info(app.clone(), provider).await?;
     if let Some(model) = model {
         let model = model.trim().to_string();
         info.model = if model.is_empty() { None } else { Some(model) };
     }
-    let (source_lang, target_lang, glossary, batches, total_entries, total_files, total_chunks) = {
+    let (
+        project_id,
+        source_lang,
+        target_lang,
+        glossary,
+        batches,
+        total_entries,
+        total_files,
+        total_chunks,
+    ) = {
         let proj_guard = state
             .project
             .lock()
@@ -859,6 +964,7 @@ pub async fn translate_batch_start(
             .collect();
 
         (
+            project.id.clone(),
             source_lang,
             target_lang,
             glossary,
@@ -910,14 +1016,18 @@ pub async fn translate_batch_start(
     }
 
     let translation_provider = create_provider(&app, &info)?;
+    ensure_current_project_id(&state.project, &project_id)?;
     translation_provider.validate().await?;
+    ensure_current_project_id(&state.project, &project_id)?;
     let provider_name = translation_provider.name().to_string();
 
     let project_state = state.project.clone();
     tauri::async_runtime::spawn(async move {
+        let _run_guard = run_guard;
         run_batch_translation(
             app,
             project_state,
+            project_id,
             translation_provider,
             provider_name,
             source_lang,

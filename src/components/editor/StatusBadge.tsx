@@ -16,7 +16,7 @@ export function StatusBadge({ status }: { status: EntryStatus }) {
   return (
     <Badge
       variant="outline"
-      className={cn("h-5 px-1.5 py-0 text-[10px] font-semibold", variants[status])}
+      className={cn("h-5 px-1.5 py-0 text-xs font-semibold", variants[status])}
     >
       {t(`status.${status}`)}
     </Badge>

@@ -5,6 +5,7 @@
     "title": "Providers",
     "openai": {
       "label": "OpenAI",
+      "description": "OpenAI models using your own API key.",
       "placeholder": "sk-...",
       "organization": "OpenAI organization",
       "organizationPlaceholder": "OpenAI organization ID (optional)",
@@ -14,20 +15,24 @@
     },
     "deepl": {
       "label": "DeepL",
+      "description": "DeepL machine translation for direct batches.",
       "placeholder": "Your DeepL API key"
     },
     "google": {
       "label": "Google Translate",
+      "description": "Google Cloud Translation for direct machine translation.",
       "placeholder": "Your Google API key"
     },
     "opencode": {
-      "label": "OpenCode",
+      "label": "OpenCode Go",
+      "description": "Integrated OpenCode Go provider with full context and dynamic models.",
       "placeholder": "Your OpenCode API key",
       "endpointPlaceholder": "https://opencode.ai/zen/go/v1",
       "authNote": "OpenCode uses your OpenCode Go API key. Only Go endpoints are accepted for now."
     },
     "codex": {
-      "label": "Codex",
+      "label": "Codex CLI",
+      "description": "Local runtime managed by the Codex CLI, with no API key stored in FairTranslator.",
       "commandPath": "Codex executable path",
       "commandPathPlaceholder": "codex executable path (optional)",
       "profile": "Codex profile",
@@ -53,6 +58,7 @@
     "saved": "Settings saved",
     "saveFailed": "Could not save provider",
     "remove": "Clear",
+    "removeConfirm": "Remove this provider's saved key and all of its settings?",
     "removed": "Settings cleared",
     "removeFailed": "Could not clear provider",
     "validate": "Validate",
@@ -60,6 +66,15 @@
     "valid": "Provider is ready",
     "invalid": "Provider validation failed",
     "apiKey": "API key",
+    "savedKeyPlaceholder": "Key saved; type to replace it",
+    "savedKeyHint": "The key remains in secure storage. Leave this empty to keep it.",
+    "advanced": "Advanced settings",
+    "provider": "Provider",
+    "providerNavigation": "Provider list",
+    "connection": {
+      "api": "API",
+      "cli": "Local CLI"
+    },
     "model": "Model",
     "modelPlaceholder": "Select or type a model",
     "models": {
@@ -68,13 +83,12 @@
       "refreshFailed": "Could not refresh models",
       "count": "{{count}} models available",
       "count_one": "{{count}} model available",
-      "count_other": "{{count}} models available",
-      "selectPlaceholder": "Select a model",
-      "currentManual": "Manually entered model"
+      "count_other": "{{count}} models available"
     },
     "endpoint": "Custom URL",
     "endpointPlaceholder": "Endpoint URL (optional)",
     "noKey": "No key configured",
+    "notConfigured": "Not configured",
     "configured": "Configured"
   },
   "appearance": {

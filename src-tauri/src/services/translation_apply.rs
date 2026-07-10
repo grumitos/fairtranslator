@@ -3,11 +3,13 @@ use crate::models::{EntryStatus, Project};
 use crate::services::persistence;
 use crate::services::provider::TranslationResponse;
 use crate::services::translation_integrity::{self, IntegrityMode};
+use crate::services::translation_orchestrator::entry_is_pending_translation;
 
 #[derive(Debug, Default)]
 pub struct ProviderApplyResult {
     pub applied_entries: usize,
     pub missing_project_entries: Vec<String>,
+    pub skipped_non_pending_entries: Vec<String>,
     pub invalid_entries: Vec<String>,
     pub warnings: Vec<String>,
 }
@@ -36,6 +38,13 @@ pub fn apply_provider_responses(
                 .push(response.entry_id.clone());
             continue;
         };
+
+        if !entry_is_pending_translation(entry) {
+            result
+                .skipped_non_pending_entries
+                .push(response.entry_id.clone());
+            continue;
+        }
 
         let normalized_translation = translation_integrity::normalize_translation_for_apply(
             entry,
@@ -170,5 +179,33 @@ mod tests {
             project.files[0].entries[0].translation,
             "\\C[4]Linea 1\nLinea 2"
         );
+    }
+
+    #[test]
+    fn test_apply_provider_responses_preserves_manual_translation() {
+        let mut project = make_project();
+        project.files[0].entries[0].translation = "\\C[4]Manual 1\nManual 2".into();
+        project.files[0].entries[0].status = EntryStatus::Reviewed;
+
+        let result = apply_provider_responses(
+            &mut project,
+            "data/Map001.json",
+            &[TranslationResponse {
+                entry_id: "Map001:1:0:text:0".into(),
+                translated_text: "\\C[4]Automatica 1\nAutomatica 2".into(),
+            }],
+        )
+        .unwrap();
+
+        assert_eq!(result.applied_entries, 0);
+        assert_eq!(
+            result.skipped_non_pending_entries,
+            vec!["Map001:1:0:text:0"]
+        );
+        assert_eq!(
+            project.files[0].entries[0].translation,
+            "\\C[4]Manual 1\nManual 2"
+        );
+        assert_eq!(project.files[0].entries[0].status, EntryStatus::Reviewed);
     }
 }

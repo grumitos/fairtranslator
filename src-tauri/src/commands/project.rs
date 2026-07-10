@@ -36,6 +36,12 @@ pub async fn project_create(
     source_lang: String,
     target_lang: String,
 ) -> Result<Project, AppError> {
+    if source_lang == target_lang {
+        return Err(AppError::Project(
+            "El idioma de origen y destino deben ser distintos".into(),
+        ));
+    }
+
     let selected_path = PathBuf::from(&game_dir);
     if !selected_path.is_dir() {
         return Err(AppError::NotFound(format!(
@@ -63,19 +69,16 @@ pub async fn project_create(
     };
 
     {
+        let default_path = persistence::default_project_path(&game_path);
         let mut proj = state
             .project
             .lock()
             .map_err(|e| AppError::Project(format!("Lock error: {e}")))?;
-        *proj = Some(project.clone());
-    }
-
-    {
-        let default_path = persistence::default_project_path(&game_path);
         let mut path = state
             .project_path
             .lock()
             .map_err(|e| AppError::Project(format!("Lock error: {e}")))?;
+        *proj = Some(project.clone());
         *path = Some(default_path);
     }
 
@@ -97,13 +100,11 @@ pub async fn project_open(
             .project
             .lock()
             .map_err(|e| AppError::Project(format!("Lock error: {e}")))?;
-        *proj = Some(project.clone());
-    }
-    {
         let mut p = state
             .project_path
             .lock()
             .map_err(|e| AppError::Project(format!("Lock error: {e}")))?;
+        *proj = Some(project.clone());
         *p = Some(project_path);
     }
 
@@ -119,14 +120,13 @@ pub async fn project_save(
     state: tauri::State<'_, AppState>,
     path: Option<String>,
 ) -> Result<(), AppError> {
-    let mut project = {
-        let proj = state
-            .project
-            .lock()
-            .map_err(|e| AppError::Project(format!("Lock error: {e}")))?;
-        proj.clone()
-            .ok_or_else(|| AppError::Project("No hay ningún proyecto abierto".into()))?
-    };
+    let mut proj = state
+        .project
+        .lock()
+        .map_err(|e| AppError::Project(format!("Lock error: {e}")))?;
+    let mut project = proj
+        .clone()
+        .ok_or_else(|| AppError::Project("No hay ningún proyecto abierto".into()))?;
 
     let save_path = if let Some(p) = path {
         PathBuf::from(p)
@@ -143,24 +143,16 @@ pub async fn project_save(
     // Update timestamp
     project.updated_at = persistence::now_iso8601();
 
-    // Persist to disk FIRST — only update in-memory state on success
+    // ponytail: keep the project lock through I/O; use revisioned snapshots if save latency matters.
     persistence::save_project(&project, &save_path)?;
 
     // Save succeeded — update in-memory state with new timestamp
-    {
-        let mut proj = state
-            .project
-            .lock()
-            .map_err(|e| AppError::Project(format!("Lock error: {e}")))?;
-        *proj = Some(project);
-    }
-    {
-        let mut stored = state
-            .project_path
-            .lock()
-            .map_err(|e| AppError::Project(format!("Lock error: {e}")))?;
-        *stored = Some(save_path);
-    }
+    *proj = Some(project);
+    let mut stored = state
+        .project_path
+        .lock()
+        .map_err(|e| AppError::Project(format!("Lock error: {e}")))?;
+    *stored = Some(save_path);
 
     Ok(())
 }

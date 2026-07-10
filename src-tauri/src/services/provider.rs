@@ -5,7 +5,56 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
-use crate::models::GlossaryTerm;
+use crate::models::{GlossaryTerm, ProviderType};
+
+/// Provider settings exposed over IPC. API keys are always redacted.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApiKeyInfo {
+    pub provider: ProviderType,
+    pub model: Option<String>,
+    pub endpoint: Option<String>,
+    pub organization: Option<String>,
+    pub project: Option<String>,
+    pub command_path: Option<String>,
+    pub profile: Option<String>,
+    pub auth_mode: Option<String>,
+    pub is_configured: bool,
+}
+
+pub(crate) struct ProviderInfo {
+    pub(crate) provider: ProviderType,
+    pub(crate) api_key: String,
+    pub(crate) model: Option<String>,
+    pub(crate) endpoint: Option<String>,
+    pub(crate) organization: Option<String>,
+    pub(crate) project: Option<String>,
+    pub(crate) command_path: Option<String>,
+    pub(crate) profile: Option<String>,
+    pub(crate) auth_mode: Option<String>,
+    pub(crate) is_configured: bool,
+}
+
+impl From<ProviderInfo> for ApiKeyInfo {
+    fn from(info: ProviderInfo) -> Self {
+        Self {
+            provider: info.provider,
+            model: info.model,
+            endpoint: info.endpoint,
+            organization: info.organization,
+            project: info.project,
+            command_path: info.command_path,
+            profile: info.profile,
+            auth_mode: info.auth_mode,
+            is_configured: info.is_configured,
+        }
+    }
+}
+
+pub(crate) fn secret_update(value: &str) -> Option<&str> {
+    let value = value.trim();
+    (!value.is_empty()).then_some(value)
+}
 
 /// A single text to translate with its entry ID for tracking
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,4 +164,42 @@ pub trait TranslationProvider: Send + Sync {
 
     /// Validate that the provider's API key and config are working.
     async fn validate(&self) -> Result<(), AppError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn provider_info(api_key: &str) -> ProviderInfo {
+        ProviderInfo {
+            provider: ProviderType::Opencode,
+            api_key: api_key.to_string(),
+            model: Some("test-model".into()),
+            endpoint: None,
+            organization: None,
+            project: None,
+            command_path: None,
+            profile: None,
+            auth_mode: Some("apiKey".into()),
+            is_configured: true,
+        }
+    }
+
+    #[test]
+    fn public_provider_info_never_contains_the_api_key() {
+        let internal = provider_info("secret-value");
+        assert!(!internal.api_key.is_empty());
+        let public: ApiKeyInfo = internal.into();
+
+        let serialized = serde_json::to_value(&public).unwrap();
+        assert!(serialized.get("apiKey").is_none());
+        assert!(public.is_configured);
+    }
+
+    #[test]
+    fn empty_api_key_updates_preserve_the_saved_secret() {
+        assert_eq!(secret_update(""), None);
+        assert_eq!(secret_update("   "), None);
+        assert_eq!(secret_update("  replacement  "), Some("replacement"));
+    }
 }

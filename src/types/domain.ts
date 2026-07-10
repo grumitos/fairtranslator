@@ -38,7 +38,6 @@ export interface ExportResult {
 /** API key info returned by apikey_load */
 export interface ApiKeyInfo {
   provider: ProviderType;
-  apiKey: string;
   model?: string;
   endpoint?: string;
   organization?: string;

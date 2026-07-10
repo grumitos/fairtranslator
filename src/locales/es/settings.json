@@ -5,6 +5,7 @@
     "title": "Proveedores",
     "openai": {
       "label": "OpenAI",
+      "description": "Modelos de OpenAI mediante una clave de API propia.",
       "placeholder": "sk-...",
       "organization": "Organización de OpenAI",
       "organizationPlaceholder": "ID de organización de OpenAI (opcional)",
@@ -14,20 +15,24 @@
     },
     "deepl": {
       "label": "DeepL",
+      "description": "Traducción automática de DeepL para lotes directos.",
       "placeholder": "Tu clave de API de DeepL"
     },
     "google": {
       "label": "Google Translate",
+      "description": "Google Cloud Translation para traducción automática directa.",
       "placeholder": "Tu clave de API de Google"
     },
     "opencode": {
-      "label": "OpenCode",
+      "label": "OpenCode Go",
+      "description": "Proveedor integrado de OpenCode Go con contexto completo y modelos dinámicos.",
       "placeholder": "Tu clave de API de OpenCode",
       "endpointPlaceholder": "https://opencode.ai/zen/go/v1",
       "authNote": "OpenCode usa la API key de OpenCode Go. Por ahora solo se aceptan endpoints Go."
     },
     "codex": {
-      "label": "Codex",
+      "label": "Codex CLI",
+      "description": "Runtime local administrado por la CLI de Codex, sin clave de API en FairTranslator.",
       "commandPath": "Ruta del ejecutable de Codex",
       "commandPathPlaceholder": "Ruta al ejecutable de codex (opcional)",
       "profile": "Perfil de Codex",
@@ -53,6 +58,7 @@
     "saved": "Configuración guardada",
     "saveFailed": "No se pudo guardar el proveedor",
     "remove": "Limpiar",
+    "removeConfirm": "¿Eliminar la clave y toda la configuración guardada de este proveedor?",
     "removed": "Configuración eliminada",
     "removeFailed": "No se pudo limpiar el proveedor",
     "validate": "Validar",
@@ -60,6 +66,15 @@
     "valid": "Proveedor listo",
     "invalid": "Falló la validación del proveedor",
     "apiKey": "Clave de API",
+    "savedKeyPlaceholder": "Clave guardada; escribe para reemplazarla",
+    "savedKeyHint": "La clave permanece en el almacén seguro. Déjala vacía para conservarla.",
+    "advanced": "Configuración avanzada",
+    "provider": "Proveedor",
+    "providerNavigation": "Lista de proveedores",
+    "connection": {
+      "api": "API",
+      "cli": "CLI local"
+    },
     "model": "Modelo",
     "modelPlaceholder": "Selecciona o escribe un modelo",
     "models": {
@@ -68,13 +83,12 @@
       "refreshFailed": "No se pudieron refrescar los modelos",
       "count": "{{count}} modelos disponibles",
       "count_one": "{{count}} modelo disponible",
-      "count_other": "{{count}} modelos disponibles",
-      "selectPlaceholder": "Selecciona un modelo",
-      "currentManual": "Modelo escrito manualmente"
+      "count_other": "{{count}} modelos disponibles"
     },
     "endpoint": "URL personalizada",
     "endpointPlaceholder": "URL del endpoint (opcional)",
     "noKey": "Sin clave configurada",
+    "notConfigured": "Sin configurar",
     "configured": "Listo"
   },
   "appearance": {

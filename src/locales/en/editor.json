@@ -52,6 +52,7 @@
     "invalidRegex": "Invalid regular expression",
     "noReplaceMatches": "No Translation matches to replace",
     "noReplaceInOriginal": "The current match is in Original; replace only applies to Translation.",
+    "replaceFailed": "Could not apply replacements",
     "close": "Close",
     "currentMatch": "{{current}} of {{total}} matches"
   },
@@ -108,8 +109,8 @@
       "openai": "OpenAI",
       "deepl": "DeepL",
       "google": "Google Translate",
-      "codex": "Codex",
-      "opencode": "OpenCode"
+      "codex": "Codex CLI · local",
+      "opencode": "OpenCode Go · integrated API"
     },
     "models": {
       "title": "Model for this run",
@@ -117,15 +118,13 @@
       "codexDefault": "Codex will use the CLI default model.",
       "noneSelected": "Select a model before translating.",
       "manualPlaceholder": "Type a model or refresh the list",
-      "selectPlaceholder": "Select a model",
       "refresh": "Refresh",
       "refreshed": "Models refreshed",
       "refreshFailed": "Could not refresh models",
       "count": "{{count}} models available",
       "count_one": "{{count}} model available",
       "count_other": "{{count}} models available",
-      "required": "Select a model for this provider.",
-      "currentManual": "Manually entered model"
+      "required": "Select a model for this provider."
     },
     "selectFiles": "Files to translate",
     "allFiles": "All files",

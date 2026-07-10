@@ -47,6 +47,7 @@ export function NewProjectDialog({ open, onOpenChange }: NewProjectDialogProps) 
   const [formGameDir, setFormGameDir] = useState("");
   const [formSourceLang, setFormSourceLang] = useState("ja");
   const [formTargetLang, setFormTargetLang] = useState("es");
+  const hasSameLanguage = formSourceLang === formTargetLang;
 
   const handleBrowseGameDir = useCallback(async () => {
     const selected = await dialogOpen({
@@ -63,7 +64,7 @@ export function NewProjectDialog({ open, onOpenChange }: NewProjectDialogProps) 
   }, [t, formName]);
 
   const handleCreate = useCallback(async () => {
-    if (!formGameDir || !formName) return;
+    if (!formGameDir || !formName || hasSameLanguage) return;
     if (isDirty && !window.confirm(t("unsavedChanges.createProject"))) {
       return;
     }
@@ -79,7 +80,7 @@ export function NewProjectDialog({ open, onOpenChange }: NewProjectDialogProps) 
         description: e instanceof Error ? e.message : String(e),
       });
     }
-  }, [create, formGameDir, formName, formSourceLang, formTargetLang, isDirty, onOpenChange, t]);
+  }, [create, formGameDir, formName, formSourceLang, formTargetLang, hasSameLanguage, isDirty, onOpenChange, t]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -168,6 +169,11 @@ export function NewProjectDialog({ open, onOpenChange }: NewProjectDialogProps) 
               </Select>
             </div>
           </div>
+          {hasSameLanguage && (
+            <p className="text-xs text-destructive" role="alert">
+              {t("newProjectDialog.languagesMustDiffer")}
+            </p>
+          )}
         </div>
 
         <DialogFooter>
@@ -179,7 +185,7 @@ export function NewProjectDialog({ open, onOpenChange }: NewProjectDialogProps) 
           </Button>
           <Button
             onClick={handleCreate}
-            disabled={!formGameDir || !formName || isLoading}
+            disabled={!formGameDir || !formName || hasSameLanguage || isLoading}
           >
             {isLoading
               ? t("newProjectDialog.creating")

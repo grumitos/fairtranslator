@@ -103,19 +103,13 @@ impl TranslationProvider for GoogleProvider {
 
         if !response.status().is_success() {
             let status = response.status();
-            let body = response.text().await.unwrap_or_default();
             return Err(AppError::Api(format!(
-                "Google Translate API validation failed ({}): {}",
-                status, body
+                "Google Translate API validation failed ({})",
+                status
             )));
         }
 
-        let detect: GoogleDetectResponse = response.json().await.map_err(|e| {
-            AppError::Api(format!(
-                "Google Translate validation response parse error: {}",
-                e
-            ))
-        })?;
+        let detect: GoogleDetectResponse = response.json().await?;
 
         let has_detection = detect
             .data
@@ -179,10 +173,9 @@ impl TranslationProvider for GoogleProvider {
 
             if !response.status().is_success() {
                 let status = response.status();
-                let body = response.text().await.unwrap_or_default();
                 return Err(AppError::Api(format!(
-                    "Google Translate API error ({}): {}",
-                    status, body
+                    "Google Translate API error ({})",
+                    status
                 )));
             }
 

@@ -1,4 +1,4 @@
-import { type CSSProperties } from "react";
+import { type CSSProperties, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -25,18 +25,49 @@ import {
 import { useSettingsStore } from "@/stores/settingsStore";
 import type { ProviderType } from "@/types/domain";
 import { ApiKeySection } from "@/components/layout/settings/ApiKeySection";
+import { cn } from "@/lib/utils";
 
 interface SettingsPanelProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
 
-const PROVIDERS: { id: ProviderType; labelKey: string }[] = [
-  { id: "openai", labelKey: "settings:apiKeys.openai.label" },
-  { id: "deepl", labelKey: "settings:apiKeys.deepl.label" },
-  { id: "google", labelKey: "settings:apiKeys.google.label" },
-  { id: "codex", labelKey: "settings:apiKeys.codex.label" },
-  { id: "opencode", labelKey: "settings:apiKeys.opencode.label" },
+const PROVIDERS: {
+  id: ProviderType;
+  labelKey: string;
+  descriptionKey: string;
+  connection: "api" | "cli";
+}[] = [
+  {
+    id: "opencode",
+    labelKey: "settings:apiKeys.opencode.label",
+    descriptionKey: "settings:apiKeys.opencode.description",
+    connection: "api",
+  },
+  {
+    id: "openai",
+    labelKey: "settings:apiKeys.openai.label",
+    descriptionKey: "settings:apiKeys.openai.description",
+    connection: "api",
+  },
+  {
+    id: "deepl",
+    labelKey: "settings:apiKeys.deepl.label",
+    descriptionKey: "settings:apiKeys.deepl.description",
+    connection: "api",
+  },
+  {
+    id: "google",
+    labelKey: "settings:apiKeys.google.label",
+    descriptionKey: "settings:apiKeys.google.description",
+    connection: "api",
+  },
+  {
+    id: "codex",
+    labelKey: "settings:apiKeys.codex.label",
+    descriptionKey: "settings:apiKeys.codex.description",
+    connection: "cli",
+  },
 ];
 
 export function SettingsPanel({ open, onOpenChange }: SettingsPanelProps) {
@@ -47,17 +78,23 @@ export function SettingsPanel({ open, onOpenChange }: SettingsPanelProps) {
   const setTheme = useSettingsStore((s) => s.setTheme);
   const setLanguage = useSettingsStore((s) => s.setLanguage);
   const setWordWrapColumn = useSettingsStore((s) => s.setWordWrapColumn);
+  const [selectedProvider, setSelectedProvider] = useState<ProviderType>("opencode");
+  const selectedProviderConfig =
+    PROVIDERS.find((provider) => provider.id === selectedProvider) ?? PROVIDERS[0];
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent style={{ "--sheet-width": "420px" } as CSSProperties}>
-        <SheetHeader>
+      <SheetContent
+        className="overflow-hidden"
+        style={{ "--sheet-width": "680px" } as CSSProperties}
+      >
+        <SheetHeader className="shrink-0 border-b pr-12">
           <SheetTitle>{t("settings:title")}</SheetTitle>
           <SheetDescription>{t("settings:description")}</SheetDescription>
         </SheetHeader>
 
-        <Tabs defaultValue="apikeys" className="px-4 pb-4">
-          <TabsList className="w-full">
+        <Tabs defaultValue="apikeys" className="min-h-0 flex-1 px-4 pb-4">
+          <TabsList className="w-full shrink-0">
             <TabsTrigger value="apikeys" className="flex-1">
               {t("settings:apiKeys.title")}
             </TabsTrigger>
@@ -66,13 +103,80 @@ export function SettingsPanel({ open, onOpenChange }: SettingsPanelProps) {
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="apikeys" className="mt-4 space-y-6">
-            {PROVIDERS.map((provider) => (
-              <ApiKeySection key={provider.id} provider={provider.id} />
-            ))}
+          <TabsContent value="apikeys" className="mt-2 min-h-0 overflow-hidden">
+            <div className="flex h-full min-h-0 flex-col gap-3">
+              <div className="space-y-1.5 sm:hidden">
+                <Label id="settings-provider-label">{t("settings:apiKeys.provider")}</Label>
+                <Select
+                  value={selectedProvider}
+                  onValueChange={(value) => setSelectedProvider(value as ProviderType)}
+                >
+                  <SelectTrigger
+                    className="w-full"
+                    aria-labelledby="settings-provider-label"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {PROVIDERS.map((provider) => (
+                      <SelectItem key={provider.id} value={provider.id}>
+                        {t(provider.labelKey)} · {t(`settings:apiKeys.connection.${provider.connection}`)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="grid min-h-0 flex-1 sm:grid-cols-[190px_minmax(0,1fr)] sm:gap-4">
+                <nav
+                  className="hidden min-h-0 flex-col gap-1 overflow-y-auto border-r pr-3 sm:flex"
+                  aria-label={t("settings:apiKeys.providerNavigation")}
+                >
+                  {PROVIDERS.map((provider) => {
+                    const isSelected = provider.id === selectedProvider;
+                    return (
+                      <button
+                        key={provider.id}
+                        type="button"
+                        onClick={() => setSelectedProvider(provider.id)}
+                        aria-pressed={isSelected}
+                        className={cn(
+                          "ft-focus flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-sm transition-colors",
+                          isSelected
+                            ? "bg-accent text-foreground"
+                            : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+                        )}
+                      >
+                        <span className="truncate font-medium">{t(provider.labelKey)}</span>
+                        <span className="shrink-0 rounded border bg-background/60 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-foreground/75">
+                          {t(`settings:apiKeys.connection.${provider.connection}`)}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </nav>
+
+                <section className="min-h-0 overflow-y-auto pr-1" aria-labelledby="selected-provider-title">
+                  <div className="mb-4 border-b pb-4">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h2 id="selected-provider-title" className="text-base font-semibold">
+                        {t(selectedProviderConfig.labelKey)}
+                      </h2>
+                      <span className="rounded border bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-foreground/75">
+                        {t(`settings:apiKeys.connection.${selectedProviderConfig.connection}`)}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                      {t(selectedProviderConfig.descriptionKey)}
+                    </p>
+                  </div>
+                  <ApiKeySection key={selectedProvider} provider={selectedProvider} />
+                </section>
+              </div>
+            </div>
           </TabsContent>
 
-          <TabsContent value="appearance" className="mt-4 space-y-6">
+          <TabsContent value="appearance" className="mt-4 min-h-0 space-y-6 overflow-y-auto pr-1">
             <div className="space-y-2">
               <Label id="settings-theme-label">{t("settings:appearance.theme")}</Label>
               <Select value={theme} onValueChange={(v) => setTheme(v as "light" | "dark" | "system")}>

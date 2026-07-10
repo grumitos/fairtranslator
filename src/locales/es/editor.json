@@ -52,6 +52,7 @@
     "invalidRegex": "Patrón no válido",
     "noReplaceMatches": "No hay coincidencias en Traducción",
     "noReplaceInOriginal": "La coincidencia actual está en Original; reemplazar solo aplica a Traducción.",
+    "replaceFailed": "No se pudieron aplicar los reemplazos",
     "close": "Cerrar",
     "currentMatch": "{{current}} de {{total}} coincidencias"
   },
@@ -108,8 +109,8 @@
       "openai": "OpenAI",
       "deepl": "DeepL",
       "google": "Google Translate",
-      "codex": "Codex",
-      "opencode": "OpenCode"
+      "codex": "Codex CLI · local",
+      "opencode": "OpenCode Go · API integrada"
     },
     "models": {
       "title": "Modelo para esta ejecución",
@@ -117,15 +118,13 @@
       "codexDefault": "Codex usará el modelo predeterminado del CLI.",
       "noneSelected": "Selecciona un modelo antes de traducir.",
       "manualPlaceholder": "Escribe un modelo o refresca la lista",
-      "selectPlaceholder": "Selecciona un modelo",
       "refresh": "Refrescar",
       "refreshed": "Modelos actualizados",
       "refreshFailed": "No se pudieron refrescar los modelos",
       "count": "{{count}} modelos disponibles",
       "count_one": "{{count}} modelo disponible",
       "count_other": "{{count}} modelos disponibles",
-      "required": "Selecciona un modelo para este proveedor.",
-      "currentManual": "Modelo escrito manualmente"
+      "required": "Selecciona un modelo para este proveedor."
     },
     "selectFiles": "Archivos a traducir",
     "allFiles": "Todos los archivos",

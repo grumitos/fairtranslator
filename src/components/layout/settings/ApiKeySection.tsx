@@ -5,13 +5,6 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { useApiKeys } from "@/hooks/useApiKeys";
 import type { ApiKeyInfo, CodexRuntimeStatus, ProviderModel, ProviderType } from "@/types/domain";
 
@@ -23,8 +16,7 @@ function isConfigured(info: ApiKeyInfo): boolean {
   return (
     info.isConfigured ??
     Boolean(
-      info.apiKey ||
-        info.model ||
+      info.model ||
         info.endpoint ||
         info.organization ||
         info.project ||
@@ -80,24 +72,6 @@ export function ApiKeySection({ provider }: ApiKeySectionProps) {
     }
   }, [provider]);
 
-  const selectedModelExistsInOptions = useMemo(
-    () => modelOptions.some((option) => option.id === model),
-    [model, modelOptions],
-  );
-
-  const displayedModelOptions = useMemo(() => {
-    if (!model || selectedModelExistsInOptions) {
-      return modelOptions;
-    }
-    return [
-      {
-        id: model,
-        ownedBy: t("apiKeys.models.currentManual"),
-      },
-      ...modelOptions,
-    ];
-  }, [model, modelOptions, selectedModelExistsInOptions, t]);
-
   const codexStatusLabelKey = useMemo(() => {
     if (!codexStatus) return null;
     switch (codexStatus.state) {
@@ -147,7 +121,8 @@ export function ApiKeySection({ provider }: ApiKeySectionProps) {
     load(provider)
       .then((info) => {
         if (!isActive) return;
-        setApiKey(info.apiKey);
+        // Stored credentials stay in Rust/keyring and never enter webview state.
+        setApiKey("");
         setModel(info.model ?? "");
         setEndpoint(info.endpoint ?? "");
         setOrganization(info.organization ?? "");
@@ -191,7 +166,7 @@ export function ApiKeySection({ provider }: ApiKeySectionProps) {
     try {
       const models = await listModels(
         provider,
-        isCodex ? undefined : apiKey,
+        isCodex ? undefined : apiKey || undefined,
         model || undefined,
         supportsEndpoint ? endpoint : undefined,
         provider === "openai" ? organization : undefined,
@@ -245,8 +220,11 @@ export function ApiKeySection({ provider }: ApiKeySectionProps) {
       setHasConfig(
         isCodex
           ? Boolean(model || commandPath || profile)
-          : Boolean(apiKey || model || endpoint || organization || project),
+          : hasConfig || Boolean(apiKey),
       );
+      if (!isCodex) {
+        setApiKey("");
+      }
       if (isCodex) {
         await refreshCodexStatus(commandPath, model, profile);
       }
@@ -260,6 +238,7 @@ export function ApiKeySection({ provider }: ApiKeySectionProps) {
     apiKey,
     commandPath,
     endpoint,
+    hasConfig,
     isCodex,
     model,
     organization,
@@ -273,6 +252,9 @@ export function ApiKeySection({ provider }: ApiKeySectionProps) {
   ]);
 
   const handleRemove = useCallback(async () => {
+    if (!window.confirm(t("apiKeys.removeConfirm"))) {
+      return;
+    }
     try {
       await remove(provider);
       setApiKey("");
@@ -344,38 +326,64 @@ export function ApiKeySection({ provider }: ApiKeySectionProps) {
     [commandPath, loginCodex, model, profile, t],
   );
 
-  const canSave = isCodex || Boolean(apiKey);
+  const canSave = isCodex || hasConfig || Boolean(apiKey);
+  const canRefreshModels = isCodex || hasConfig || Boolean(apiKey);
   const showValidate = isCodex || hasConfig;
 
   return (
-    <div className="space-y-3 rounded-lg border p-3">
-      <div className="flex items-center justify-between gap-3">
-        <Label className="text-sm font-medium">{t(`apiKeys.${providerKey}.label`)}</Label>
-        {hasConfig && (
-          <span className="text-xs text-success">
-            {t("apiKeys.configured")}
-          </span>
-        )}
+    <div className="space-y-5">
+      <div
+        className="flex items-center gap-2 rounded-md border bg-muted/35 px-3 py-2 text-xs"
+        role="status"
+      >
+        <span
+          aria-hidden="true"
+          className={`size-2 rounded-full ${hasConfig ? "bg-success" : "bg-muted-foreground/45"}`}
+        />
+        <span className={hasConfig ? "font-medium text-success" : "text-muted-foreground"}>
+          {t(
+            hasConfig
+              ? "apiKeys.configured"
+              : isCodex
+                ? "apiKeys.notConfigured"
+                : "apiKeys.noKey",
+          )}
+        </span>
       </div>
 
       {!isCodex && (
-        <Input
-          type="password"
-          name={`${providerKey}-api-key`}
-          aria-label={`${t(`apiKeys.${providerKey}.label`)} ${t("apiKeys.apiKey")}`}
-          autoComplete="off"
-          spellCheck={false}
-          value={apiKey}
-          onChange={(e) => setApiKey(e.target.value)}
-          placeholder={t(`apiKeys.${providerKey}.placeholder`)}
-          className="text-xs"
-        />
+        <div className="space-y-1.5">
+          <Label htmlFor={`${providerKey}-api-key`}>{t("apiKeys.apiKey")}</Label>
+          <Input
+            id={`${providerKey}-api-key`}
+            type="password"
+            name={`${providerKey}-api-key`}
+            autoComplete="off"
+            autoCapitalize="none"
+            spellCheck={false}
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder={
+              hasConfig
+                ? t("apiKeys.savedKeyPlaceholder")
+                : t(`apiKeys.${providerKey}.placeholder`)
+            }
+          />
+          {hasConfig && (
+            <p className="text-xs text-muted-foreground">{t("apiKeys.savedKeyHint")}</p>
+          )}
+          {isOpenCode && (
+            <p className="text-xs leading-5 text-muted-foreground">
+              {t("apiKeys.opencode.authNote")}
+            </p>
+          )}
+        </div>
       )}
 
       {supportsModel && (
-        <div className="space-y-2">
+        <div className="space-y-1.5">
           <div className="flex items-center justify-between gap-2">
-            <Label htmlFor={`${providerKey}-model`} className="text-xs text-muted-foreground">
+            <Label htmlFor={`${providerKey}-model`}>
               {t("apiKeys.model")}
             </Label>
             {supportsModelRefresh && (
@@ -384,7 +392,7 @@ export function ApiKeySection({ provider }: ApiKeySectionProps) {
                 size="sm"
                 variant="outline"
                 onClick={() => void handleRefreshModels()}
-                disabled={isLoading || isRefreshingModels}
+                disabled={isLoading || isRefreshingModels || !canRefreshModels}
                 className="h-7 gap-1 px-2 text-xs"
               >
                 <RefreshCw className={`size-3.5 ${isRefreshingModels ? "animate-spin" : ""}`} />
@@ -392,83 +400,56 @@ export function ApiKeySection({ provider }: ApiKeySectionProps) {
               </Button>
             )}
           </div>
-          {displayedModelOptions.length > 0 && (
-            <Select value={model} onValueChange={setModel}>
-              <SelectTrigger className="w-full text-xs">
-                <SelectValue placeholder={t("apiKeys.models.selectPlaceholder")} />
-              </SelectTrigger>
-              <SelectContent>
-                {displayedModelOptions.map((option) => (
-                  <SelectItem key={option.id} value={option.id}>
-                    {option.id}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
           <Input
             id={`${providerKey}-model`}
             name={`${providerKey}-model`}
-            aria-label={t("apiKeys.model")}
+            list={modelOptions.length > 0 ? `${providerKey}-models` : undefined}
             autoComplete="off"
+            autoCapitalize="none"
             spellCheck={false}
             value={model}
             onChange={(e) => setModel(e.target.value)}
             placeholder={t("apiKeys.modelPlaceholder")}
-            className="text-xs"
           />
+          {modelOptions.length > 0 && (
+            <datalist id={`${providerKey}-models`}>
+              {modelOptions.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.ownedBy ?? ""}
+                </option>
+              ))}
+            </datalist>
+          )}
         </div>
-      )}
-
-      {provider === "openai" && (
-        <>
-          <Input
-            name="openai-organization"
-            aria-label={t("apiKeys.openai.organization")}
-            autoComplete="off"
-            spellCheck={false}
-            value={organization}
-            onChange={(e) => setOrganization(e.target.value)}
-            placeholder={t("apiKeys.openai.organizationPlaceholder")}
-            className="text-xs"
-          />
-          <Input
-            name="openai-project"
-            aria-label={t("apiKeys.openai.project")}
-            autoComplete="off"
-            spellCheck={false}
-            value={project}
-            onChange={(e) => setProject(e.target.value)}
-            placeholder={t("apiKeys.openai.projectPlaceholder")}
-            className="text-xs"
-          />
-          <p className="text-xs text-muted-foreground">{t("apiKeys.openai.authNote")}</p>
-        </>
       )}
 
       {isCodex && (
         <>
-          <Input
-            name="codex-command-path"
-            aria-label={t("apiKeys.codex.commandPath")}
-            autoComplete="off"
-            spellCheck={false}
-            value={commandPath}
-            onChange={(e) => setCommandPath(e.target.value)}
-            placeholder={t("apiKeys.codex.commandPathPlaceholder")}
-            className="text-xs"
-          />
-          <Input
-            name="codex-profile"
-            aria-label={t("apiKeys.codex.profile")}
-            autoComplete="off"
-            spellCheck={false}
-            value={profile}
-            onChange={(e) => setProfile(e.target.value)}
-            placeholder={t("apiKeys.codex.profilePlaceholder")}
-            className="text-xs"
-          />
-          <p className="text-xs text-muted-foreground">{t("apiKeys.codex.authNote")}</p>
+          <div className="space-y-1.5">
+            <Label htmlFor="codex-command-path">{t("apiKeys.codex.commandPath")}</Label>
+            <Input
+              id="codex-command-path"
+              name="codex-command-path"
+              autoComplete="off"
+              spellCheck={false}
+              value={commandPath}
+              onChange={(e) => setCommandPath(e.target.value)}
+              placeholder={t("apiKeys.codex.commandPathPlaceholder")}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="codex-profile">{t("apiKeys.codex.profile")}</Label>
+            <Input
+              id="codex-profile"
+              name="codex-profile"
+              autoComplete="off"
+              spellCheck={false}
+              value={profile}
+              onChange={(e) => setProfile(e.target.value)}
+              placeholder={t("apiKeys.codex.profilePlaceholder")}
+            />
+          </div>
+          <p className="text-xs leading-5 text-muted-foreground">{t("apiKeys.codex.authNote")}</p>
           <div className="flex flex-wrap gap-2">
             <Button
               size="sm"
@@ -522,30 +503,67 @@ export function ApiKeySection({ provider }: ApiKeySectionProps) {
         </>
       )}
 
-      {isOpenCode && (
-        <p className="text-xs text-muted-foreground">{t("apiKeys.opencode.authNote")}</p>
-      )}
-
       {supportsEndpoint && (
-        <Input
-          name={`${providerKey}-endpoint`}
-          type="url"
-          inputMode="url"
-          aria-label={t("apiKeys.endpoint")}
-          autoComplete="off"
-          spellCheck={false}
-          value={endpoint}
-          onChange={(e) => setEndpoint(e.target.value)}
-          placeholder={
-            isOpenCode
-              ? t("apiKeys.opencode.endpointPlaceholder")
-              : t("apiKeys.endpointPlaceholder")
-          }
-          className="text-xs"
-        />
+        <details className="rounded-md border bg-muted/20 px-3 py-2">
+          <summary className="ft-focus -mx-1 cursor-pointer rounded px-1 text-sm font-medium text-foreground">
+            {t("apiKeys.advanced")}
+          </summary>
+          <div className="mt-3 space-y-3 border-t pt-3">
+            {provider === "openai" && (
+              <>
+                <div className="space-y-1.5">
+                  <Label htmlFor="openai-organization">{t("apiKeys.openai.organization")}</Label>
+                  <Input
+                    id="openai-organization"
+                    name="openai-organization"
+                    autoComplete="off"
+                    spellCheck={false}
+                    value={organization}
+                    onChange={(e) => setOrganization(e.target.value)}
+                    placeholder={t("apiKeys.openai.organizationPlaceholder")}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="openai-project">{t("apiKeys.openai.project")}</Label>
+                  <Input
+                    id="openai-project"
+                    name="openai-project"
+                    autoComplete="off"
+                    spellCheck={false}
+                    value={project}
+                    onChange={(e) => setProject(e.target.value)}
+                    placeholder={t("apiKeys.openai.projectPlaceholder")}
+                  />
+                </div>
+                <p className="text-xs leading-5 text-muted-foreground">
+                  {t("apiKeys.openai.authNote")}
+                </p>
+              </>
+            )}
+            <div className="space-y-1.5">
+              <Label htmlFor={`${providerKey}-endpoint`}>{t("apiKeys.endpoint")}</Label>
+              <Input
+                id={`${providerKey}-endpoint`}
+                name={`${providerKey}-endpoint`}
+                type="url"
+                inputMode="url"
+                autoComplete="off"
+                autoCapitalize="none"
+                spellCheck={false}
+                value={endpoint}
+                onChange={(e) => setEndpoint(e.target.value)}
+                placeholder={
+                  isOpenCode
+                    ? t("apiKeys.opencode.endpointPlaceholder")
+                    : t("apiKeys.endpointPlaceholder")
+                }
+              />
+            </div>
+          </div>
+        </details>
       )}
 
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2 border-t pt-4">
         <Button size="sm" onClick={handleSave} disabled={!canSave || isLoading} className="text-xs">
           {t("apiKeys.save")}
         </Button>
@@ -563,10 +581,10 @@ export function ApiKeySection({ provider }: ApiKeySectionProps) {
         {hasConfig && (
           <Button
             size="sm"
-            variant="destructive"
+            variant="ghost"
             onClick={handleRemove}
             disabled={isLoading}
-            className="text-xs"
+            className="text-xs text-destructive hover:text-destructive"
           >
             {t("apiKeys.remove")}
           </Button>

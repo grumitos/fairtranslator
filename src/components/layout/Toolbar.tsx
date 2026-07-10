@@ -110,8 +110,8 @@ export function Toolbar() {
 
   return (
     <>
-      <header className="flex h-11 items-center gap-1 border-b bg-card/95 px-1.5 shadow-xs">
-        <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto overflow-y-hidden">
+      <header className="grid min-h-11 shrink-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-1 border-b bg-card/95 px-1.5 py-1 shadow-xs md:flex md:h-11 md:flex-nowrap md:py-0">
+        <div className="col-start-1 row-start-1 flex min-w-0 items-center gap-1 overflow-x-auto overflow-y-hidden md:col-auto md:row-auto">
           <div className="flex shrink-0 items-center gap-1 rounded-md border bg-background/65 p-0.5">
             <IconAction label={t("common:newProject")} onClick={() => setShowNewDialog(true)}>
               <FilePlus className="size-4" />
@@ -165,15 +165,16 @@ export function Toolbar() {
             </IconAction>
           </div>
 
-          <Separator orientation="vertical" className="mx-1 h-6 shrink-0" />
+        </div>
 
-          <div className="relative flex shrink-0 items-center">
+        <div className="col-span-2 row-start-2 flex min-w-0 items-center gap-1 md:col-auto md:row-auto md:min-w-80 md:flex-1">
+          <div className="relative flex min-w-0 flex-1 items-center md:flex-none">
             <Search className="pointer-events-none absolute left-2.5 size-3.5 text-muted-foreground" />
             <Input
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder={t("common:search")}
-              className="h-8 w-52 pl-7 text-xs"
+              className="h-8 w-full pl-7 text-xs md:w-52"
               disabled={!project}
               aria-label={t("common:search")}
             />
@@ -184,7 +185,7 @@ export function Toolbar() {
             onValueChange={(value) => setStatusFilter(value === "all" ? null : (value as EntryStatus))}
             disabled={!project}
           >
-            <SelectTrigger className="h-8 w-36 shrink-0 gap-1.5 px-2.5 text-xs" aria-label={t("editor:toolbar.filter")}>
+            <SelectTrigger className="h-8 w-32 shrink-0 gap-1.5 px-2.5 text-xs md:w-36" aria-label={t("editor:toolbar.filter")}>
               <Filter className="size-3.5 text-muted-foreground" />
               <SelectValue />
             </SelectTrigger>
@@ -198,7 +199,7 @@ export function Toolbar() {
           </Select>
         </div>
 
-        <div className="ml-1 flex shrink-0 items-center gap-1">
+        <div className="col-start-2 row-start-1 ml-1 flex shrink-0 items-center gap-1 md:col-auto md:row-auto">
           <IconAction label={t("editor:toolbar.toggleTheme")} onClick={handleThemeToggle}>
             {theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}
           </IconAction>

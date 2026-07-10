@@ -45,6 +45,8 @@
     "subtitle": "Traductor moderno para juegos RPG Maker",
     "newProject": "Crear nuevo proyecto",
     "openProject": "Abrir proyecto existente",
+    "settings": "Configuración",
+    "toggleTheme": "Cambiar tema",
     "newProjectDesc": "Selecciona la carpeta de un juego RPG Maker para empezar a traducir",
     "openProjectDesc": "Abre un proyecto .fairtl guardado"
   },
@@ -58,6 +60,7 @@
     "browse": "Examinar",
     "sourceLang": "Idioma de origen",
     "targetLang": "Idioma de destino",
+    "languagesMustDiffer": "El idioma de origen y el de destino deben ser distintos.",
     "create": "Crear proyecto",
     "creating": "Creando proyecto…",
     "selectFolder": "Seleccionar carpeta"

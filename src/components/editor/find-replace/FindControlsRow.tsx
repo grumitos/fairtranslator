@@ -53,7 +53,7 @@ export function FindControlsRow({
   const { t } = useTranslation("editor");
 
   return (
-    <div className="flex items-center gap-1">
+    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-1 sm:flex">
       <Input
         ref={findInputRef}
         name="find-query"
@@ -73,89 +73,6 @@ export function FindControlsRow({
         }}
       />
 
-      <span
-        className="min-w-20 max-w-28 truncate text-center text-xs text-muted-foreground"
-        role="status"
-        aria-live="polite"
-      >
-        {matchInfoLabel}
-      </span>
-
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={onPrev}
-            disabled={!hasMatches}
-            aria-label={t("findReplace.previous")}
-            title={t("findReplace.previous")}
-          >
-            <ChevronUp className="size-3.5" />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">{t("findReplace.previous")}</TooltipContent>
-      </Tooltip>
-
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={onNext}
-            disabled={!hasMatches}
-            aria-label={t("findReplace.next")}
-            title={t("findReplace.next")}
-          >
-            <ChevronDown className="size-3.5" />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">{t("findReplace.next")}</TooltipContent>
-      </Tooltip>
-
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            variant={matchCase ? "secondary" : "ghost"}
-            size="icon-sm"
-            onClick={onToggleMatchCase}
-            aria-label={t("findReplace.matchCase")}
-            aria-pressed={matchCase}
-            title={t("findReplace.matchCase")}
-          >
-            <CaseSensitive className="size-3.5" />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">{t("findReplace.matchCase")}</TooltipContent>
-      </Tooltip>
-
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            variant={useRegex ? "secondary" : "ghost"}
-            size="icon-sm"
-            onClick={onToggleRegex}
-            aria-label={t("findReplace.useRegex")}
-            aria-pressed={useRegex}
-            title={t("findReplace.useRegex")}
-          >
-            <Regex className="size-3.5" />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">{t("findReplace.useRegex")}</TooltipContent>
-      </Tooltip>
-
-      <Select value={searchTarget} onValueChange={onSearchTargetChange}>
-        <SelectTrigger className="h-7 w-28 text-xs" aria-label={t("findReplace.searchIn")}>
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="translation">{t("findReplace.translationText")}</SelectItem>
-          <SelectItem value="original">{t("findReplace.originalText")}</SelectItem>
-          <SelectItem value="both">{t("findReplace.bothTexts")}</SelectItem>
-        </SelectContent>
-      </Select>
-
       <Tooltip>
         <TooltipTrigger asChild>
           <Button
@@ -164,12 +81,101 @@ export function FindControlsRow({
             onClick={onClose}
             aria-label={t("findReplace.close")}
             title={t("findReplace.close")}
+            className="sm:order-last"
           >
             <X className="size-3.5" />
           </Button>
         </TooltipTrigger>
         <TooltipContent side="bottom">{t("findReplace.close")}</TooltipContent>
       </Tooltip>
+
+      <div className="col-span-2 flex min-w-0 items-center gap-1 sm:contents">
+        <span
+          className="min-w-20 max-w-28 truncate text-center text-xs text-muted-foreground"
+          role="status"
+          aria-live="polite"
+        >
+          {matchInfoLabel}
+        </span>
+
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={onPrev}
+              disabled={!hasMatches}
+              aria-label={t("findReplace.previous")}
+              title={t("findReplace.previous")}
+            >
+              <ChevronUp className="size-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{t("findReplace.previous")}</TooltipContent>
+        </Tooltip>
+
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={onNext}
+              disabled={!hasMatches}
+              aria-label={t("findReplace.next")}
+              title={t("findReplace.next")}
+            >
+              <ChevronDown className="size-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{t("findReplace.next")}</TooltipContent>
+        </Tooltip>
+
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant={matchCase ? "secondary" : "ghost"}
+              size="icon-sm"
+              onClick={onToggleMatchCase}
+              aria-label={t("findReplace.matchCase")}
+              aria-pressed={matchCase}
+              title={t("findReplace.matchCase")}
+            >
+              <CaseSensitive className="size-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{t("findReplace.matchCase")}</TooltipContent>
+        </Tooltip>
+
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant={useRegex ? "secondary" : "ghost"}
+              size="icon-sm"
+              onClick={onToggleRegex}
+              aria-label={t("findReplace.useRegex")}
+              aria-pressed={useRegex}
+              title={t("findReplace.useRegex")}
+            >
+              <Regex className="size-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{t("findReplace.useRegex")}</TooltipContent>
+        </Tooltip>
+
+        <Select value={searchTarget} onValueChange={onSearchTargetChange}>
+          <SelectTrigger
+            className="h-7 min-w-0 flex-1 text-xs sm:w-28 sm:flex-none"
+            aria-label={t("findReplace.searchIn")}
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="translation">{t("findReplace.translationText")}</SelectItem>
+            <SelectItem value="original">{t("findReplace.originalText")}</SelectItem>
+            <SelectItem value="both">{t("findReplace.bothTexts")}</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
     </div>
   );
 }
