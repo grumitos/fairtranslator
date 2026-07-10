@@ -1,7 +1,9 @@
 use std::env;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Output, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -25,7 +27,9 @@ const DEFAULT_COMMAND_PATH: &str = "codex";
 const SIDECAR_BASENAME: &str = "codex";
 const CODEX_RUNTIME_WRAPPER_TOKEN_OVERHEAD: usize = 160;
 const CODEX_RESPONSE_HEADROOM_TOKENS: usize = 2048;
+const CODEX_STATUS_TIMEOUT: Duration = Duration::from_secs(30);
 const CODEX_EXEC_TIMEOUT: Duration = Duration::from_secs(300);
+const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 #[cfg(not(test))]
 type RuntimeAppHandle = AppHandle;
@@ -197,7 +201,7 @@ impl CodexProvider {
                 vec!["login".to_string(), "status".to_string()],
                 None,
                 None,
-                None,
+                Some(CODEX_STATUS_TIMEOUT),
             )
             .await?;
         let combined_output = format!(
@@ -275,7 +279,7 @@ impl CodexProvider {
                 vec!["models".to_string()],
                 None,
                 None,
-                None,
+                Some(CODEX_STATUS_TIMEOUT),
             )
             .await?;
 
@@ -424,7 +428,13 @@ impl CodexProvider {
         candidate: RuntimeCandidate,
     ) -> Result<ResolvedRuntime, RuntimeResolutionFailure> {
         let output = self
-            .run_command(&candidate, vec!["--version".to_string()], None, None, None)
+            .run_command(
+                &candidate,
+                vec!["--version".to_string()],
+                None,
+                None,
+                Some(CODEX_STATUS_TIMEOUT),
+            )
             .await
             .map_err(|error| RuntimeResolutionFailure {
                 candidate: candidate.clone(),
@@ -506,25 +516,26 @@ impl CodexProvider {
     ) -> Result<std::process::Output, AppError> {
         let current_dir = current_dir.map(Path::to_path_buf);
         let mut command = self.build_command(runtime, &args, current_dir.as_deref())?;
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let worker_cancelled = Arc::clone(&cancelled);
+        let (finished_tx, finished_rx) = mpsc::channel();
 
-        task::spawn_blocking(move || {
+        let task = task::spawn_blocking(move || {
+            let _completion = CommandCompletion(finished_tx);
             if stdin_text.is_some() {
                 command.stdin(Stdio::piped());
             }
             command.stdout(Stdio::piped()).stderr(Stdio::piped());
 
-            let mut child = command.spawn().map_err(AppError::from)?;
-            if let Some(stdin_text) = stdin_text {
-                if let Some(mut stdin) = child.stdin.take() {
-                    stdin
-                        .write_all(stdin_text.as_bytes())
-                        .map_err(AppError::from)?;
-                }
-            }
-            wait_with_optional_timeout(child, timeout)
-        })
-        .await
-        .map_err(|error| AppError::Project(format!("Failed to join Codex task: {error}")))?
+            let child = command.spawn().map_err(AppError::from)?;
+            wait_with_optional_timeout(child, stdin_text, timeout, &worker_cancelled)
+        });
+        let mut cancellation = CommandCancellationGuard::new(cancelled, finished_rx);
+        let result = task
+            .await
+            .map_err(|error| AppError::Project(format!("Failed to join Codex task: {error}")))?;
+        cancellation.disarm();
+        result
     }
 
     fn build_command(
@@ -546,30 +557,153 @@ impl CodexProvider {
     }
 }
 
+struct CommandCompletion(mpsc::Sender<()>);
+
+impl Drop for CommandCompletion {
+    fn drop(&mut self) {
+        let _ = self.0.send(());
+    }
+}
+
+struct CommandCancellationGuard {
+    cancelled: Arc<AtomicBool>,
+    finished: Option<mpsc::Receiver<()>>,
+}
+
+impl CommandCancellationGuard {
+    fn new(cancelled: Arc<AtomicBool>, finished: mpsc::Receiver<()>) -> Self {
+        Self {
+            cancelled,
+            finished: Some(finished),
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.finished = None;
+    }
+}
+
+impl Drop for CommandCancellationGuard {
+    fn drop(&mut self) {
+        let Some(finished) = self.finished.take() else {
+            return;
+        };
+        self.cancelled.store(true, Ordering::Release);
+        // Dropping the provider future must not release the batch run while its process still runs.
+        let _ = finished.recv();
+    }
+}
+
+enum ChildStop {
+    Completed(ExitStatus),
+    Cancelled(ExitStatus),
+    TimedOut(ExitStatus),
+}
+
 fn wait_with_optional_timeout(
-    mut child: std::process::Child,
+    mut child: Child,
+    stdin_text: Option<String>,
     timeout: Option<Duration>,
+    cancelled: &AtomicBool,
 ) -> Result<std::process::Output, AppError> {
-    let Some(timeout) = timeout else {
-        return child.wait_with_output().map_err(AppError::from);
-    };
+    let stdin_writer = child.stdin.take().map(|mut stdin| {
+        thread::spawn(move || {
+            if let Some(stdin_text) = stdin_text {
+                stdin.write_all(stdin_text.as_bytes())?;
+            }
+            Ok::<(), std::io::Error>(())
+        })
+    });
+    let stdout_reader = child.stdout.take().map(|mut stdout| {
+        thread::spawn(move || {
+            let mut bytes = Vec::new();
+            stdout.read_to_end(&mut bytes)?;
+            Ok::<Vec<u8>, std::io::Error>(bytes)
+        })
+    });
+    let stderr_reader = child.stderr.take().map(|mut stderr| {
+        thread::spawn(move || {
+            let mut bytes = Vec::new();
+            stderr.read_to_end(&mut bytes)?;
+            Ok::<Vec<u8>, std::io::Error>(bytes)
+        })
+    });
 
     let started_at = Instant::now();
-    loop {
-        if child.try_wait().map_err(AppError::from)?.is_some() {
-            return child.wait_with_output().map_err(AppError::from);
+    let stop = loop {
+        if let Some(status) = child.try_wait().map_err(AppError::from)? {
+            break ChildStop::Completed(status);
         }
-        if started_at.elapsed() >= timeout {
-            let _ = child.kill();
-            let output = child.wait_with_output().map_err(AppError::from)?;
-            return Err(AppError::Api(format!(
-                "Codex exec timed out after {} seconds: {}",
+        if cancelled.load(Ordering::Acquire) {
+            break ChildStop::Cancelled(terminate_child_tree(&mut child)?);
+        }
+        if timeout.is_some_and(|timeout| started_at.elapsed() >= timeout) {
+            break ChildStop::TimedOut(terminate_child_tree(&mut child)?);
+        }
+        thread::sleep(PROCESS_POLL_INTERVAL);
+    };
+
+    let _stdin_result = join_io_thread(stdin_writer, "stdin")?;
+    let stdout = join_io_thread(stdout_reader, "stdout")?.unwrap_or_default();
+    let stderr = join_io_thread(stderr_reader, "stderr")?.unwrap_or_default();
+    let status = match stop {
+        ChildStop::Completed(status)
+        | ChildStop::Cancelled(status)
+        | ChildStop::TimedOut(status) => status,
+    };
+    let output = Output {
+        status,
+        stdout,
+        stderr,
+    };
+
+    match stop {
+        ChildStop::Completed(_) => Ok(output),
+        ChildStop::Cancelled(_) => Err(AppError::Api("Codex command cancelled".to_string())),
+        ChildStop::TimedOut(_) => {
+            let timeout = timeout.expect("timed out command must have a timeout");
+            Err(AppError::Api(format!(
+                "Codex command timed out after {} seconds: {}",
                 timeout.as_secs(),
                 command_output_detail(&output)
-            )));
+            )))
         }
-        thread::sleep(Duration::from_millis(250));
     }
+}
+
+fn join_io_thread<T>(
+    handle: Option<thread::JoinHandle<std::io::Result<T>>>,
+    stream: &str,
+) -> Result<Option<T>, AppError> {
+    let Some(handle) = handle else {
+        return Ok(None);
+    };
+    handle
+        .join()
+        .map_err(|_| AppError::Project(format!("Codex {stream} worker panicked")))?
+        .map(Some)
+        .map_err(AppError::from)
+}
+
+fn terminate_child_tree(child: &mut Child) -> Result<ExitStatus, AppError> {
+    #[cfg(windows)]
+    {
+        let taskkill = Command::new("taskkill")
+            .args(["/PID", &child.id().to_string(), "/T", "/F"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        if !taskkill.is_ok_and(|status| status.success()) {
+            let _ = child.kill();
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = child.kill();
+    }
+
+    child.wait().map_err(AppError::from)
 }
 
 fn normalize_optional(value: String) -> Option<String> {
@@ -581,8 +715,25 @@ fn normalize_optional(value: String) -> Option<String> {
     }
 }
 
-fn temp_codex_dir() -> PathBuf {
-    std::env::temp_dir().join(format!("fairtranslator-codex-{}", uuid::Uuid::new_v4()))
+struct CodexTempDir(PathBuf);
+
+impl CodexTempDir {
+    fn create() -> Result<Self, AppError> {
+        let path =
+            std::env::temp_dir().join(format!("fairtranslator-codex-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&path)?;
+        Ok(Self(path))
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for CodexTempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 fn status_from_failure(failure: RuntimeResolutionFailure) -> CodexRuntimeStatus {
@@ -835,12 +986,11 @@ impl TranslationProvider for CodexProvider {
             context,
         )?;
         let prompt = bundle.render_single_prompt();
-        let temp_dir = temp_codex_dir();
-        std::fs::create_dir_all(&temp_dir)?;
+        let temp_dir = CodexTempDir::create()?;
 
         let result = async {
-            let schema_path = temp_dir.join("schema.json");
-            let output_path = temp_dir.join("result.json");
+            let schema_path = temp_dir.path().join("schema.json");
+            let output_path = temp_dir.path().join("result.json");
             std::fs::write(
                 &schema_path,
                 serde_json::to_vec_pretty(
@@ -857,7 +1007,7 @@ impl TranslationProvider for CodexProvider {
                     prompt,
                     schema_path,
                     output_path.clone(),
-                    temp_dir.clone(),
+                    temp_dir.path().to_path_buf(),
                 )
                 .await?;
 
@@ -869,7 +1019,6 @@ impl TranslationProvider for CodexProvider {
             parse_exec_response(&raw_response, &bundle)
         }
         .await;
-        let _ = std::fs::remove_dir_all(&temp_dir);
 
         result
     }
@@ -878,6 +1027,160 @@ impl TranslationProvider for CodexProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    fn process_is_running(pid: u32) -> bool {
+        Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                &format!(
+                    "if (Get-Process -Id {pid} -ErrorAction SilentlyContinue) {{ exit 0 }} else {{ exit 1 }}"
+                ),
+            ])
+            .status()
+            .is_ok_and(|status| status.success())
+    }
+
+    #[cfg(windows)]
+    fn kill_test_process(pid: u32) {
+        let _ = Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn cancelling_codex_kills_waits_cleans_up_and_allows_the_next_run() {
+        use crate::services::batch_lifecycle::{BatchRunControl, BatchRunLifecycle};
+        use std::sync::Arc;
+
+        let root = std::env::temp_dir().join(format!(
+            "fairtranslator-codex-cancel-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let ready_path = root.join("ready.txt");
+        let temp_path_marker = root.join("temp-path.txt");
+        let success_path = root.join("succeed");
+        let script_path = root.join("codex-helper.cmd");
+        let ps_ready_path = ready_path.to_string_lossy().replace('\'', "''");
+        std::fs::write(
+            &script_path,
+            format!(
+                r#"@echo off
+if "%~1"=="--version" (
+  echo codex-test 1.0
+  exit /b 0
+)
+if "%~1"=="login" (
+  echo Logged in using test helper
+  exit /b 0
+)
+if not "%~1"=="exec" exit /b 1
+set "OUT="
+:args
+if "%~1"=="" goto run
+if "%~1"=="--output-last-message" (
+  set "OUT=%~2"
+  shift
+)
+shift
+goto args
+:run
+if exist "{success_path}" (
+  >"%OUT%" echo {{"translations":[{{"k":1,"t":"Hola"}}]}}
+  exit /b 0
+)
+>"{temp_path_marker}" echo %CD%
+powershell.exe -NoProfile -NonInteractive -Command "$stream = [IO.File]::Open((Join-Path (Get-Location) 'lock'), [IO.FileMode]::Create, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None); Set-Content -LiteralPath '{ps_ready_path}' -Value $PID; while ($true) {{ Start-Sleep -Milliseconds 100 }}"
+"#,
+                success_path = success_path.display(),
+                temp_path_marker = temp_path_marker.display(),
+            ),
+        )
+        .unwrap();
+
+        let provider = CodexProvider::new(
+            Some(script_path.to_string_lossy().into_owned()),
+            None,
+            None,
+            None,
+        );
+        let requests = [TranslationRequest {
+            entry_id: "entry-1".to_string(),
+            file_context: String::new(),
+            text: "Hello".to_string(),
+            notes: String::new(),
+        }];
+        let context = TranslationBatchContext::default();
+        let control = Arc::new(BatchRunControl::new());
+        let first_guard = control.try_acquire().unwrap();
+        let first_run_id = first_guard.run_id();
+        let cancel_control = Arc::clone(&control);
+        let cancel_ready_path = ready_path.clone();
+        let cancel_task = tokio::spawn(async move {
+            for _ in 0..200 {
+                if cancel_ready_path.is_file() {
+                    assert!(cancel_control.cancel(first_run_id));
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            panic!("controlled Codex helper did not start");
+        });
+        let mut first_lifecycle =
+            BatchRunLifecycle::new(&control, first_run_id, &["Map001.json".to_string()]);
+        assert!(first_lifecycle
+            .wait_or_cancel(provider.translate_batch(&requests, "en", "es", &[], &context))
+            .await
+            .is_none());
+        cancel_task.await.unwrap();
+        drop(first_lifecycle);
+        drop(first_guard);
+
+        let helper_pid: u32 = std::fs::read_to_string(&ready_path)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let first_temp_dir =
+            PathBuf::from(std::fs::read_to_string(&temp_path_marker).unwrap().trim());
+        let helper_survived_cancel = process_is_running(helper_pid);
+        let temp_survived_cancel = first_temp_dir.exists();
+
+        std::fs::write(&success_path, "").unwrap();
+        let second_guard = control.try_acquire().unwrap();
+        let mut second_lifecycle = BatchRunLifecycle::new(
+            &control,
+            second_guard.run_id(),
+            &["Map001.json".to_string()],
+        );
+        let second = second_lifecycle
+            .wait_or_cancel(provider.translate_batch(&requests, "en", "es", &[], &context))
+            .await
+            .expect("a stale cancellation must not target the next run")
+            .unwrap();
+        assert_eq!(second[0].translated_text, "Hola");
+
+        if helper_survived_cancel {
+            kill_test_process(helper_pid);
+        }
+        for _ in 0..20 {
+            if !first_temp_dir.exists() && !process_is_running(helper_pid) {
+                break;
+            }
+            let _ = std::fs::remove_dir_all(&first_temp_dir);
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert!(!helper_survived_cancel, "cancel left the helper running");
+        assert!(!temp_survived_cancel, "cancel left Codex temp files behind");
+    }
 
     #[test]
     fn test_default_command_path_and_model_normalization() {
@@ -901,7 +1204,8 @@ mod tests {
     }
 
     #[test]
-    fn test_codex_exec_timeout_is_bounded() {
+    fn test_codex_command_timeouts_are_bounded() {
+        assert_eq!(CODEX_STATUS_TIMEOUT.as_secs(), 30);
         assert_eq!(CODEX_EXEC_TIMEOUT.as_secs(), 300);
     }
 
