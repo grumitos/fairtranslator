@@ -8,6 +8,7 @@ use serde_json::{Map, Value};
 
 use crate::error::AppError;
 use crate::models::{Engine, EntryStatus, Project};
+use crate::parser;
 use crate::parser::rpgmaker::{
     classify_file, classify_relative_path, parse_mv_mz_game, parse_plugins_js, render_plugins_js,
     FileKind, CODE_CHANGE_NAME, CODE_CHANGE_NICKNAME, CODE_CHANGE_PROFILE, CODE_CONTROL_VARIABLES,
@@ -50,6 +51,7 @@ const CODE_PLAY_BGM: i64 = 241;
 const CODE_PLAY_BGS: i64 = 245;
 const CODE_PLAY_ME: i64 = 249;
 const CODE_PLAY_SE: i64 = 250;
+const MAX_SOURCE_DRIFT_EXAMPLES: usize = 5;
 
 // ---------------------------------------------------------------------------
 // ExportResult
@@ -148,20 +150,22 @@ fn exporter_for_engine(engine: &Engine) -> Result<&'static dyn EngineExporter, A
 /// Only entries with a non-empty translation and a status other than
 /// `Untranslated` are applied. Original files are never modified.
 pub fn export_project(project: &Project, output_dir: &Path) -> Result<ExportResult, AppError> {
+    let game_dir = validate_game_dir(project)?;
+    validate_project_source_files(project, &game_dir)?;
+    validate_project_source_snapshot(project, &game_dir)?;
     let exporter = exporter_for_engine(&project.engine)?;
     exporter.export_project(project, output_dir)
 }
 
 fn export_mv_mz_project(project: &Project, output_dir: &Path) -> Result<ExportResult, AppError> {
-    let game_dir = validate_game_dir(project)?;
-    prepare_export_destination(&game_dir, output_dir)?;
-    validate_project_source_files(project, &game_dir)?;
+    let game_dir = PathBuf::from(&project.game_dir);
     let validation = translation_integrity::validate_project_for_export(project);
     if validation.has_errors() {
         return Err(AppError::Project(
             translation_integrity::summarize_export_errors(&validation.errors),
         ));
     }
+    prepare_export_destination(&game_dir, output_dir)?;
     if let Err(error) = copy_dir_recursive(&game_dir, output_dir) {
         let _ = std::fs::remove_dir_all(output_dir);
         return Err(error);
@@ -266,15 +270,14 @@ fn export_xp_project(project: &Project, output_dir: &Path) -> Result<ExportResul
 }
 
 fn export_legacy_project(project: &Project, output_dir: &Path) -> Result<ExportResult, AppError> {
-    let game_dir = validate_game_dir(project)?;
-    prepare_export_destination(&game_dir, output_dir)?;
-    validate_project_source_files(project, &game_dir)?;
+    let game_dir = PathBuf::from(&project.game_dir);
     let validation = translation_integrity::validate_project_for_export(project);
     if validation.has_errors() {
         return Err(AppError::Project(
             translation_integrity::summarize_export_errors(&validation.errors),
         ));
     }
+    prepare_export_destination(&game_dir, output_dir)?;
     if let Err(error) = copy_dir_recursive(&game_dir, output_dir) {
         let _ = std::fs::remove_dir_all(output_dir);
         return Err(error);
@@ -380,6 +383,76 @@ fn validate_project_source_files(project: &Project, game_dir: &Path) -> Result<(
     Err(AppError::NotFound(format!(
         "Cannot export because source game files are missing: {}",
         missing_files.join(", ")
+    )))
+}
+
+fn validate_project_source_snapshot(project: &Project, game_dir: &Path) -> Result<(), AppError> {
+    let current = parser::parse_game(game_dir)?;
+    if current.engine != project.engine {
+        return Err(AppError::Project(format!(
+            "Game engine changed since import: project uses {:?}, current source is {:?}. Re-import the game before exporting.",
+            project.engine, current.engine
+        )));
+    }
+
+    let current_paths = current
+        .files
+        .iter()
+        .map(|file| file.relative_path.as_str())
+        .collect::<HashSet<_>>();
+    let current_entries = current
+        .files
+        .iter()
+        .flat_map(|file| {
+            file.entries.iter().map(|entry| {
+                (
+                    (file.relative_path.as_str(), entry.id.as_str()),
+                    entry.original.as_str(),
+                )
+            })
+        })
+        .collect::<HashMap<_, _>>();
+
+    let mut drift_count = 0usize;
+    let mut examples = Vec::new();
+    for file in &project.files {
+        for entry in &file.entries {
+            if entry.status == EntryStatus::Untranslated || entry.translation.trim().is_empty() {
+                continue;
+            }
+
+            let reason = if !current_paths.contains(file.relative_path.as_str()) {
+                Some("file or translatable content missing")
+            } else {
+                match current_entries.get(&(file.relative_path.as_str(), entry.id.as_str())) {
+                    None => Some("entry missing"),
+                    Some(original) if *original != entry.original => Some("original text changed"),
+                    Some(_) => None,
+                }
+            };
+
+            if let Some(reason) = reason {
+                drift_count += 1;
+                if examples.len() < MAX_SOURCE_DRIFT_EXAMPLES {
+                    examples.push(format!("{} :: {} ({reason})", file.relative_path, entry.id));
+                }
+            }
+        }
+    }
+
+    if drift_count == 0 {
+        return Ok(());
+    }
+
+    let remaining = drift_count.saturating_sub(examples.len());
+    let suffix = if remaining == 0 {
+        String::new()
+    } else {
+        format!("; and {remaining} more")
+    };
+    Err(AppError::Project(format!(
+        "Source game changed since import: {drift_count} translated entries no longer match. Re-import the game before exporting. {}{suffix}",
+        examples.join("; ")
     )))
 }
 
@@ -2407,6 +2480,11 @@ mod tests {
         serde_json::to_value(value).unwrap()
     }
 
+    fn write_mv_engine_marker(game_dir: &Path) {
+        fs::create_dir_all(game_dir.join("js")).unwrap();
+        fs::write(game_dir.join("js").join("rpg_core.js"), "").unwrap();
+    }
+
     #[test]
     fn test_collect_translations_skips_whitespace_only_entries() {
         let project = Project {
@@ -3381,6 +3459,7 @@ mod tests {
         let pictures_dir = temp_dir.join("img").join("pictures");
         fs::create_dir_all(&data_dir).unwrap();
         fs::create_dir_all(&pictures_dir).unwrap();
+        write_mv_engine_marker(&temp_dir);
         fs::write(
             data_dir.join("System.json"),
             r#"{"gameTitle":"Game Title","terms":{}}"#,
@@ -3449,6 +3528,7 @@ mod tests {
         let characters_dir = temp_dir.join("img").join("characters");
         fs::create_dir_all(&data_dir).unwrap();
         fs::create_dir_all(&characters_dir).unwrap();
+        write_mv_engine_marker(&temp_dir);
         fs::write(
             data_dir.join("System.json"),
             r#"{"gameTitle":"Game Title","terms":{}}"#,
@@ -3517,6 +3597,7 @@ mod tests {
         let characters_dir = temp_dir.join("img").join("characters");
         fs::create_dir_all(&data_dir).unwrap();
         fs::create_dir_all(&characters_dir).unwrap();
+        write_mv_engine_marker(&temp_dir);
         fs::write(
             data_dir.join("System.json"),
             r#"{"gameTitle":"Game Title","terms":{}}"#,
@@ -3589,6 +3670,7 @@ mod tests {
         let pictures_dir = temp_dir.join("img").join("pictures");
         fs::create_dir_all(&data_dir).unwrap();
         fs::create_dir_all(&pictures_dir).unwrap();
+        write_mv_engine_marker(&temp_dir);
         fs::write(
             data_dir.join("System.json"),
             r#"{"gameTitle":"Game Title","terms":{}}"#,
@@ -3656,6 +3738,7 @@ mod tests {
         fs::create_dir_all(&data_dir).unwrap();
         fs::create_dir_all(&bgm_dir).unwrap();
         fs::create_dir_all(&bgs_dir).unwrap();
+        write_mv_engine_marker(&temp_dir);
         fs::write(
             data_dir.join("System.json"),
             r#"{"gameTitle":"Game Title","terms":{},"titleBgm":{"name":"テーマ(通常)","volume":90,"pitch":100,"pan":0}}"#,
@@ -3833,6 +3916,158 @@ mod tests {
         assert!(msg.contains("must be outside"));
 
         let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_export_project_rejects_source_drift_before_creating_output() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "fairtl_export_source_drift_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        let data_dir = temp_dir.join("data");
+        let js_dir = temp_dir.join("js");
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::create_dir_all(&js_dir).unwrap();
+        fs::write(js_dir.join("rpg_core.js"), "").unwrap();
+
+        let mut events = vec![Value::Null];
+        for id in 1..=6 {
+            events.push(json!({
+                "id": id,
+                "name": format!("EV{id:03}"),
+                "pages": [{"list": [
+                    {"code": 401, "parameters": [format!("Original {id}")]},
+                    {"code": 0, "parameters": []}
+                ]}]
+            }));
+        }
+        fs::write(
+            data_dir.join("Map001.json"),
+            serde_json::to_string_pretty(&json!({"displayName": "", "events": events})).unwrap(),
+        )
+        .unwrap();
+
+        let parsed = crate::parser::parse_game(&temp_dir).unwrap();
+        let mut project = Project {
+            id: "test".into(),
+            name: "Source Drift".into(),
+            source_lang: "en".into(),
+            target_lang: "es".into(),
+            engine: parsed.engine,
+            game_dir: temp_dir.to_string_lossy().into(),
+            files: parsed.files,
+            glossary: vec![],
+            style_guide: vec![],
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        for entry in project
+            .files
+            .iter_mut()
+            .flat_map(|file| file.entries.iter_mut())
+        {
+            entry.translation = format!("Translated {}", entry.id);
+            entry.status = EntryStatus::Reviewed;
+        }
+
+        let mut changed_events = vec![Value::Null];
+        for id in 1..=6 {
+            let list = if id == 1 {
+                vec![
+                    json!({"code": 401, "parameters": ["Inserted before"]}),
+                    json!({"code": 401, "parameters": ["Externally changed 1"]}),
+                    json!({"code": 0, "parameters": []}),
+                ]
+            } else {
+                vec![
+                    json!({"code": 401, "parameters": [format!("Externally changed {id}")]}),
+                    json!({"code": 0, "parameters": []}),
+                ]
+            };
+            changed_events.push(json!({
+                "id": id,
+                "name": format!("EV{id:03}"),
+                "pages": [{"list": list}]
+            }));
+        }
+        let changed_source =
+            serde_json::to_string_pretty(&json!({"displayName": "", "events": changed_events}))
+                .unwrap();
+        fs::write(data_dir.join("Map001.json"), &changed_source).unwrap();
+
+        let output_dir = std::env::temp_dir().join(format!(
+            "fairtl_export_source_drift_out_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        let error = export_project(&project, &output_dir).unwrap_err();
+        let message = error.to_string();
+
+        assert!(message.contains("Source game changed since import"));
+        assert!(message.contains("6 translated entries"));
+        assert!(message.contains("Map001:1:0:text:0"));
+        assert!(message.contains("and 1 more"));
+        assert!(!message.contains("Map001:6:0:text:0"));
+        assert!(!output_dir.exists());
+        assert_eq!(
+            fs::read_to_string(data_dir.join("Map001.json")).unwrap(),
+            changed_source
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+        let _ = fs::remove_dir_all(&output_dir);
+    }
+
+    #[test]
+    fn test_export_project_rejects_engine_change_before_creating_output() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "fairtl_export_engine_drift_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        let data_dir = temp_dir.join("data");
+        let js_dir = temp_dir.join("js");
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::create_dir_all(&js_dir).unwrap();
+        fs::write(js_dir.join("rpg_core.js"), "").unwrap();
+        let map_source = r#"{"displayName":"","events":[null,{"id":1,"pages":[{"list":[{"code":401,"parameters":["Original"]},{"code":0,"parameters":[]}]}]}]}"#;
+        fs::write(data_dir.join("Map001.json"), map_source).unwrap();
+
+        let parsed = crate::parser::parse_game(&temp_dir).unwrap();
+        let mut project = Project {
+            id: "test".into(),
+            name: "Engine Drift".into(),
+            source_lang: "en".into(),
+            target_lang: "es".into(),
+            engine: parsed.engine,
+            game_dir: temp_dir.to_string_lossy().into(),
+            files: parsed.files,
+            glossary: vec![],
+            style_guide: vec![],
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        let entry = &mut project.files[0].entries[0];
+        entry.translation = "Traducido".into();
+        entry.status = EntryStatus::Reviewed;
+
+        fs::remove_file(js_dir.join("rpg_core.js")).unwrap();
+        fs::write(js_dir.join("rmmz_core.js"), "").unwrap();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fairtl_export_engine_drift_out_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        let error = export_project(&project, &output_dir).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("Game engine changed since import"));
+        assert!(!output_dir.exists());
+        assert_eq!(
+            fs::read_to_string(data_dir.join("Map001.json")).unwrap(),
+            map_source
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+        let _ = fs::remove_dir_all(&output_dir);
     }
 
     #[test]
