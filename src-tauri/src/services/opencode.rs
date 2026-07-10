@@ -10,15 +10,14 @@ use crate::services::ai_models::{self, ProviderModel};
 use crate::services::compact_prompt;
 use crate::services::endpoint::normalize_https_endpoint_override;
 use crate::services::provider::{
-    approximate_token_count, TranslationBatchContext, TranslationProvider, TranslationRequest,
-    TranslationResponse,
+    approximate_token_count, provider_http_client, TranslationBatchContext, TranslationProvider,
+    TranslationRequest, TranslationResponse,
 };
 
 const MAX_BATCH_SIZE: usize = 16;
 const OPENCODE_WRAPPER_TOKEN_OVERHEAD: usize = 128;
 const OPENCODE_RESPONSE_HEADROOM_TOKENS: usize = 2048;
 const OPENCODE_MAX_OUTPUT_TOKENS: usize = 4096;
-const OPENCODE_REQUEST_TIMEOUT_SECS: u64 = 180;
 const OPENCODE_TRANSIENT_RETRIES: usize = 2;
 const DEFAULT_ENDPOINT_BASE: &str = "https://opencode.ai/zen/go/v1";
 
@@ -316,10 +315,7 @@ impl OpenCodeProvider {
 }
 
 fn opencode_client() -> Result<Client, AppError> {
-    Client::builder()
-        .timeout(Duration::from_secs(OPENCODE_REQUEST_TIMEOUT_SECS))
-        .build()
-        .map_err(AppError::from)
+    provider_http_client()
 }
 
 #[derive(Debug)]

@@ -3,9 +3,19 @@
 /// Each provider implements this trait so the batch
 /// translation system can work with any backend transparently.
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 use crate::error::AppError;
 use crate::models::{GlossaryTerm, ProviderType};
+
+const PROVIDER_REQUEST_TIMEOUT: Duration = Duration::from_secs(180);
+
+pub(crate) fn provider_http_client() -> Result<reqwest::Client, AppError> {
+    reqwest::Client::builder()
+        .timeout(PROVIDER_REQUEST_TIMEOUT)
+        .build()
+        .map_err(AppError::from)
+}
 
 /// Provider settings exposed over IPC. API keys are always redacted.
 #[derive(Debug, Clone, Serialize, Deserialize)]

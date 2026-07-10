@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 use crate::error::AppError;
 use crate::models::GlossaryTerm;
 use crate::services::provider::{
-    TranslationBatchContext, TranslationProvider, TranslationRequest, TranslationResponse,
+    provider_http_client, TranslationBatchContext, TranslationProvider, TranslationRequest,
+    TranslationResponse,
 };
 use crate::services::translation_replacements::{
     protect_glossary_terms, protect_special_literals, restore_replacements, TextReplacement,
@@ -27,12 +28,12 @@ pub struct GoogleProvider {
 }
 
 impl GoogleProvider {
-    pub fn new(api_key: String, endpoint: Option<String>) -> Self {
-        Self {
-            client: Client::new(),
+    pub fn new(api_key: String, endpoint: Option<String>) -> Result<Self, AppError> {
+        Ok(Self {
+            client: provider_http_client()?,
             api_key,
             endpoint: endpoint.unwrap_or_else(|| DEFAULT_ENDPOINT.to_string()),
-        }
+        })
     }
 
     /// Google Translate uses ISO 639-1 codes directly for most languages.
@@ -214,7 +215,7 @@ mod tests {
 
     #[test]
     fn test_default_endpoint() {
-        let provider = GoogleProvider::new("test-key".to_string(), None);
+        let provider = GoogleProvider::new("test-key".to_string(), None).unwrap();
         assert_eq!(provider.endpoint, DEFAULT_ENDPOINT);
     }
 
@@ -223,7 +224,8 @@ mod tests {
         let provider = GoogleProvider::new(
             "test-key".to_string(),
             Some("https://custom.google.com/v2".to_string()),
-        );
+        )
+        .unwrap();
         assert_eq!(provider.endpoint, "https://custom.google.com/v2");
     }
 
@@ -236,7 +238,7 @@ mod tests {
 
     #[test]
     fn test_provider_name() {
-        let provider = GoogleProvider::new("test-key".to_string(), None);
+        let provider = GoogleProvider::new("test-key".to_string(), None).unwrap();
         assert_eq!(provider.name(), "Google Translate");
     }
 }

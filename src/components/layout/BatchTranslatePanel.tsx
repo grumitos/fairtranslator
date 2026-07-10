@@ -725,7 +725,9 @@ export function BatchTranslatePanel({
                 </div>
               )}
               {!isTranslating &&
-                (progress.cancelled || progress.chunksProcessed === progress.totalChunks) && (
+                (progress.cancelled ||
+                  progress.failedEntries > 0 ||
+                  progress.chunksProcessed === progress.totalChunks) && (
                 <div className="space-y-2">
                   {progress.cancelled ? (
                     <div className="flex items-start gap-2 text-xs text-warning" role="status">

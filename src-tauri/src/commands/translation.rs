@@ -514,14 +514,17 @@ fn create_provider(
         }
         ProviderType::Deepl => {
             use crate::services::deepl::DeepLProvider;
-            Ok(Box::new(DeepLProvider::new(info.api_key.clone(), endpoint)))
+            Ok(Box::new(DeepLProvider::new(
+                info.api_key.clone(),
+                endpoint,
+            )?))
         }
         ProviderType::Google => {
             use crate::services::google::GoogleProvider;
             Ok(Box::new(GoogleProvider::new(
                 info.api_key.clone(),
                 endpoint,
-            )))
+            )?))
         }
         ProviderType::Codex => {
             use crate::services::codex::CodexProvider;
@@ -949,32 +952,96 @@ pub async fn translate_batch_start(
     }
 
     let translation_provider = create_provider(&app, &info)?;
-    ensure_current_project_id(&state.project, &project_id)?;
-    translation_provider.validate().await?;
-    ensure_current_project_id(&state.project, &project_id)?;
     let provider_name = translation_provider.name().to_string();
 
     let project_state = state.project.clone();
     tauri::async_runtime::spawn(async move {
         let _run_guard = run_guard;
-        let progress_app = app.clone();
-        let terminal = run_batch_translation(
-            project_state,
-            project_id,
-            translation_provider,
-            provider_name,
-            source_lang,
-            target_lang,
-            glossary,
-            batches,
-            total_entries,
-            &BATCH_RUN_CONTROL,
-            run_id,
-            move |progress| {
-                let _ = progress_app.emit(BATCH_PROGRESS_EVENT, progress);
+        let batch_paths = batches
+            .iter()
+            .map(|batch| batch.relative_path.clone())
+            .collect::<Vec<_>>();
+        let mut lifecycle = BatchRunLifecycle::new(&BATCH_RUN_CONTROL, run_id, &batch_paths);
+        let terminal = match lifecycle
+            .wait_or_cancel(translation_provider.validate())
+            .await
+        {
+            None => make_progress(
+                run_id,
+                true,
+                0,
+                total_files,
+                0,
+                total_chunks,
+                0,
+                total_entries,
+                String::new(),
+                0,
+                0,
+                0,
+                0,
+                &[],
+            ),
+            Some(Err(error)) => make_progress(
+                run_id,
+                false,
+                0,
+                total_files,
+                0,
+                total_chunks,
+                0,
+                total_entries,
+                String::new(),
+                0,
+                0,
+                total_entries,
+                total_chunks,
+                &[format!(
+                    "No se pudo validar el proveedor '{}': {error}",
+                    provider_name
+                )],
+            ),
+            Some(Ok(())) => match ensure_current_project_id(&project_state, &project_id) {
+                Err(error) => make_progress(
+                    run_id,
+                    true,
+                    0,
+                    total_files,
+                    0,
+                    total_chunks,
+                    0,
+                    total_entries,
+                    String::new(),
+                    0,
+                    0,
+                    0,
+                    0,
+                    &[format!(
+                        "Se canceló la traducción batch porque el proyecto cambió: {error}"
+                    )],
+                ),
+                Ok(()) => {
+                    let progress_app = app.clone();
+                    run_batch_translation(
+                        project_state,
+                        project_id,
+                        translation_provider,
+                        provider_name,
+                        source_lang,
+                        target_lang,
+                        glossary,
+                        batches,
+                        total_entries,
+                        &BATCH_RUN_CONTROL,
+                        run_id,
+                        move |progress| {
+                            let _ = progress_app.emit(BATCH_PROGRESS_EVENT, progress);
+                        },
+                    )
+                    .await
+                }
             },
-        )
-        .await;
+        };
         let _ = app.emit(BATCH_COMPLETE_EVENT, &terminal);
     });
 

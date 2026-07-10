@@ -201,4 +201,16 @@ describe("BatchTranslatePanel", () => {
     expect(screen.getByText("Traducción cancelada")).toBeInTheDocument();
     expect(screen.getByText("Traducidas antes de cancelar: 1/3")).toBeInTheDocument();
   }, 10_000);
+
+  it("shows provider validation failures before any chunk starts", () => {
+    mocks.translation.progress = makeProgress({
+      failedEntries: 3,
+      failedBatches: 3,
+      warnings: ["No se pudo validar el proveedor 'OpenAI': timeout"],
+    });
+    render(<BatchTranslatePanel open onOpenChange={() => undefined} onConfigureProvider={mocks.configureProvider} />);
+
+    expect(screen.getByText("No se pudo validar el proveedor 'OpenAI': timeout")).toBeInTheDocument();
+    expect(screen.getByText("Traducidas: 0/3. Fallidas: 3")).toBeInTheDocument();
+  }, 10_000);
 });

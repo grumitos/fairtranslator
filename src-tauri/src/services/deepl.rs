@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 use crate::error::AppError;
 use crate::models::GlossaryTerm;
 use crate::services::provider::{
-    TranslationBatchContext, TranslationProvider, TranslationRequest, TranslationResponse,
+    provider_http_client, TranslationBatchContext, TranslationProvider, TranslationRequest,
+    TranslationResponse,
 };
 use crate::services::translation_replacements::{
     protect_special_literals, restore_replacements, TextReplacement,
@@ -30,7 +31,7 @@ pub struct DeepLProvider {
 }
 
 impl DeepLProvider {
-    pub fn new(api_key: String, endpoint: Option<String>) -> Self {
+    pub fn new(api_key: String, endpoint: Option<String>) -> Result<Self, AppError> {
         let endpoint = endpoint.unwrap_or_else(|| {
             // DeepL free API keys end with ":fx"
             if api_key.ends_with(":fx") {
@@ -40,11 +41,11 @@ impl DeepLProvider {
             }
         });
 
-        Self {
-            client: Client::new(),
+        Ok(Self {
+            client: provider_http_client()?,
             api_key,
             endpoint,
-        }
+        })
     }
 
     /// Convert ISO 639-1 language codes to DeepL's expected format.
@@ -234,13 +235,13 @@ mod tests {
 
     #[test]
     fn test_free_key_detection() {
-        let provider = DeepLProvider::new("abc123:fx".to_string(), None);
+        let provider = DeepLProvider::new("abc123:fx".to_string(), None).unwrap();
         assert_eq!(provider.endpoint, FREE_ENDPOINT);
     }
 
     #[test]
     fn test_pro_key_detection() {
-        let provider = DeepLProvider::new("abc123-pro-key".to_string(), None);
+        let provider = DeepLProvider::new("abc123-pro-key".to_string(), None).unwrap();
         assert_eq!(provider.endpoint, PRO_ENDPOINT);
     }
 
@@ -249,7 +250,8 @@ mod tests {
         let provider = DeepLProvider::new(
             "test-key".to_string(),
             Some("https://custom.deepl.com/v2/translate".to_string()),
-        );
+        )
+        .unwrap();
         assert_eq!(provider.endpoint, "https://custom.deepl.com/v2/translate");
     }
 
@@ -264,7 +266,7 @@ mod tests {
 
     #[test]
     fn test_provider_name() {
-        let provider = DeepLProvider::new("test:fx".to_string(), None);
+        let provider = DeepLProvider::new("test:fx".to_string(), None).unwrap();
         assert_eq!(provider.name(), "DeepL");
     }
 

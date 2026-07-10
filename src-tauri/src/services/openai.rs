@@ -10,8 +10,8 @@ use crate::models::GlossaryTerm;
 use crate::services::ai_models::{self, ProviderModel};
 use crate::services::compact_prompt;
 use crate::services::provider::{
-    approximate_token_count, TranslationBatchContext, TranslationProvider, TranslationRequest,
-    TranslationResponse,
+    approximate_token_count, provider_http_client, TranslationBatchContext, TranslationProvider,
+    TranslationRequest, TranslationResponse,
 };
 
 /// Maximum number of entries to send in a single API call.
@@ -46,7 +46,7 @@ impl OpenAiProvider {
             .ok_or_else(|| AppError::Api("Select an OpenAI model before translating".into()))?;
 
         Ok(Self {
-            client: Client::new(),
+            client: provider_http_client()?,
             api_key,
             model,
             endpoint: endpoint.unwrap_or_else(|| DEFAULT_ENDPOINT.to_string()),
@@ -76,7 +76,7 @@ impl OpenAiProvider {
         organization: Option<String>,
         project: Option<String>,
     ) -> Result<Vec<ProviderModel>, AppError> {
-        let client = Client::new();
+        let client = provider_http_client()?;
         let endpoint = endpoint.unwrap_or_else(|| DEFAULT_ENDPOINT.to_string());
         let mut headers = Vec::new();
         if let Some(organization) = organization.as_deref() {

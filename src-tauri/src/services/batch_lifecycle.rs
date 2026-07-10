@@ -1,6 +1,8 @@
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use tokio::sync::Notify;
 
 use crate::error::AppError;
 use crate::models::{GlossaryTerm, Project};
@@ -13,6 +15,7 @@ pub(crate) struct BatchRunControl {
     next_run_id: AtomicU64,
     active_run_id: AtomicU64,
     cancelled_run_id: AtomicU64,
+    cancel_notify: Notify,
 }
 
 impl BatchRunControl {
@@ -21,6 +24,7 @@ impl BatchRunControl {
             next_run_id: AtomicU64::new(1),
             active_run_id: AtomicU64::new(0),
             cancelled_run_id: AtomicU64::new(0),
+            cancel_notify: Notify::const_new(),
         }
     }
 
@@ -40,11 +44,18 @@ impl BatchRunControl {
             return false;
         }
         self.cancelled_run_id.fetch_max(run_id, Ordering::AcqRel);
+        self.cancel_notify.notify_one();
         true
     }
 
     fn is_cancelled(&self, run_id: u64) -> bool {
         self.cancelled_run_id.load(Ordering::Acquire) == run_id
+    }
+
+    async fn wait_for_cancellation(&self, run_id: u64) {
+        while !self.is_cancelled(run_id) {
+            self.cancel_notify.notified().await;
+        }
     }
 }
 
@@ -106,6 +117,21 @@ impl<'a> BatchRunLifecycle<'a> {
 
     pub(crate) fn cancel(&mut self) {
         self.cancelled = true;
+    }
+
+    pub(crate) async fn wait_or_cancel<T>(&mut self, future: impl Future<Output = T>) -> Option<T> {
+        if self.should_stop() {
+            return None;
+        }
+
+        tokio::select! {
+            biased;
+            _ = self.control.wait_for_cancellation(self.run_id) => {
+                self.cancelled = true;
+                None
+            }
+            output = future => Some(output),
+        }
     }
 
     pub(crate) fn record_processed_chunk(&mut self, file_path: &str) -> (usize, usize) {
@@ -199,15 +225,19 @@ pub(crate) async fn run_translation_chunk(
         return BatchChunkOutcome::ProjectChanged(error);
     }
 
-    let response_result = provider
-        .translate_batch(
+    let response_result = match lifecycle
+        .wait_or_cancel(provider.translate_batch(
             &batch.entries,
             source_lang,
             target_lang,
             glossary,
             &batch.context,
-        )
-        .await;
+        ))
+        .await
+    {
+        Some(result) => result,
+        None => return BatchChunkOutcome::Cancelled,
+    };
 
     if lifecycle.should_stop() {
         return BatchChunkOutcome::Cancelled;
@@ -258,6 +288,7 @@ pub(crate) async fn run_translation_chunk(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::future::pending;
     use std::sync::atomic::AtomicUsize;
 
     use crate::models::{Engine, EntryStatus, TranslationEntry, TranslationFile};
@@ -266,6 +297,30 @@ mod tests {
         control: Arc<BatchRunControl>,
         run_id: u64,
         calls: Arc<AtomicUsize>,
+    }
+
+    struct HangingProvider;
+
+    #[async_trait::async_trait]
+    impl TranslationProvider for HangingProvider {
+        async fn translate_batch(
+            &self,
+            _requests: &[TranslationRequest],
+            _source_lang: &str,
+            _target_lang: &str,
+            _glossary: &[GlossaryTerm],
+            _context: &TranslationBatchContext,
+        ) -> Result<Vec<TranslationResponse>, AppError> {
+            pending().await
+        }
+
+        fn name(&self) -> &'static str {
+            "hanging-test"
+        }
+
+        async fn validate(&self) -> Result<(), AppError> {
+            pending().await
+        }
     }
 
     #[async_trait::async_trait]
@@ -406,6 +461,77 @@ mod tests {
         drop(guard);
         let next = control.try_acquire().unwrap();
         assert!(!control.is_cancelled(next.run_id()));
+    }
+
+    #[tokio::test]
+    async fn cancellation_aborts_a_hanging_provider_and_releases_the_run() {
+        let control = Arc::new(BatchRunControl::new());
+        let task_control = control.clone();
+        let (run_id_tx, run_id_rx) = tokio::sync::oneshot::channel();
+
+        let task = tokio::spawn(async move {
+            let guard = task_control.try_acquire().unwrap();
+            let run_id = guard.run_id();
+            run_id_tx.send(run_id).unwrap();
+            let batch = make_batches().remove(0);
+            let mut lifecycle = BatchRunLifecycle::new(
+                &task_control,
+                run_id,
+                std::slice::from_ref(&batch.relative_path),
+            );
+            let project = Arc::new(Mutex::new(Some(make_project())));
+
+            let outcome = run_translation_chunk(
+                &mut lifecycle,
+                &project,
+                "project-1",
+                &HangingProvider,
+                "en",
+                "es",
+                &[],
+                &batch,
+            )
+            .await;
+            assert!(matches!(outcome, BatchChunkOutcome::Cancelled));
+            drop(guard);
+        });
+
+        let run_id = run_id_rx.await.unwrap();
+        assert!(control.cancel(run_id));
+        tokio::time::timeout(std::time::Duration::from_millis(200), task)
+            .await
+            .expect("cancellation should abort the provider future")
+            .unwrap();
+
+        let next = control.try_acquire().unwrap();
+        assert_ne!(next.run_id(), run_id);
+    }
+
+    #[tokio::test]
+    async fn cancellation_aborts_hanging_validation_and_releases_the_run() {
+        let control = Arc::new(BatchRunControl::new());
+        let task_control = control.clone();
+        let (run_id_tx, run_id_rx) = tokio::sync::oneshot::channel();
+
+        let task = tokio::spawn(async move {
+            let guard = task_control.try_acquire().unwrap();
+            let run_id = guard.run_id();
+            run_id_tx.send(run_id).unwrap();
+            let mut lifecycle = BatchRunLifecycle::new(&task_control, run_id, &[]);
+            assert!(lifecycle
+                .wait_or_cancel(HangingProvider.validate())
+                .await
+                .is_none());
+            drop(guard);
+        });
+
+        let run_id = run_id_rx.await.unwrap();
+        assert!(control.cancel(run_id));
+        tokio::time::timeout(std::time::Duration::from_millis(200), task)
+            .await
+            .expect("cancellation should abort provider validation")
+            .unwrap();
+        assert!(control.try_acquire().is_ok());
     }
 
     #[test]
