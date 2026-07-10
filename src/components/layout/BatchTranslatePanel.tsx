@@ -1,6 +1,6 @@
 import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Bot, CheckCircle, ClipboardCopy, Play, RefreshCw, Upload } from "lucide-react";
+import { Bot, CheckCircle, CircleX, ClipboardCopy, Play, RefreshCw, Square, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -50,7 +50,7 @@ export function BatchTranslatePanel({
   onOpenChange,
 }: BatchTranslatePanelProps) {
   const { t } = useTranslation(["editor", "common"]);
-  const { isTranslating, progress, error, startBatch } = useTranslationHook();
+  const { isTranslating, progress, error, startBatch, cancelBatch } = useTranslationHook();
   const project = useProjectStore((s) => s.project);
   const replaceProject = useProjectStore((s) => s.replaceProject);
   const [provider, setProvider] = useState<ProviderType | "">("");
@@ -68,6 +68,7 @@ export function BatchTranslatePanel({
   const [aiResponse, setAiResponse] = useState("");
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiWarnings, setAiWarnings] = useState<string[]>([]);
+  const [isCancelling, setIsCancelling] = useState(false);
   const wasTranslatingRef = useRef(false);
 
   const files = project?.files ?? [];
@@ -122,6 +123,23 @@ export function BatchTranslatePanel({
       toast.error(String(e));
     }
   }, [fileSelection, provider, providerConfig?.isConfigured, requiresProviderConfig, requiresRunModel, runModel, startBatch, supportsRunModel, t]);
+
+  const handleCancel = useCallback(async () => {
+    setIsCancelling(true);
+    try {
+      const accepted = await cancelBatch();
+      if (accepted) {
+        toast.info(t("editor:batch.cancelRequested"));
+      } else {
+        setIsCancelling(false);
+      }
+    } catch (e) {
+      setIsCancelling(false);
+      toast.error(t("editor:batch.cancelFailed"), {
+        description: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }, [cancelBatch, t]);
 
   const handleRefreshProviderModels = useCallback(async () => {
     if (!provider || !supportsRunModel) return;
@@ -312,7 +330,14 @@ export function BatchTranslatePanel({
 
   useEffect(() => {
     if (wasTranslatingRef.current && !isTranslating && progress) {
-      if (progress.failedEntries > 0) {
+      if (progress.cancelled) {
+        toast.info(t("editor:batch.cancelled"), {
+          description: t("editor:batch.cancelledDetail", {
+            completed: progress.entriesTranslated,
+            total: progress.totalEntries,
+          }),
+        });
+      } else if (progress.failedEntries > 0) {
         toast.error(t("editor:batch.completeWithErrors"), {
           description: t("editor:batch.completeWithErrorsDetail", {
             completed: progress.entriesTranslated,
@@ -332,6 +357,12 @@ export function BatchTranslatePanel({
 
     wasTranslatingRef.current = isTranslating;
   }, [isTranslating, progress, t]);
+
+  useEffect(() => {
+    if (!isTranslating) {
+      setIsCancelling(false);
+    }
+  }, [isTranslating]);
 
   const progressPercent =
     progress && progress.totalEntries > 0
@@ -494,23 +525,36 @@ export function BatchTranslatePanel({
                 </div>
               )}
 
-              <Button
-                onClick={handleStart}
-                disabled={!canStartProviderRun}
-                className="w-full"
-              >
-                {isTranslating ? (
-                  <>
-                    <span className="mr-2 animate-spin">&#8987;</span>
-                    {t("editor:batch.translating")}
-                  </>
-                ) : (
-                  <>
-                    <Play className="mr-2 size-4" />
-                    {t("editor:batch.start")}
-                  </>
+              <div className={isTranslating ? "grid grid-cols-[1fr_auto] gap-2" : undefined}>
+                <Button
+                  onClick={handleStart}
+                  disabled={!canStartProviderRun}
+                  className="w-full"
+                >
+                  {isTranslating ? (
+                    <>
+                      <span className="mr-2 animate-spin">&#8987;</span>
+                      {t("editor:batch.translating")}
+                    </>
+                  ) : (
+                    <>
+                      <Play className="mr-2 size-4" />
+                      {t("editor:batch.start")}
+                    </>
+                  )}
+                </Button>
+                {isTranslating && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => void handleCancel()}
+                    disabled={!progress?.runId || isCancelling}
+                  >
+                    <Square className="mr-2 size-3.5" />
+                    {isCancelling ? t("editor:batch.cancelling") : t("editor:batch.cancel")}
+                  </Button>
                 )}
-              </Button>
+              </div>
             </TabsContent>
 
             <TabsContent value="externalAi" className="space-y-4 pt-2">
@@ -648,33 +692,47 @@ export function BatchTranslatePanel({
                   </p>
                 </div>
               )}
-              {!isTranslating && progress.chunksProcessed === progress.totalChunks && (
+              {!isTranslating &&
+                (progress.cancelled || progress.chunksProcessed === progress.totalChunks) && (
                 <div className="space-y-2">
-                  <div className="flex items-center gap-2 text-xs">
-                    <CheckCircle
-                      className={
-                        progress.failedEntries > 0 ? "size-4 text-warning" : "size-4 text-success"
-                      }
-                    />
-                    <span
-                      className={
-                        progress.failedEntries > 0
-                          ? "text-warning"
-                          : "text-success"
-                      }
-                    >
-                      {progress.failedEntries > 0
-                        ? t("editor:batch.completeWithErrorsDetail", {
-                            completed: progress.entriesTranslated,
-                            failed: progress.failedEntries,
-                            total: progress.totalEntries,
-                          })
-                        : t("editor:batch.completeDetail", {
-                            completed: progress.entriesTranslated,
-                            total: progress.totalEntries,
-                          })}
-                    </span>
-                  </div>
+                  {progress.cancelled ? (
+                    <div className="flex items-start gap-2 text-xs text-warning" role="status">
+                      <CircleX className="mt-0.5 size-4 shrink-0" />
+                      <div>
+                        <p className="font-medium">{t("editor:batch.cancelled")}</p>
+                        <p>{t("editor:batch.cancelledDetail", {
+                          completed: progress.entriesTranslated,
+                          total: progress.totalEntries,
+                        })}</p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2 text-xs">
+                      <CheckCircle
+                        className={
+                          progress.failedEntries > 0 ? "size-4 text-warning" : "size-4 text-success"
+                        }
+                      />
+                      <span
+                        className={
+                          progress.failedEntries > 0
+                            ? "text-warning"
+                            : "text-success"
+                        }
+                      >
+                        {progress.failedEntries > 0
+                          ? t("editor:batch.completeWithErrorsDetail", {
+                              completed: progress.entriesTranslated,
+                              failed: progress.failedEntries,
+                              total: progress.totalEntries,
+                            })
+                          : t("editor:batch.completeDetail", {
+                              completed: progress.entriesTranslated,
+                              total: progress.totalEntries,
+                            })}
+                      </span>
+                    </div>
+                  )}
                   {progress.warnings.length > 0 && (
                     <div className="ft-callout-warning p-2 text-xs">
                       {progress.warnings.map((warning) => (

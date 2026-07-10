@@ -147,6 +147,11 @@
     "noProvider": "Configura un proveedor en Configuración.",
     "noEntries": "No hay entradas sin traducir",
     "cancel": "Cancelar",
+    "cancelling": "Cancelando…",
+    "cancelRequested": "Cancelación solicitada",
+    "cancelFailed": "No se pudo solicitar la cancelación",
+    "cancelled": "Traducción cancelada",
+    "cancelledDetail": "Traducidas antes de cancelar: {{completed}}/{{total}}",
     "ai": {
       "description": "Exporta las entradas sin traducir, envía el prompt a una IA y pega el JSON con el mismo projectId y batchId.",
       "maxEntries": "Máx. entradas por lote para IA",

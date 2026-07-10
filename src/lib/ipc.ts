@@ -119,6 +119,7 @@ type IpcCommands = {
     { provider: ProviderType; filePaths: string[]; model: Nullable<string> },
     BatchProgress
   >;
+  translate_batch_cancel: IpcCommand<{ runId: string }, boolean>;
 };
 
 type IpcCommandName = keyof IpcCommands;
@@ -369,3 +370,6 @@ export const translateBatchStart = (
   model?: string,
 ) =>
   safeInvoke("translate_batch_start", { provider, filePaths, model: model ?? null });
+
+export const translateBatchCancel = (runId: string) =>
+  safeInvoke("translate_batch_cancel", { runId });

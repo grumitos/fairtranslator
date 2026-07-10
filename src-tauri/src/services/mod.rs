@@ -1,5 +1,6 @@
 pub mod ai_batch;
 pub mod ai_models;
+pub(crate) mod batch_lifecycle;
 pub mod codex;
 pub mod compact_prompt;
 pub mod deepl;

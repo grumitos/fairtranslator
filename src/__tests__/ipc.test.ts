@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { apikeySave, projectCreate, projectGet, toErrorMessage } from "@/lib/ipc";
+import { apikeySave, projectCreate, projectGet, toErrorMessage, translateBatchCancel } from "@/lib/ipc";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -82,5 +82,13 @@ describe("ipc command payloads", () => {
       profile: null,
       authMode: null,
     });
+  });
+
+  it("targets batch cancellation by run ID", async () => {
+    invokeMock.mockResolvedValue(true);
+
+    await translateBatchCancel("42");
+
+    expect(invokeMock).toHaveBeenCalledWith("translate_batch_cancel", { runId: "42" });
   });
 });

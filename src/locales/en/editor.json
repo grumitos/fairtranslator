@@ -147,6 +147,11 @@
     "noProvider": "Configure a provider in Settings.",
     "noEntries": "No untranslated entries",
     "cancel": "Cancel",
+    "cancelling": "Cancelling…",
+    "cancelRequested": "Cancellation requested",
+    "cancelFailed": "Could not request cancellation",
+    "cancelled": "Translation cancelled",
+    "cancelledDetail": "Translated before cancelling: {{completed}}/{{total}}",
     "ai": {
       "description": "Export untranslated entries, send the prompt to an AI, then paste the JSON response with the same projectId and batchId.",
       "maxEntries": "Max entries per AI batch",

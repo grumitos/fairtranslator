@@ -12,6 +12,20 @@ function canListenToTauriEvents(): boolean {
   return typeof tauriInternals?.transformCallback === "function";
 }
 
+function hasAdvancedBeyondInitial(
+  current: BatchProgress,
+  initial: BatchProgress,
+): boolean {
+  return (
+    current.cancelled ||
+    current.filesProcessed > initial.filesProcessed ||
+    current.chunksProcessed > initial.chunksProcessed ||
+    current.entriesTranslated > initial.entriesTranslated ||
+    current.failedEntries > initial.failedEntries ||
+    current.failedBatches > initial.failedBatches
+  );
+}
+
 /**
  * Hook for batch translation operations.
  * Manages the translation lifecycle: start, progress tracking, completion.
@@ -85,6 +99,11 @@ export function useTranslation() {
       setError(null);
       try {
         const result = await ipc.translateBatchStart(provider, filePaths, model);
+        setProgress((current) =>
+          current?.runId === result.runId && hasAdvancedBeyondInitial(current, result)
+            ? current
+            : result,
+        );
         return result;
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -96,10 +115,19 @@ export function useTranslation() {
     [],
   );
 
+  const cancelBatch = useCallback(async () => {
+    const runId = progress?.runId;
+    if (!runId) {
+      return false;
+    }
+    return ipc.translateBatchCancel(runId);
+  }, [progress?.runId]);
+
   return {
     isTranslating,
     progress,
     error,
     startBatch,
+    cancelBatch,
   };
 }

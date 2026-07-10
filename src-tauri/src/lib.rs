@@ -33,6 +33,7 @@ pub fn run() {
             commands::translation::translate_ai_batch_export,
             commands::translation::translate_ai_batch_apply,
             commands::translation::translate_batch_start,
+            commands::translation::translate_batch_cancel,
             commands::glossary::glossary_add,
             commands::glossary::glossary_update,
             commands::glossary::glossary_remove,

@@ -91,6 +91,10 @@ pub struct GlossaryTerm {
 #[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct BatchProgress {
+    #[serde(default)]
+    pub run_id: String,
+    #[serde(default)]
+    pub cancelled: bool,
     pub files_processed: usize,
     pub total_files: usize,
     pub chunks_processed: usize,

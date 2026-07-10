@@ -15,7 +15,7 @@ export type TranslationEntry = { id: string, fileContext: string, original: stri
 
 export type GlossaryTerm = { source: string, target: string, caseSensitive: boolean, };
 
-export type BatchProgress = { filesProcessed: number, totalFiles: number, chunksProcessed: number, totalChunks: number, entriesTranslated: number, totalEntries: number, currentFile: string, currentFileChunksProcessed: number, currentFileTotalChunks: number, failedEntries: number, failedBatches: number, warnings: Array<string>, };
+export type BatchProgress = { runId: string, cancelled: boolean, filesProcessed: number, totalFiles: number, chunksProcessed: number, totalChunks: number, entriesTranslated: number, totalEntries: number, currentFile: string, currentFileChunksProcessed: number, currentFileTotalChunks: number, failedEntries: number, failedBatches: number, warnings: Array<string>, };
 
 export type AiBatchEntry = { filePath: string, entryId: string, fileContext: string, original: string, currentTranslation: string, instructionCandidate: boolean, instructionReason: string | null, };
 

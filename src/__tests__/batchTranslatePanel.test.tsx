@@ -2,19 +2,24 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import i18n from "@/lib/i18n";
 import { BatchTranslatePanel } from "@/components/layout/BatchTranslatePanel";
 import { useProjectStore } from "@/stores/projectStore";
-import type { Project, ProviderType } from "@/types/domain";
+import type { BatchProgress, Project, ProviderType } from "@/types/domain";
 
 const mocks = vi.hoisted(() => ({
   apikeyLoad: vi.fn(),
   startBatch: vi.fn(),
+  cancelBatch: vi.fn(),
+  translation: {
+    isTranslating: false,
+    progress: null as BatchProgress | null,
+    error: null as string | null,
+  },
 }));
 
 vi.mock("@/hooks/useTranslation", () => ({
   useTranslation: () => ({
-    isTranslating: false,
-    progress: null,
-    error: null,
+    ...mocks.translation,
     startBatch: mocks.startBatch,
+    cancelBatch: mocks.cancelBatch,
   }),
 }));
 
@@ -58,6 +63,26 @@ function makeProject(): Project {
   };
 }
 
+function makeProgress(overrides: Partial<BatchProgress> = {}): BatchProgress {
+  return {
+    runId: "12",
+    cancelled: false,
+    filesProcessed: 0,
+    totalFiles: 1,
+    chunksProcessed: 0,
+    totalChunks: 3,
+    entriesTranslated: 0,
+    totalEntries: 3,
+    currentFile: "",
+    currentFileChunksProcessed: 0,
+    currentFileTotalChunks: 0,
+    failedEntries: 0,
+    failedBatches: 0,
+    warnings: [],
+    ...overrides,
+  };
+}
+
 async function selectProvider(name: string) {
   fireEvent.pointerDown(screen.getByRole("combobox"), {
     button: 0,
@@ -98,6 +123,11 @@ describe("BatchTranslatePanel", () => {
       isConfigured: false,
     }));
     mocks.startBatch.mockReset();
+    mocks.cancelBatch.mockReset();
+    mocks.cancelBatch.mockResolvedValue(true);
+    mocks.translation.isTranslating = false;
+    mocks.translation.progress = null;
+    mocks.translation.error = null;
     useProjectStore.getState().reset();
     useProjectStore.getState().setProject(makeProject(), { markDirty: false });
   });
@@ -129,5 +159,27 @@ describe("BatchTranslatePanel", () => {
 
     expect(screen.getByRole("textbox", { name: "Modelo para esta ejecución" })).toBeInTheDocument();
     expect(screen.getAllByRole("textbox", { name: "Modelo para esta ejecución" })).toHaveLength(1);
+  }, 10_000);
+
+  it("offers cooperative cancellation for the active run", async () => {
+    mocks.translation.isTranslating = true;
+    mocks.translation.progress = makeProgress();
+    render(<BatchTranslatePanel open onOpenChange={() => undefined} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+
+    await waitFor(() => expect(mocks.cancelBatch).toHaveBeenCalledTimes(1));
+  }, 10_000);
+
+  it("shows a cancelled terminal state with real progress", () => {
+    mocks.translation.progress = makeProgress({
+      cancelled: true,
+      chunksProcessed: 1,
+      entriesTranslated: 1,
+    });
+    render(<BatchTranslatePanel open onOpenChange={() => undefined} />);
+
+    expect(screen.getByText("Traducción cancelada")).toBeInTheDocument();
+    expect(screen.getByText("Traducidas antes de cancelar: 1/3")).toBeInTheDocument();
   }, 10_000);
 });
