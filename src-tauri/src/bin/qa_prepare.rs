@@ -27,6 +27,7 @@ struct Options {
 struct BatchArtifactRow {
     index: usize,
     batch_id: String,
+    entries_fingerprint: String,
     exported_entries: usize,
     instruction_candidates: usize,
     prompt_path: String,
@@ -341,6 +342,10 @@ fn prepare_sample(
         batch_rows.push(BatchArtifactRow {
             index: batch_index + 1,
             batch_id: batch.batch_id.clone(),
+            entries_fingerprint: qa_inventory_fingerprint::batch_entries_fingerprint(
+                &batch.batch_id,
+                &batch.entries,
+            ),
             exported_entries: batch.exported_entries,
             instruction_candidates: candidate_count,
             prompt_path: prompt_path.display().to_string(),

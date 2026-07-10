@@ -153,7 +153,7 @@ cargo run --manifest-path src-tauri\Cargo.toml --bin qa_prepare -- `
 
 For each sample, `qa_prepare` writes:
 
-- `manifest.json`: authoritative list of batches, paths, and the versioned source-inventory fingerprint.
+- `manifest.json`: authoritative list of batches, paths, the versioned source-inventory fingerprint, and each batch's ordered-entry fingerprint.
 - `batches\<n>.prompt.txt`: prompt to give the external agent.
 - `batches\<n>.entries.json`: source/reference entries for inspection.
 - `batches\<n>.response.template.json`: response skeleton.

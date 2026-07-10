@@ -23,6 +23,8 @@ struct Options {
 struct BatchArtifactRow {
     index: usize,
     batch_id: String,
+    #[serde(default)]
+    entries_fingerprint: Option<String>,
     entries_path: String,
     response_template_path: String,
 }
@@ -222,13 +224,21 @@ fn load_all_batch_entries(manifest: &SampleManifest) -> Result<Vec<Vec<AiBatchEn
                     )
                 })
                 .and_then(|content| {
-                    serde_json::from_str(&content).map_err(|error| {
+                    serde_json::from_str::<Vec<AiBatchEntry>>(&content).map_err(|error| {
                         format!(
                             "Entradas inválidas para el lote {} en '{}': {error}",
                             batch.index,
                             entries_path.display()
                         )
                     })
+                })
+                .and_then(|entries| {
+                    qa_inventory_fingerprint::verify_batch_entries_fingerprint(
+                        batch.entries_fingerprint.as_deref(),
+                        &batch.batch_id,
+                        &entries,
+                    )?;
+                    Ok(entries)
                 })
         })
         .collect()
@@ -251,6 +261,7 @@ mod tests {
             batches: vec![BatchArtifactRow {
                 index: 1,
                 batch_id: "batch-1".into(),
+                entries_fingerprint: Some("batch-fingerprint".into()),
                 entries_path: "batch-1.entries.json".into(),
                 response_template_path: "batch-1.response.template.json".into(),
             }],
@@ -295,6 +306,7 @@ mod tests {
         duplicate_path.batches.push(BatchArtifactRow {
             index: 2,
             batch_id: "batch-2".into(),
+            entries_fingerprint: Some("batch-fingerprint-2".into()),
             entries_path: "batch-1.entries.json".into(),
             response_template_path: "batch-2.response.template.json".into(),
         });

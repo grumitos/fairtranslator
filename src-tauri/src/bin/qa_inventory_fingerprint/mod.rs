@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use app_lib::models::{AiBatchEntry, TranslationFile};
 
 pub const INVENTORY_FINGERPRINT_PREFIX: &str = "fairtl-inventory-v1-fnv1a64:";
+pub const BATCH_ENTRIES_FINGERPRINT_PREFIX: &str = "fairtl-batch-entries-v1-fnv1a64:";
 
 const FNV1A64_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
 const FNV1A64_PRIME: u64 = 0x00000100000001b3;
@@ -45,6 +46,38 @@ pub fn inventory_fingerprint(files: &[TranslationFile]) -> String {
     }
 
     format!("{INVENTORY_FINGERPRINT_PREFIX}{hash:016x}")
+}
+
+pub fn batch_entries_fingerprint(batch_id: &str, entries: &[AiBatchEntry]) -> String {
+    let mut hash = FNV1A64_OFFSET_BASIS;
+    hash_bytes(&mut hash, b"fairtranslator-batch-entries-v1\0");
+    hash_field(&mut hash, batch_id);
+    hash_bytes(&mut hash, &(entries.len() as u64).to_be_bytes());
+    for entry in entries {
+        hash_field(&mut hash, &entry.file_path);
+        hash_field(&mut hash, &entry.entry_id);
+        hash_field(&mut hash, &entry.original);
+    }
+    format!("{BATCH_ENTRIES_FINGERPRINT_PREFIX}{hash:016x}")
+}
+
+pub fn verify_batch_entries_fingerprint(
+    expected: Option<&str>,
+    batch_id: &str,
+    entries: &[AiBatchEntry],
+) -> Result<(), String> {
+    let Some(expected) = expected else {
+        return Err(
+            "El manifest no incluye entriesFingerprint para todos los lotes. Regenera la muestra con qa_prepare."
+                .to_string(),
+        );
+    };
+    if batch_entries_fingerprint(batch_id, entries) != expected {
+        return Err(format!(
+            "El contenido u orden del lote {batch_id} ya no coincide con el manifest. Regenera la muestra con qa_prepare."
+        ));
+    }
+    Ok(())
 }
 
 pub fn verify_project_inventory_fingerprint<'a>(
@@ -311,5 +344,47 @@ mod tests {
         assert!(verify_batch_inventory_coverage(&files, &changed)
             .unwrap_err()
             .contains("original"));
+    }
+
+    #[test]
+    fn batch_fingerprint_binds_id_and_row_order() {
+        let rows = vec![
+            AiBatchEntry {
+                file_path: "data/Map001.json".into(),
+                entry_id: "event:1".into(),
+                file_context: String::new(),
+                original: "Hello".into(),
+                current_translation: String::new(),
+                instruction_candidate: false,
+                instruction_reason: None,
+            },
+            AiBatchEntry {
+                file_path: "data/Map002.json".into(),
+                entry_id: "event:2".into(),
+                file_context: String::new(),
+                original: "World".into(),
+                current_translation: String::new(),
+                instruction_candidate: false,
+                instruction_reason: None,
+            },
+        ];
+        let fingerprint = batch_entries_fingerprint("batch-1", &rows);
+        assert!(verify_batch_entries_fingerprint(Some(&fingerprint), "batch-1", &rows).is_ok());
+
+        let mut reordered = rows;
+        reordered.reverse();
+        assert!(
+            verify_batch_entries_fingerprint(Some(&fingerprint), "batch-1", &reordered)
+                .unwrap_err()
+                .contains("orden")
+        );
+        assert!(
+            verify_batch_entries_fingerprint(Some(&fingerprint), "batch-2", &reordered).is_err()
+        );
+        assert!(
+            verify_batch_entries_fingerprint(None, "batch-1", &reordered)
+                .unwrap_err()
+                .contains("qa_prepare")
+        );
     }
 }
