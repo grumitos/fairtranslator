@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -32,6 +33,12 @@ struct SampleManifest {
     sample_name: String,
     #[serde(default)]
     inventory_fingerprint: Option<String>,
+    #[serde(default)]
+    source_lang: Option<String>,
+    #[serde(default)]
+    target_lang: Option<String>,
+    #[serde(default)]
+    batch_count: Option<usize>,
     project_path: String,
     exports_dir: String,
     batch_dir: String,
@@ -147,9 +154,108 @@ fn resolve_response_path(template_path: &Path) -> PathBuf {
     template_path.to_path_buf()
 }
 
+fn validate_manifest_contract(
+    manifest: &SampleManifest,
+    project_source_lang: &str,
+    project_target_lang: &str,
+) -> Result<(), String> {
+    let source_lang = manifest.source_lang.as_deref().ok_or_else(|| {
+        "El manifest no incluye sourceLang. Regenera la muestra con qa_prepare.".to_string()
+    })?;
+    let target_lang = manifest.target_lang.as_deref().ok_or_else(|| {
+        "El manifest no incluye targetLang. Regenera la muestra con qa_prepare.".to_string()
+    })?;
+    if source_lang != project_source_lang || target_lang != project_target_lang {
+        return Err(format!(
+            "Los idiomas del manifest ({source_lang}->{target_lang}) no coinciden con el proyecto ({project_source_lang}->{project_target_lang}). Regenera la muestra con qa_prepare."
+        ));
+    }
+
+    let batch_count = manifest.batch_count.ok_or_else(|| {
+        "El manifest no incluye batchCount. Regenera la muestra con qa_prepare.".to_string()
+    })?;
+    if batch_count != manifest.batches.len() {
+        return Err(format!(
+            "batchCount declara {batch_count} lotes, pero el manifest contiene {}. Regenera la muestra con qa_prepare.",
+            manifest.batches.len()
+        ));
+    }
+
+    let mut indices = HashSet::new();
+    let mut batch_ids = HashSet::new();
+    let mut entries_paths = HashSet::new();
+    let mut response_paths = HashSet::new();
+    for batch in &manifest.batches {
+        if !indices.insert(batch.index)
+            || !batch_ids.insert(batch.batch_id.as_str())
+            || !entries_paths.insert(batch.entries_path.as_str())
+            || !response_paths.insert(batch.response_template_path.as_str())
+        {
+            return Err(format!(
+                "El manifest contiene metadata duplicada en el lote {}. Regenera la muestra con qa_prepare.",
+                batch.index
+            ));
+        }
+    }
+    if !(1..=batch_count).all(|index| indices.contains(&index)) {
+        return Err(
+            "Los índices de los lotes no son consecutivos desde 1. Regenera la muestra con qa_prepare."
+                .to_string(),
+        );
+    }
+
+    Ok(())
+}
+
+fn load_all_batch_entries(manifest: &SampleManifest) -> Result<Vec<Vec<AiBatchEntry>>, String> {
+    manifest
+        .batches
+        .iter()
+        .map(|batch| {
+            let entries_path = PathBuf::from(&batch.entries_path);
+            fs::read_to_string(&entries_path)
+                .map_err(|error| {
+                    format!(
+                        "No se pudieron leer entradas esperadas para el lote {} en '{}': {error}",
+                        batch.index,
+                        entries_path.display()
+                    )
+                })
+                .and_then(|content| {
+                    serde_json::from_str(&content).map_err(|error| {
+                        format!(
+                            "Entradas inválidas para el lote {} en '{}': {error}",
+                            batch.index,
+                            entries_path.display()
+                        )
+                    })
+                })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn current_manifest() -> SampleManifest {
+        SampleManifest {
+            sample_name: "sample".into(),
+            inventory_fingerprint: Some("fairtl-inventory-v1-fnv1a64:0000000000000000".into()),
+            source_lang: Some("en".into()),
+            target_lang: Some("es".into()),
+            batch_count: Some(1),
+            project_path: "project.fairtl".into(),
+            exports_dir: "exports".into(),
+            batch_dir: "ai-batches".into(),
+            batches: vec![BatchArtifactRow {
+                index: 1,
+                batch_id: "batch-1".into(),
+                entries_path: "batch-1.entries.json".into(),
+                response_template_path: "batch-1.response.template.json".into(),
+            }],
+        }
+    }
 
     #[test]
     fn legacy_manifest_loads_for_an_actionable_fingerprint_rejection() {
@@ -168,6 +274,33 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.contains("qa_prepare"));
+    }
+
+    #[test]
+    fn manifest_contract_rejects_language_and_batch_drift() {
+        let manifest = current_manifest();
+        assert!(validate_manifest_contract(&manifest, "en", "es").is_ok());
+
+        let language_error = validate_manifest_contract(&manifest, "en", "fr").unwrap_err();
+        assert!(language_error.contains("idiomas"));
+
+        let mut missing_batch = current_manifest();
+        missing_batch.batch_count = Some(2);
+        assert!(validate_manifest_contract(&missing_batch, "en", "es")
+            .unwrap_err()
+            .contains("batchCount"));
+
+        let mut duplicate_path = current_manifest();
+        duplicate_path.batch_count = Some(2);
+        duplicate_path.batches.push(BatchArtifactRow {
+            index: 2,
+            batch_id: "batch-2".into(),
+            entries_path: "batch-1.entries.json".into(),
+            response_template_path: "batch-2.response.template.json".into(),
+        });
+        assert!(validate_manifest_contract(&duplicate_path, "en", "es")
+            .unwrap_err()
+            .contains("duplicada"));
     }
 }
 
@@ -216,6 +349,12 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    if let Err(error) =
+        validate_manifest_contract(&manifest, &project.source_lang, &project.target_lang)
+    {
+        eprintln!("{error} No se aplicó ninguna respuesta.");
+        return ExitCode::from(1);
+    }
     let source = match parse_game(Path::new(&project.game_dir)) {
         Ok(parsed) => parsed,
         Err(error) => {
@@ -241,30 +380,29 @@ fn main() -> ExitCode {
         return ExitCode::from(1);
     }
 
+    let batch_entries = match load_all_batch_entries(&manifest) {
+        Ok(entries) => entries,
+        Err(error) => {
+            eprintln!("{error}. No se aplicó ninguna respuesta.");
+            return ExitCode::from(1);
+        }
+    };
+    if let Err(error) =
+        qa_inventory_fingerprint::verify_batch_inventory_coverage(&project.files, &batch_entries)
+    {
+        eprintln!("{error} No se aplicó ninguna respuesta.");
+        return ExitCode::from(1);
+    }
+
     let expected_signature = inventory_signature(&project.files);
     let expected_entries = total_entries(&project.files);
     let mut applied_entries = 0usize;
     let mut skipped_entries = 0usize;
     let mut validation_warnings = Vec::new();
 
-    for batch in &manifest.batches {
-        let entries_path = PathBuf::from(&batch.entries_path);
+    for (batch, expected_entries_batch) in manifest.batches.iter().zip(batch_entries.iter()) {
         let template_path = PathBuf::from(&batch.response_template_path);
         let response_path = resolve_response_path(&template_path);
-
-        let expected_entries_batch: Vec<AiBatchEntry> = match fs::read_to_string(&entries_path)
-            .map_err(|error| error.to_string())
-            .and_then(|content| serde_json::from_str(&content).map_err(|error| error.to_string()))
-        {
-            Ok(entries) => entries,
-            Err(error) => {
-                eprintln!(
-                    "No se pudieron leer entradas esperadas para el lote {}: {}",
-                    batch.index, error
-                );
-                return ExitCode::from(1);
-            }
-        };
         let response_map = expected_entries_batch
             .iter()
             .enumerate()

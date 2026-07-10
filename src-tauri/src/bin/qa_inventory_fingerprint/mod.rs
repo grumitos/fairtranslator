@@ -1,4 +1,6 @@
-use app_lib::models::TranslationFile;
+use std::collections::{HashMap, HashSet};
+
+use app_lib::models::{AiBatchEntry, TranslationFile};
 
 pub const INVENTORY_FINGERPRINT_PREFIX: &str = "fairtl-inventory-v1-fnv1a64:";
 
@@ -88,6 +90,67 @@ pub fn verify_source_inventory_fingerprint(
             "La fuente o el parser actual ya no coincide con el inventario del manifest (ruta, ID u original). Regenera la muestra con qa_prepare; no se aplicó ninguna respuesta."
                 .to_string(),
         );
+    }
+
+    Ok(())
+}
+
+pub fn verify_batch_inventory_coverage(
+    project_files: &[TranslationFile],
+    batches: &[Vec<AiBatchEntry>],
+) -> Result<(), String> {
+    let mut expected = HashMap::new();
+    for file in project_files {
+        for entry in &file.entries {
+            if entry.original.trim().is_empty() {
+                continue;
+            }
+
+            let key = (file.relative_path.as_str(), entry.id.as_str());
+            if expected.insert(key, entry.original.as_str()).is_some() {
+                return Err(format!(
+                    "El proyecto contiene una identidad de entrada duplicada: {} :: {}. Regenera la muestra.",
+                    file.relative_path, entry.id
+                ));
+            }
+        }
+    }
+
+    let mut seen = HashSet::new();
+    for entry in batches.iter().flatten() {
+        let key = (entry.file_path.as_str(), entry.entry_id.as_str());
+        if !seen.insert(key) {
+            return Err(format!(
+                "Los lotes contienen una entrada duplicada: {} :: {}. Regenera la muestra con qa_prepare.",
+                entry.file_path, entry.entry_id
+            ));
+        }
+        match expected.get(&key) {
+            None => {
+                return Err(format!(
+                    "Los lotes contienen una entrada desconocida: {} :: {}. Regenera la muestra con qa_prepare.",
+                    entry.file_path, entry.entry_id
+                ))
+            }
+            Some(original) if *original != entry.original.as_str() => {
+                return Err(format!(
+                    "El original del lote no coincide para {} :: {}. Regenera la muestra con qa_prepare.",
+                    entry.file_path, entry.entry_id
+                ))
+            }
+            Some(_) => {}
+        }
+    }
+
+    if seen.len() != expected.len() {
+        let missing = expected
+            .keys()
+            .find(|key| !seen.contains(*key))
+            .map(|(path, id)| format!("{path} :: {id}"))
+            .unwrap_or_else(|| "entrada desconocida".to_string());
+        return Err(format!(
+            "Los lotes no cubren todo el inventario preparado; falta {missing}. Regenera la muestra con qa_prepare."
+        ));
     }
 
     Ok(())
@@ -193,5 +256,60 @@ mod tests {
         let source_error =
             verify_source_inventory_fingerprint(&fingerprint, &changed_source).unwrap_err();
         assert!(source_error.contains("fuente o el parser"));
+    }
+
+    #[test]
+    fn batch_coverage_requires_every_entry_exactly_once() {
+        let files = inventory();
+        let rows = vec![vec![
+            AiBatchEntry {
+                file_path: "data/Map001.json".into(),
+                entry_id: "event:1".into(),
+                file_context: String::new(),
+                original: "Hello".into(),
+                current_translation: String::new(),
+                instruction_candidate: false,
+                instruction_reason: None,
+            },
+            AiBatchEntry {
+                file_path: "data/Map001.json".into(),
+                entry_id: "event:2".into(),
+                file_context: String::new(),
+                original: "Bye".into(),
+                current_translation: String::new(),
+                instruction_candidate: false,
+                instruction_reason: None,
+            },
+            AiBatchEntry {
+                file_path: "data/Map002.json".into(),
+                entry_id: "event:2".into(),
+                file_context: String::new(),
+                original: "World".into(),
+                current_translation: String::new(),
+                instruction_candidate: false,
+                instruction_reason: None,
+            },
+        ]];
+
+        assert!(verify_batch_inventory_coverage(&files, &rows).is_ok());
+
+        let mut missing = rows.clone();
+        missing[0].pop();
+        assert!(verify_batch_inventory_coverage(&files, &missing)
+            .unwrap_err()
+            .contains("falta"));
+
+        let mut duplicate = rows.clone();
+        let repeated = duplicate[0][0].clone();
+        duplicate[0].push(repeated);
+        assert!(verify_batch_inventory_coverage(&files, &duplicate)
+            .unwrap_err()
+            .contains("duplicada"));
+
+        let mut changed = rows;
+        changed[0][0].original = "Changed".into();
+        assert!(verify_batch_inventory_coverage(&files, &changed)
+            .unwrap_err()
+            .contains("original"));
     }
 }
