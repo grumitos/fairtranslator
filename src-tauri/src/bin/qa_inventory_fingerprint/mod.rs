@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Shared module is compiled into both QA binaries.
+
 use std::collections::{HashMap, HashSet};
 
 use app_lib::models::{AiBatchEntry, TranslationFile};
