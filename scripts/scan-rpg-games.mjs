@@ -418,11 +418,14 @@ function detectUnity(dir) {
 
   if (dataDir) {
     markers.push(`${dataDir}/`);
+    if (hasFile(dir, dataDir, "globalgamemanagers")) {
+      markers.push(`${dataDir}/globalgamemanagers`);
+    }
   }
   if (hasTopLevelFileByName(dir, "UnityPlayer.dll")) {
     markers.push("UnityPlayer.dll");
   }
-  if (markers.length < 2) {
+  if (!dataDir || !markers.includes(`${dataDir}/globalgamemanagers`)) {
     return null;
   }
   return makeResult("Unity", false, "medium", markers);
@@ -499,7 +502,9 @@ function scanGames(rootDir, maxDepth) {
         relativePath: normalizeRelative(rootDir, current.dir),
         ...detected,
       });
-      continue;
+      if (detected.confidence !== "low") {
+        continue;
+      }
     }
 
     if (current.depth >= maxDepth) {
