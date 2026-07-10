@@ -319,13 +319,8 @@ fn export_unity_project(project: &Project, output_dir: &Path) -> Result<ExportRe
                 project_file.relative_path
             ))
         })?;
-        let mut json: Value = serde_json::from_str(json_text)?;
-        let object = json.as_object_mut().ok_or_else(|| {
-            AppError::Parse(format!(
-                "Unity localization JSON '{}' must be a flat string-to-string object.",
-                project_file.relative_path
-            ))
-        })?;
+        let mut object =
+            parser::unity::parse_unity_localization_object(json_text, &project_file.relative_path)?;
 
         let mut entries_applied = 0usize;
         let mut expected_readback = HashMap::new();
@@ -359,7 +354,7 @@ fn export_unity_project(project: &Project, output_dir: &Path) -> Result<ExportRe
             entries_applied += 1;
         }
 
-        let rendered = serde_json::to_vec_pretty(&json)?;
+        let rendered = serde_json::to_vec_pretty(&Value::Object(object))?;
         let mut output_bytes = Vec::with_capacity(rendered.len() + usize::from(has_bom) * 3);
         if has_bom {
             output_bytes.extend_from_slice(&[0xef, 0xbb, 0xbf]);
@@ -4906,6 +4901,40 @@ mod tests {
 
         assert!(error.contains("Source game changed since import"));
         assert!(error.contains("original text changed"));
+        assert!(!output_dir.exists());
+        assert_eq!(fs::read(&source_path).unwrap(), changed_source);
+
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(output_dir);
+    }
+
+    #[test]
+    fn test_export_unity_rejects_duplicate_keys_in_copied_json_after_preflight() {
+        let root = std::env::temp_dir().join(format!(
+            "fairtl_export_unity_duplicate_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        let source_path = write_unity_mono_fixture(&root, br#"{"play":"First","quit":"Quit"}"#);
+        let mut project = unity_project_from_source(&root);
+        project.files[0].entries[0].translation = "Primero".into();
+        project.files[0].entries[0].status = EntryStatus::Reviewed;
+
+        let changed_source = br#"{"play":"First","play":"Second","quit":"Quit"}"#;
+        fs::write(&source_path, changed_source).unwrap();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fairtl_export_unity_duplicate_out_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+
+        // Exercise the exporter directly to model a source mutation after the
+        // public export preflight but before the copied JSON is patched.
+        let error = export_unity_project(&project, &output_dir)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("duplicate top-level key"));
+        assert!(error.contains("play"));
+        assert!(error.contains(&project.files[0].relative_path));
         assert!(!output_dir.exists());
         assert_eq!(fs::read(&source_path).unwrap(), changed_source);
 

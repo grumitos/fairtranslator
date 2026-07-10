@@ -31,9 +31,9 @@ A game is accepted only when all of these conditions hold:
   `strings` (optionally followed by `-`, `_`, or `.`).
 - The candidate is at most 8 MiB, is UTF-8 with an optional UTF-8 BOM, and its
   top level is a flat object whose keys and values are strings.
-- Keys are non-empty stable IDs without control characters. Blank values are
-  retained in the file but are not offered for translation; at least one value
-  must contain translatable text.
+- Keys are unique, non-empty stable IDs without control characters. Blank
+  values are retained in the file but are not offered for translation; at
+  least one value must contain translatable text.
 
 The bounded `StreamingAssets` scan stops at 8 directory levels, 2,048
 directories, or 50,000 entries. Symbolic links and Windows reparse points are

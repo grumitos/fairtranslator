@@ -1,8 +1,11 @@
 use std::collections::VecDeque;
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde_json::Value;
+use serde::de::{MapAccess, Visitor};
+use serde::{Deserialize, Deserializer};
+use serde_json::{Map, Value};
 
 use crate::error::AppError;
 use crate::models::{EntryStatus, TranslationEntry, TranslationFile};
@@ -17,6 +20,43 @@ const MAX_STREAMING_ASSET_ENTRIES: usize = 50_000;
 pub struct UnityLooseJsonInventory {
     pub data_dir_relative_path: String,
     pub localization_file_relative_path: String,
+}
+
+struct UniqueTopLevelObject(Map<String, Value>);
+
+impl<'de> Deserialize<'de> for UniqueTopLevelObject {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_map(UniqueTopLevelObjectVisitor)
+    }
+}
+
+struct UniqueTopLevelObjectVisitor;
+
+impl<'de> Visitor<'de> for UniqueTopLevelObjectVisitor {
+    type Value = UniqueTopLevelObject;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a flat JSON object with unique top-level keys")
+    }
+
+    fn visit_map<A>(self, mut source: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut object = Map::new();
+        while let Some((key, value)) = source.next_entry::<String, Value>()? {
+            if object.contains_key(&key) {
+                return Err(<A::Error as serde::de::Error>::custom(format!(
+                    "duplicate top-level key {key:?}"
+                )));
+            }
+            object.insert(key, value);
+        }
+        Ok(UniqueTopLevelObject(object))
+    }
 }
 
 /// Lightweight root recognition used by the shared game-directory resolver.
@@ -198,39 +238,11 @@ pub fn parse_unity_game(game_dir: &Path) -> Result<Vec<TranslationFile>, AppErro
             inventory.localization_file_relative_path
         ))
     })?;
-    let json: Value = serde_json::from_str(text).map_err(|error| {
-        AppError::Parse(format!(
-            "Unity localization JSON '{}' is invalid JSON: {error}",
-            inventory.localization_file_relative_path
-        ))
-    })?;
-    let object = json.as_object().ok_or_else(|| {
-        AppError::Parse(format!(
-            "Unity localization JSON '{}' must be a flat string-to-string object.",
-            inventory.localization_file_relative_path
-        ))
-    })?;
+    let object = parse_unity_localization_object(text, &inventory.localization_file_relative_path)?;
 
     let mut entries = Vec::new();
-    for (key, value) in object {
-        if key.trim().is_empty() {
-            return Err(AppError::Parse(format!(
-                "Unity localization JSON '{}' contains an empty key; keys must be stable non-empty IDs.",
-                inventory.localization_file_relative_path
-            )));
-        }
-        if key.chars().any(char::is_control) {
-            return Err(AppError::Parse(format!(
-                "Unity localization JSON '{}' contains a control character in key {:?}.",
-                inventory.localization_file_relative_path, key
-            )));
-        }
-        let original = value.as_str().ok_or_else(|| {
-            AppError::Parse(format!(
-                "Unity localization JSON '{}' must be a flat string-to-string object; key {:?} has a non-string value.",
-                inventory.localization_file_relative_path, key
-            ))
-        })?;
+    for (key, value) in &object {
+        let original = value.as_str().expect("validated string value");
         if original.trim().is_empty() {
             continue;
         }
@@ -254,6 +266,43 @@ pub fn parse_unity_game(game_dir: &Path) -> Result<Vec<TranslationFile>, AppErro
         relative_path: inventory.localization_file_relative_path,
         entries,
     }])
+}
+
+pub(crate) fn parse_unity_localization_object(
+    text: &str,
+    relative_path: &str,
+) -> Result<Map<String, Value>, AppError> {
+    let UniqueTopLevelObject(object) = serde_json::from_str(text).map_err(|error| {
+        if error.is_syntax() || error.is_eof() {
+            AppError::Parse(format!(
+                "Unity localization JSON '{relative_path}' is invalid JSON: {error}"
+            ))
+        } else {
+            AppError::Parse(format!(
+                "Unity localization JSON '{relative_path}' must be a flat string-to-string object with unique top-level keys: {error}"
+            ))
+        }
+    })?;
+
+    for (key, value) in &object {
+        if key.trim().is_empty() {
+            return Err(AppError::Parse(format!(
+                "Unity localization JSON '{relative_path}' contains an empty key; keys must be stable non-empty IDs."
+            )));
+        }
+        if key.chars().any(char::is_control) {
+            return Err(AppError::Parse(format!(
+                "Unity localization JSON '{relative_path}' contains a control character in key {key:?}."
+            )));
+        }
+        if !value.is_string() {
+            return Err(AppError::Parse(format!(
+                "Unity localization JSON '{relative_path}' must be a flat string-to-string object; key {key:?} has a non-string value."
+            )));
+        }
+    }
+
+    Ok(object)
 }
 
 fn scan_localization_candidates(streaming_assets: &Path) -> Result<Vec<PathBuf>, AppError> {
@@ -583,6 +632,24 @@ mod tests {
 
         let error = parse_unity_game(&root).unwrap_err().to_string();
         assert!(error.contains("flat string-to-string"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rejects_duplicate_top_level_keys() {
+        let root = temp_root("duplicate_key");
+        let data_dir = write_mono_root(&root);
+        write_streaming_file(
+            &data_dir,
+            "Localization/strings.json",
+            br#"{"play":"First","play":"Second","quit":"Quit"}"#,
+        );
+
+        let error = parse_unity_game(&root).unwrap_err().to_string();
+        assert!(error.contains("duplicate top-level key"));
+        assert!(error.contains("play"));
+        assert!(error.contains("Sample_Data/StreamingAssets/Localization/strings.json"));
 
         let _ = fs::remove_dir_all(root);
     }
