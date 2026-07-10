@@ -216,8 +216,6 @@ fn export_mv_mz_project(project: &Project, output_dir: &Path) -> Result<ExportRe
             font_fallback_applied |= patch_exported_mv_mz_system_font_file(output_dir)?;
         }
 
-        patch_exported_plugin_sources(project, output_dir)?;
-        patch_exported_unsupported_prompt_calls(output_dir)?;
         let normalized_asset_refs = normalize_exported_mv_mz_asset_references(output_dir)?;
 
         if font_fallback_applied {
@@ -1166,293 +1164,6 @@ fn patch_exported_mv_mz_system_font_file(output_dir: &Path) -> Result<bool, AppE
     }
 
     Ok(changed)
-}
-
-fn patch_exported_plugin_sources(project: &Project, output_dir: &Path) -> Result<usize, AppError> {
-    let Some(plugins_file) = project
-        .files
-        .iter()
-        .find(|file| file.relative_path.eq_ignore_ascii_case("js/plugins.js"))
-    else {
-        return Ok(0);
-    };
-
-    let plugins_path = output_dir.join("js").join("plugins.js");
-    if !plugins_path.is_file() {
-        return Ok(0);
-    }
-
-    let plugins_content = std::fs::read_to_string(&plugins_path)?;
-    let plugins_json = parse_plugins_js(&plugins_content)?;
-    let Some(plugins) = plugins_json.as_array() else {
-        return Ok(0);
-    };
-
-    let mut patches_by_plugin: HashMap<usize, Vec<PluginSourcePatch>> = HashMap::new();
-    for entry in &plugins_file.entries {
-        if entry.status == EntryStatus::Untranslated || entry.translation.trim().is_empty() {
-            continue;
-        }
-        let Some((plugin_index, parameter_name)) =
-            parse_direct_plugin_parameter_entry_id(&entry.id)
-        else {
-            continue;
-        };
-        patches_by_plugin
-            .entry(plugin_index)
-            .or_default()
-            .push(PluginSourcePatch {
-                parameter_name,
-                original: entry.original.clone(),
-                translation: entry.translation.clone(),
-            });
-    }
-
-    let mut files_changed = 0;
-    for (plugin_index, patches) in patches_by_plugin {
-        let Some(plugin_name) = plugins
-            .get(plugin_index)
-            .and_then(|plugin| plugin.get("name"))
-            .and_then(Value::as_str)
-        else {
-            continue;
-        };
-        let Some(source_path) = find_exported_plugin_source_path(output_dir, plugin_name) else {
-            continue;
-        };
-
-        let mut source = read_plugin_source_text(&source_path)?;
-        let before = source.text.clone();
-
-        for patch in &patches {
-            if !patch.original.is_empty() && patch.original != patch.translation {
-                source.text = source.text.replace(&patch.original, &patch.translation);
-            }
-        }
-
-        if patches.iter().any(|patch| {
-            source
-                .text
-                .contains(&format!("parameters['{}']", patch.parameter_name))
-        }) {
-            source.text = patch_plugin_manager_parameter_name(&source.text, plugin_name);
-        }
-
-        if source.text != before {
-            write_plugin_source_text(&source_path, &source)?;
-            files_changed += 1;
-        }
-    }
-
-    Ok(files_changed)
-}
-
-fn patch_exported_unsupported_prompt_calls(output_dir: &Path) -> Result<usize, AppError> {
-    let mut files_changed = 0usize;
-
-    if let Some(source_path) =
-        find_exported_plugin_source_path(output_dir, "Torigoya_InputNamePrompt")
-    {
-        let mut source = read_plugin_source_text(&source_path)?;
-        let before = source.text.clone();
-        source.text = patch_torigoya_input_name_prompt(&source.text);
-        if source.text != before {
-            write_plugin_source_text(&source_path, &source)?;
-            files_changed += 1;
-        }
-    }
-
-    if let Some(source_path) = find_exported_plugin_source_path(output_dir, "NobleMushroom") {
-        let mut source = read_plugin_source_text(&source_path)?;
-        let before = source.text.clone();
-        source.text = patch_noble_mushroom_name_prompt(&source.text);
-        if source.text != before {
-            write_plugin_source_text(&source_path, &source)?;
-            files_changed += 1;
-        }
-    }
-
-    if let Some(source_path) = find_exported_plugin_source_path(output_dir, "GraphicalDesignMode") {
-        let mut source = read_plugin_source_text(&source_path)?;
-        let before = source.text.clone();
-        source.text = patch_graphical_design_mode_prompt(&source.text);
-        if source.text != before {
-            write_plugin_source_text(&source_path, &source)?;
-            files_changed += 1;
-        }
-    }
-
-    Ok(files_changed)
-}
-
-fn patch_torigoya_input_name_prompt(source: &str) -> String {
-    let old = r#"    InputNamePrompt.runCommand = function (args) {
-        var actor = $gameActors.actor(~~args.shift());
-        var max = Number(args.shift());
-        if (isNaN(max)) max = InputNamePrompt.settings.maxLength;
-        var message = args.join(' ') || InputNamePrompt.settings.getMessage();
-        message += '\n' + InputNamePrompt.settings.getMaximumMessage().replace(/%1/g, '' + max);
-        var name = window.prompt(message, actor.name());
-        if (name) {
-            name = name.trim();
-            if (name.length > 0) {
-                actor.setName(name.substr(0, max));
-            }
-        }
-    };"#;
-    let new = r#"    InputNamePrompt.runCommand = function (args) {
-        var actorId = ~~args.shift();
-        var actor = $gameActors.actor(actorId);
-        var max = Number(args.shift());
-        if (isNaN(max)) max = InputNamePrompt.settings.maxLength;
-        if (!actor) return;
-        SceneManager.push(Scene_Name);
-        SceneManager.prepareNextScene(actorId, max);
-    };"#;
-    source.replace(old, new)
-}
-
-fn patch_noble_mushroom_name_prompt(source: &str) -> String {
-    let old = r#"    Game_Message.prototype.popupNameInputPrompt = function(actorId, message) {
-        var actor        = $gameActors.actor(actorId);
-        var defaultValue = actor ? actor.name() : '';
-        var result       = window.prompt(message || '', defaultValue);
-        if (Utils.isNwjs()) {
-            var gui = require('nw.gui');
-            var win = gui.Window.get();
-            win.focus();
-            Input.clear();
-        }
-        if (result) actor.setName(result);
-    };"#;
-    let new = r#"    Game_Message.prototype.popupNameInputPrompt = function(actorId, message) {
-        var actor = $gameActors.actor(actorId);
-        if (!actor) return;
-        SceneManager.push(Scene_Name);
-        SceneManager.prepareNextScene(actorId, 10);
-        Input.clear();
-    };"#;
-    source.replace(old, new)
-}
-
-fn patch_graphical_design_mode_prompt(source: &str) -> String {
-    source
-        .replace("                var result = _prompt.apply(this, arguments);", "                var result = null;")
-        .replace(
-            "                var result = window.prompt(propLabel + 'を入力してください。', this[propName].toString());",
-            "                var result = null;",
-        )
-}
-
-#[derive(Debug, Clone)]
-struct PluginSourcePatch {
-    parameter_name: String,
-    original: String,
-    translation: String,
-}
-
-fn parse_direct_plugin_parameter_entry_id(id: &str) -> Option<(usize, String)> {
-    let mut parts = id.split(':');
-    if parts.next()? != "Plugins" {
-        return None;
-    }
-    let plugin_index = parts.next()?.parse::<usize>().ok()?;
-    if parts.next()? != "parameters" {
-        return None;
-    }
-    let parameter_name = parts.next()?.to_string();
-    if parts.next().is_some() {
-        return None;
-    }
-    Some((plugin_index, parameter_name))
-}
-
-fn find_exported_plugin_source_path(output_dir: &Path, plugin_name: &str) -> Option<PathBuf> {
-    let plugins_dir = output_dir.join("js").join("plugins");
-    let direct = plugins_dir.join(format!("{plugin_name}.js"));
-    if direct.is_file() {
-        return Some(direct);
-    }
-
-    let desired = format!("{plugin_name}.js").to_ascii_lowercase();
-    std::fs::read_dir(plugins_dir)
-        .ok()?
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .find(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .map(|name| name.eq_ignore_ascii_case(&desired))
-                .unwrap_or(false)
-        })
-}
-
-struct PluginSourceText {
-    text: String,
-    encoding: PluginSourceEncoding,
-}
-
-enum PluginSourceEncoding {
-    Utf8,
-    Utf16Le,
-}
-
-fn read_plugin_source_text(path: &Path) -> Result<PluginSourceText, AppError> {
-    let bytes = std::fs::read(path)?;
-    if bytes.starts_with(&[0xff, 0xfe]) {
-        let units = bytes[2..]
-            .chunks_exact(2)
-            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
-            .collect::<Vec<_>>();
-        let text = String::from_utf16_lossy(&units);
-        return Ok(PluginSourceText {
-            text,
-            encoding: PluginSourceEncoding::Utf16Le,
-        });
-    }
-
-    Ok(PluginSourceText {
-        text: String::from_utf8_lossy(&bytes).to_string(),
-        encoding: PluginSourceEncoding::Utf8,
-    })
-}
-
-fn write_plugin_source_text(path: &Path, source: &PluginSourceText) -> Result<(), AppError> {
-    match source.encoding {
-        PluginSourceEncoding::Utf8 => {
-            std::fs::write(path, source.text.as_bytes())?;
-        }
-        PluginSourceEncoding::Utf16Le => {
-            let mut bytes = vec![0xff, 0xfe];
-            for unit in source.text.encode_utf16() {
-                bytes.extend_from_slice(&unit.to_le_bytes());
-            }
-            std::fs::write(path, bytes)?;
-        }
-    }
-    Ok(())
-}
-
-fn patch_plugin_manager_parameter_name(source: &str, plugin_name: &str) -> String {
-    let Ok(re) = regex::Regex::new(r#"PluginManager\.parameters\((['"])([^'"]+)(['"])\)"#) else {
-        return source.to_string();
-    };
-
-    re.replace_all(source, |captures: &regex::Captures| {
-        let current = captures.get(2).map(|m| m.as_str()).unwrap_or_default();
-        if current == plugin_name {
-            captures
-                .get(0)
-                .map(|m| m.as_str())
-                .unwrap_or_default()
-                .to_string()
-        } else {
-            format!(
-                "PluginManager.parameters({quote}{plugin_name}{quote})",
-                quote = &captures[1]
-            )
-        }
-    })
-    .to_string()
 }
 
 fn append_visible_source_text_warnings(
@@ -3426,7 +3137,7 @@ mod tests {
     }
 
     #[test]
-    fn test_export_project_patches_plugin_source_fallbacks() {
+    fn test_export_project_only_updates_structured_plugin_parameters() {
         let temp_dir = std::env::temp_dir().join(format!(
             "fairtl_export_plugin_source_{}",
             uuid::Uuid::new_v4().as_simple()
@@ -3455,11 +3166,8 @@ mod tests {
 ];"#,
         )
         .unwrap();
-        fs::write(
-            plugins_dir.join("gamEnd.js"),
-            "var parameters = PluginManager.parameters('gameEnd');\nvar EndName = String(parameters['endName'] || 'ゲーム終了');\n",
-        )
-        .unwrap();
+        let plugin_source = "/*:\n * @param endName\n * @default ゲーム終了\n */\nvar parameters = PluginManager.parameters('gameEnd');\nvar EndName = String(parameters['endName'] || 'ゲーム終了');\nvar internalMarker = 'ゲーム終了';\n";
+        fs::write(plugins_dir.join("gamEnd.js"), plugin_source).unwrap();
 
         let project = Project {
             id: "test".into(),
@@ -3500,17 +3208,15 @@ mod tests {
         assert!(plugins_output.contains(r#""endName": "Salir""#));
 
         let source_output =
-            fs::read_to_string(output_dir.join("js").join("plugins").join("gamEnd.js")).unwrap();
-        assert!(source_output.contains("PluginManager.parameters('gamEnd')"));
-        assert!(source_output.contains("parameters['endName'] || 'Salir'"));
-        assert!(!source_output.contains("ゲーム終了"));
+            fs::read(output_dir.join("js").join("plugins").join("gamEnd.js")).unwrap();
+        assert_eq!(source_output, plugin_source.as_bytes());
 
         let _ = fs::remove_dir_all(&temp_dir);
         let _ = fs::remove_dir_all(&output_dir);
     }
 
     #[test]
-    fn test_export_project_patches_prompt_based_name_input_plugins() {
+    fn test_export_project_keeps_prompt_based_plugin_source_unchanged() {
         let temp_dir = std::env::temp_dir().join(format!(
             "fairtl_export_prompt_plugin_{}",
             uuid::Uuid::new_v4().as_simple()
@@ -3539,9 +3245,7 @@ mod tests {
 ];"#,
         )
         .unwrap();
-        fs::write(
-            plugins_dir.join("Torigoya_InputNamePrompt.js"),
-            r#"    InputNamePrompt.runCommand = function (args) {
+        let plugin_source = r#"    InputNamePrompt.runCommand = function (args) {
         var actor = $gameActors.actor(~~args.shift());
         var max = Number(args.shift());
         if (isNaN(max)) max = InputNamePrompt.settings.maxLength;
@@ -3554,7 +3258,10 @@ mod tests {
                 actor.setName(name.substr(0, max));
             }
         }
-    };"#,
+    };"#;
+        fs::write(
+            plugins_dir.join("Torigoya_InputNamePrompt.js"),
+            plugin_source,
         )
         .unwrap();
 
@@ -3581,16 +3288,14 @@ mod tests {
         ));
         export_project(&project, &output_dir).unwrap();
 
-        let source_output = fs::read_to_string(
+        let source_output = fs::read(
             output_dir
                 .join("js")
                 .join("plugins")
                 .join("Torigoya_InputNamePrompt.js"),
         )
         .unwrap();
-        assert!(!source_output.contains("window.prompt"));
-        assert!(source_output.contains("SceneManager.push(Scene_Name)"));
-        assert!(source_output.contains("SceneManager.prepareNextScene(actorId, max)"));
+        assert_eq!(source_output, plugin_source.as_bytes());
 
         let _ = fs::remove_dir_all(&temp_dir);
         let _ = fs::remove_dir_all(&output_dir);
