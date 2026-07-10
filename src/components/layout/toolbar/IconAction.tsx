@@ -23,6 +23,7 @@ export function IconAction({
         <Button
           variant={active ? "secondary" : "ghost"}
           size="icon-sm"
+          className="size-10 md:size-7"
           onClick={onClick}
           disabled={disabled}
           aria-label={label}
