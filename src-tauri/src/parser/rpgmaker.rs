@@ -888,8 +888,11 @@ fn inject_plugin_source_defaults(json: &mut Value, game_dir: &Path) -> Result<()
         };
 
         let source_bytes = std::fs::read(&source_path)?;
-        let source_content = String::from_utf8_lossy(&source_bytes);
-        let defaults = extract_plugin_source_defaults(&source_content);
+        let Ok(source_content) = std::str::from_utf8(&source_bytes) else {
+            // Plugin defaults are optional metadata; never invent text from invalid bytes.
+            continue;
+        };
+        let defaults = extract_plugin_source_defaults(source_content);
         if defaults.is_empty() {
             continue;
         }
@@ -1766,6 +1769,34 @@ mod tests {
         assert!(!ids
             .iter()
             .any(|(id, original)| id.ends_with(":fileName") || original == "タイトル画像"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_invalid_utf8_plugin_source_does_not_inject_replacement_text() {
+        let root = std::env::temp_dir().join(format!(
+            "fairtl_plugin_invalid_utf8_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        fs::create_dir_all(root.join("js").join("plugins")).unwrap();
+        fs::write(
+            root.join("js").join("plugins").join("Broken.js"),
+            b"/*:\n * @param title\n * @default Corrupt\xff\n */",
+        )
+        .unwrap();
+
+        let mut plugins = serde_json::json!([{
+            "name": "Broken",
+            "status": true,
+            "description": "",
+            "parameters": {}
+        }]);
+        inject_plugin_source_defaults(&mut plugins, &root).unwrap();
+
+        let parameters = plugins[0]["parameters"].as_object().unwrap();
+        assert!(parameters.is_empty());
+        assert!(!plugins.to_string().contains('\u{fffd}'));
 
         let _ = fs::remove_dir_all(&root);
     }

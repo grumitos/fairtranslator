@@ -1998,14 +1998,23 @@ fn string_from_legacy_value(value: &Value) -> Option<String> {
     }
 
     if let Some(bytes) = value.get("$string").and_then(Value::as_array) {
-        let decoded = bytes
-            .iter()
-            .filter_map(|b| b.as_u64().map(|n| n as u8))
-            .collect::<Vec<u8>>();
-        return Some(String::from_utf8_lossy(&decoded).to_string());
+        return decode_legacy_string(bytes);
     }
 
     None
+}
+
+fn decode_legacy_string(bytes: &[Value]) -> Option<String> {
+    let decoded = bytes
+        .iter()
+        .map(|value| {
+            value
+                .as_u64()
+                .filter(|byte| *byte <= u8::MAX as u64)
+                .map(|byte| byte as u8)
+        })
+        .collect::<Option<Vec<u8>>>()?;
+    String::from_utf8(decoded).ok()
 }
 
 fn set_string_value(target: &mut Value, translation: &str) -> bool {
@@ -2019,6 +2028,9 @@ fn set_string_value(target: &mut Value, translation: &str) -> bool {
     }
 
     if let Some(bytes) = target.get_mut("$string").and_then(Value::as_array_mut) {
+        if decode_legacy_string(bytes).is_none() {
+            return false;
+        }
         *bytes = translation
             .as_bytes()
             .iter()
@@ -2768,6 +2780,25 @@ mod tests {
         visit(root, root, &mut files);
         files.sort_by(|left, right| left.0.cmp(&right.0));
         files
+    }
+
+    #[test]
+    fn test_invalid_utf8_legacy_string_is_not_decoded_or_overwritten() {
+        let mut value = json!({ "$string": [72, 255] });
+        let original = value.clone();
+
+        assert_eq!(string_from_legacy_value(&value), None);
+        assert!(!set_string_value(&mut value, "Translated"));
+        assert_eq!(value, original);
+    }
+
+    #[test]
+    fn test_valid_utf8_legacy_string_remains_translatable() {
+        let mut value = json!({ "$string": [72, 105] });
+
+        assert_eq!(string_from_legacy_value(&value).as_deref(), Some("Hi"));
+        assert!(set_string_value(&mut value, "Sí"));
+        assert_eq!(string_from_legacy_value(&value).as_deref(), Some("Sí"));
     }
 
     #[test]

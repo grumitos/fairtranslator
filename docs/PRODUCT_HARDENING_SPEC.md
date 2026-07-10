@@ -55,8 +55,11 @@ presenting unsupported Unity formats as compatible.
 ### 3. RPG Maker recognition and writeback
 
 - Remove unsafe global source-text replacement in JavaScript plugin sources.
-- Never decode legacy byte strings lossily and write the replacement character
-  back into a game; unsupported encodings must fail with a precise message.
+- Treat legacy translatable byte strings as UTF-8 only: invalid bytes fail with
+  the entry ID and byte offset before entries or exports are produced. Shift-JIS
+  and other legacy encodings are not inferred or silently converted.
+- Skip non-UTF-8 plugin source defaults because they are optional metadata;
+  never inject replacement characters into otherwise valid `plugins.js` data.
 - Cover omitted system vocabulary and MZ speaker-name commands with parser and
   exporter fixtures.
 - Detect source drift at stable entry IDs before replacing copied game content.

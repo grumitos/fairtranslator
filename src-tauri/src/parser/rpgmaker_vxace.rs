@@ -214,11 +214,18 @@ fn extract_database_entries(stem: &str, json: &Value) -> Result<Vec<TranslationE
             .and_then(Value::as_i64)
             .map(|v| v as u64)
             .unwrap_or((idx + 1) as u64);
-        let item_name = string_from_value(fields.get("@name").unwrap_or(&Value::Null))
-            .unwrap_or_else(|| "???".to_string());
+        let item_name = match fields.get("@name") {
+            Some(value) => string_from_value(value, &format!("{stem}:name:{item_id}"))?,
+            None => None,
+        }
+        .unwrap_or_else(|| "???".to_string());
 
         for (field_name, legacy_key) in LEGACY_DB_TEXT_FIELDS {
-            if let Some(text) = fields.get(*legacy_key).and_then(string_from_value) {
+            let text = match fields.get(*legacy_key) {
+                Some(value) => string_from_value(value, &format!("{stem}:{field_name}:{item_id}"))?,
+                None => None,
+            };
+            if let Some(text) = text {
                 if text.trim().is_empty() {
                     continue;
                 }
@@ -240,11 +247,11 @@ fn extract_map_entries(stem: &str, json: &Value) -> Result<Vec<TranslationEntry>
 
     let mut entries = Vec::new();
 
-    if let Some(display_name) = fields
-        .get("@display_name")
-        .and_then(string_from_value)
-        .filter(|s| !s.trim().is_empty())
-    {
+    let display_name = match fields.get("@display_name") {
+        Some(value) => string_from_value(value, &format!("{stem}:displayName"))?,
+        None => None,
+    };
+    if let Some(display_name) = display_name.filter(|s| !s.trim().is_empty()) {
         entries.push(make_entry(
             &format!("{stem}:displayName"),
             &format!("{stem} > displayName"),
@@ -263,10 +270,11 @@ fn extract_map_entries(stem: &str, json: &Value) -> Result<Vec<TranslationEntry>
                 .and_then(Value::as_i64)
                 .map(|v| v as u64)
                 .unwrap_or(0);
-            let ev_name = event_fields
-                .get("@name")
-                .and_then(string_from_value)
-                .unwrap_or_default();
+            let ev_name = match event_fields.get("@name") {
+                Some(value) => string_from_value(value, &format!("{stem}:{ev_id}:name"))?,
+                None => None,
+            }
+            .unwrap_or_default();
             let ev_label = if ev_name.is_empty() {
                 format!("Event {ev_id}")
             } else {
@@ -282,7 +290,7 @@ fn extract_map_entries(stem: &str, json: &Value) -> Result<Vec<TranslationEntry>
                     if let Some(list) = page_fields.get("@list").and_then(Value::as_array) {
                         let id_prefix = format!("{stem}:{ev_id}:{page_idx}");
                         let context_prefix = format!("{stem} > {ev_label} > Page {}", page_idx + 1);
-                        entries.extend(extract_event_commands(list, &id_prefix, &context_prefix));
+                        entries.extend(extract_event_commands(list, &id_prefix, &context_prefix)?);
                     }
                 }
             }
@@ -308,10 +316,11 @@ fn extract_common_events_entries(json: &Value) -> Result<Vec<TranslationEntry>, 
             .and_then(Value::as_i64)
             .map(|v| v as u64)
             .unwrap_or((idx + 1) as u64);
-        let ce_name = fields
-            .get("@name")
-            .and_then(string_from_value)
-            .unwrap_or_default();
+        let ce_name = match fields.get("@name") {
+            Some(value) => string_from_value(value, &format!("CommonEvents:name:{ce_id}"))?,
+            None => None,
+        }
+        .unwrap_or_default();
         let ce_label = if ce_name.is_empty() {
             format!("CommonEvent {ce_id}")
         } else {
@@ -322,7 +331,7 @@ fn extract_common_events_entries(json: &Value) -> Result<Vec<TranslationEntry>, 
                 list,
                 &format!("CommonEvents:{ce_id}"),
                 &format!("CommonEvents > {ce_label}"),
-            ));
+            )?);
         }
     }
 
@@ -345,10 +354,11 @@ fn extract_troops_entries(json: &Value) -> Result<Vec<TranslationEntry>, AppErro
             .and_then(Value::as_i64)
             .map(|v| v as u64)
             .unwrap_or((idx + 1) as u64);
-        let troop_name = fields
-            .get("@name")
-            .and_then(string_from_value)
-            .unwrap_or_default();
+        let troop_name = match fields.get("@name") {
+            Some(value) => string_from_value(value, &format!("Troops:name:{troop_id}"))?,
+            None => None,
+        }
+        .unwrap_or_default();
 
         if !troop_name.trim().is_empty() {
             entries.push(make_entry(
@@ -370,7 +380,7 @@ fn extract_troops_entries(json: &Value) -> Result<Vec<TranslationEntry>, AppErro
                         page_idx + 1
                     );
                     let id_prefix = format!("Troops:{troop_id}:{page_idx}");
-                    entries.extend(extract_event_commands(list, &id_prefix, &context_prefix));
+                    entries.extend(extract_event_commands(list, &id_prefix, &context_prefix)?);
                 }
             }
         }
@@ -384,16 +394,16 @@ fn extract_system_entries(json: &Value) -> Result<Vec<TranslationEntry>, AppErro
         .ok_or_else(|| AppError::Parse("System: expected RPG::System object".into()))?;
 
     let mut entries = Vec::new();
-    if let Some(title) = fields
-        .get("@game_title")
-        .and_then(string_from_value)
-        .filter(|s| !s.trim().is_empty())
-    {
+    let title = match fields.get("@game_title") {
+        Some(value) => string_from_value(value, "System:gameTitle")?,
+        None => None,
+    };
+    if let Some(title) = title.filter(|s| !s.trim().is_empty()) {
         entries.push(make_entry("System:gameTitle", "System > gameTitle", title));
     }
 
     if let Some(terms) = fields.get("@terms") {
-        extract_terms_recursive(terms, "System:terms", "System > terms", &mut entries);
+        extract_terms_recursive(terms, "System:terms", "System > terms", &mut entries)?;
     }
 
     Ok(entries)
@@ -404,10 +414,10 @@ fn extract_terms_recursive(
     id_prefix: &str,
     context_prefix: &str,
     entries: &mut Vec<TranslationEntry>,
-) {
-    if let Some(text) = string_from_value(value).filter(|s| !s.trim().is_empty()) {
+) -> Result<(), AppError> {
+    if let Some(text) = string_from_value(value, id_prefix)?.filter(|s| !s.trim().is_empty()) {
         entries.push(make_entry(id_prefix, context_prefix, text));
-        return;
+        return Ok(());
     }
 
     if let Some(arr) = value.as_array() {
@@ -417,9 +427,9 @@ fn extract_terms_recursive(
                 &format!("{id_prefix}.{i}"),
                 &format!("{context_prefix}[{i}]"),
                 entries,
-            );
+            )?;
         }
-        return;
+        return Ok(());
     }
 
     if let Some(fields) = object_fields(value) {
@@ -430,16 +440,18 @@ fn extract_terms_recursive(
                 &format!("{id_prefix}.{clean_key}"),
                 &format!("{context_prefix} > {clean_key}"),
                 entries,
-            );
+            )?;
         }
     }
+
+    Ok(())
 }
 
 fn extract_event_commands(
     list: &[Value],
     id_prefix: &str,
     context_prefix: &str,
-) -> Vec<TranslationEntry> {
+) -> Result<Vec<TranslationEntry>, AppError> {
     let mut entries = Vec::new();
     let mut text_accumulator: Vec<String> = Vec::new();
     let mut text_start_idx: Option<usize> = None;
@@ -475,7 +487,13 @@ fn extract_event_commands(
 
         match code {
             CODE_SHOW_TEXT => {
-                if let Some(line) = command_parameter(cmd, 0).and_then(string_from_value) {
+                let line = match command_parameter(cmd, 0) {
+                    Some(value) => {
+                        string_from_value(value, &format!("{id_prefix}:text:{cmd_idx}"))?
+                    }
+                    None => None,
+                };
+                if let Some(line) = line {
                     if text_start_idx.is_none() {
                         text_start_idx = Some(cmd_idx);
                     }
@@ -485,9 +503,11 @@ fn extract_event_commands(
             CODE_SHOW_CHOICES => {
                 if let Some(choices) = command_parameter(cmd, 0).and_then(Value::as_array) {
                     for (ci, choice) in choices.iter().enumerate() {
-                        if let Some(text) =
-                            string_from_value(choice).filter(|s| !s.trim().is_empty())
-                        {
+                        let text = string_from_value(
+                            choice,
+                            &format!("{id_prefix}:choice:{cmd_idx}:{ci}"),
+                        )?;
+                        if let Some(text) = text.filter(|s| !s.trim().is_empty()) {
                             entries.push(make_entry(
                                 &format!("{id_prefix}:choice:{cmd_idx}:{ci}"),
                                 &format!(
@@ -502,7 +522,13 @@ fn extract_event_commands(
                 }
             }
             CODE_SCROLL_TEXT => {
-                if let Some(line) = command_parameter(cmd, 0).and_then(string_from_value) {
+                let line = match command_parameter(cmd, 0) {
+                    Some(value) => {
+                        string_from_value(value, &format!("{id_prefix}:scroll:{cmd_idx}"))?
+                    }
+                    None => None,
+                };
+                if let Some(line) = line {
                     if scroll_start_idx.is_none() {
                         scroll_start_idx = Some(cmd_idx);
                     }
@@ -510,10 +536,13 @@ fn extract_event_commands(
                 }
             }
             CODE_CHANGE_NAME => {
-                if let Some(text) = command_parameter(cmd, 1)
-                    .and_then(string_from_value)
-                    .filter(|s| !s.trim().is_empty())
-                {
+                let text = match command_parameter(cmd, 1) {
+                    Some(value) => {
+                        string_from_value(value, &format!("{id_prefix}:changeName:{cmd_idx}"))?
+                    }
+                    None => None,
+                };
+                if let Some(text) = text.filter(|s| !s.trim().is_empty()) {
                     entries.push(make_entry(
                         &format!("{id_prefix}:changeName:{cmd_idx}"),
                         &format!("{context_prefix} > changeName"),
@@ -522,10 +551,13 @@ fn extract_event_commands(
                 }
             }
             CODE_CHANGE_NICKNAME => {
-                if let Some(text) = command_parameter(cmd, 1)
-                    .and_then(string_from_value)
-                    .filter(|s| !s.trim().is_empty())
-                {
+                let text = match command_parameter(cmd, 1) {
+                    Some(value) => {
+                        string_from_value(value, &format!("{id_prefix}:changeNickname:{cmd_idx}"))?
+                    }
+                    None => None,
+                };
+                if let Some(text) = text.filter(|s| !s.trim().is_empty()) {
                     entries.push(make_entry(
                         &format!("{id_prefix}:changeNickname:{cmd_idx}"),
                         &format!("{context_prefix} > changeNickname"),
@@ -534,10 +566,13 @@ fn extract_event_commands(
                 }
             }
             CODE_CHANGE_PROFILE => {
-                if let Some(text) = command_parameter(cmd, 1)
-                    .and_then(string_from_value)
-                    .filter(|s| !s.trim().is_empty())
-                {
+                let text = match command_parameter(cmd, 1) {
+                    Some(value) => {
+                        string_from_value(value, &format!("{id_prefix}:changeProfile:{cmd_idx}"))?
+                    }
+                    None => None,
+                };
+                if let Some(text) = text.filter(|s| !s.trim().is_empty()) {
                     entries.push(make_entry(
                         &format!("{id_prefix}:changeProfile:{cmd_idx}"),
                         &format!("{context_prefix} > changeProfile"),
@@ -564,7 +599,7 @@ fn extract_event_commands(
         ));
     }
 
-    entries
+    Ok(entries)
 }
 
 fn object_fields(value: &Value) -> Option<&Map<String, Value>> {
@@ -601,24 +636,41 @@ fn command_parameter(cmd: &Value, idx: usize) -> Option<&Value> {
         .and_then(|params| params.get(idx))
 }
 
-fn string_from_value(value: &Value) -> Option<String> {
+fn string_from_value(value: &Value, context: &str) -> Result<Option<String>, AppError> {
     if let Some(s) = value.as_str() {
-        return Some(s.to_string());
+        return Ok(Some(s.to_string()));
     }
 
     if let Some(instance_value) = value.get("$instance").and_then(|v| v.get("value")) {
-        return string_from_value(instance_value);
+        return string_from_value(instance_value, context);
     }
 
     if let Some(bytes) = value.get("$string").and_then(Value::as_array) {
         let decoded = bytes
             .iter()
-            .filter_map(|b| b.as_u64().map(|n| n as u8))
-            .collect::<Vec<u8>>();
-        return Some(String::from_utf8_lossy(&decoded).to_string());
+            .enumerate()
+            .map(|(offset, value)| {
+                value
+                    .as_u64()
+                    .filter(|byte| *byte <= u8::MAX as u64)
+                    .map(|byte| byte as u8)
+                    .ok_or_else(|| {
+                        AppError::Parse(format!(
+                            "{context}: legacy text contains a non-byte value at offset {offset}"
+                        ))
+                    })
+            })
+            .collect::<Result<Vec<u8>, AppError>>()?;
+        let text = std::str::from_utf8(&decoded).map_err(|error| {
+            AppError::Parse(format!(
+                "{context}: legacy text is not valid UTF-8 at byte offset {}; the game may use an unsupported text encoding",
+                error.valid_up_to()
+            ))
+        })?;
+        return Ok(Some(text.to_string()));
     }
 
-    None
+    Ok(None)
 }
 
 fn make_entry(id: &str, file_context: &str, original: String) -> TranslationEntry {
@@ -629,5 +681,50 @@ fn make_entry(id: &str, file_context: &str, original: String) -> TranslationEntr
         translation: String::new(),
         status: EntryStatus::Untranslated,
         notes: String::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_invalid_utf8_in_translatable_legacy_field() {
+        let json = serde_json::json!([{
+            "$object": {
+                "fields": {
+                    "@id": 1,
+                    "@name": { "$string": [72, 255] },
+                    "@description": "Valid description"
+                }
+            }
+        }]);
+
+        let error = extract_database_entries("Actors", &json)
+            .expect_err("invalid UTF-8 must not create a translatable entry");
+        let message = error.to_string();
+
+        assert!(message.contains("Actors:name:1"));
+        assert!(message.contains("UTF-8"));
+        assert!(message.contains("byte offset 1"));
+        assert!(!message.contains('\u{fffd}'));
+    }
+
+    #[test]
+    fn ignores_invalid_binary_values_outside_known_text_fields() {
+        let json = serde_json::json!([{
+            "$object": {
+                "fields": {
+                    "@id": 1,
+                    "@name": "Hero",
+                    "@binary_blob": { "$string": [255] }
+                }
+            }
+        }]);
+
+        let entries = extract_database_entries("Actors", &json).unwrap();
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].original, "Hero");
     }
 }
