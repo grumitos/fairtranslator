@@ -448,12 +448,26 @@ pub async fn translate_ai_batch_apply(
     expected_batch_id: Option<String>,
     response_map: Option<Vec<AiBatchResponseRef>>,
 ) -> Result<AiBatchApplyResult, AppError> {
+    let expected_project_id = expected_project_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::Parse("Falta el projectId del lote exportado".into()))?;
+    let expected_batch_id = expected_batch_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::Parse("Falta el batchId del lote exportado".into()))?;
+    let response_map = response_map
+        .as_deref()
+        .ok_or_else(|| AppError::Parse("Falta el mapa de respuesta del lote exportado".into()))?;
     let translations = ai_batch::parse_ai_batch_response_with_refs(
         &raw_response,
-        expected_project_id.as_deref(),
-        expected_batch_id.as_deref(),
-        response_map.as_deref(),
+        Some(expected_project_id),
+        Some(expected_batch_id),
+        Some(response_map),
     )?;
+    ai_batch::validate_ai_batch_response_complete(response_map, &translations)?;
 
     let mut proj_guard = state
         .project
@@ -463,6 +477,7 @@ pub async fn translate_ai_batch_apply(
     let project = proj_guard
         .as_mut()
         .ok_or_else(|| AppError::Project("No hay ningún proyecto abierto".into()))?;
+    ai_batch::ensure_ai_batch_project_matches(&project.id, expected_project_id)?;
 
     Ok(ai_batch::apply_ai_batch_updates(
         project,

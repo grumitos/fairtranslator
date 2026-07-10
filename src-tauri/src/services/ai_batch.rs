@@ -290,6 +290,81 @@ pub fn parse_ai_batch_response_with_refs(
     )
 }
 
+pub fn validate_ai_batch_response_complete(
+    response_map: &[AiBatchResponseRef],
+    translations: &[AiBatchTranslation],
+) -> Result<(), AppError> {
+    if translations.len() != response_map.len() {
+        return Err(AppError::Parse(format!(
+            "Respuesta incompleta: se esperaban {} entradas y se recibieron {}",
+            response_map.len(),
+            translations.len()
+        )));
+    }
+
+    let mut expected_entries = HashSet::with_capacity(response_map.len());
+    for (index, entry) in response_map.iter().enumerate() {
+        let expected_local_id = u16::try_from(index + 1).map_err(|_| {
+            AppError::Parse("El mapa de respuesta excede el rango de IDs locales".into())
+        })?;
+        if entry.local_id != expected_local_id {
+            return Err(AppError::Parse(
+                "El mapa de respuesta contiene IDs locales inválidos o duplicados".into(),
+            ));
+        }
+        if entry.file_path.trim().is_empty() || entry.entry_id.trim().is_empty() {
+            return Err(AppError::Parse(
+                "El mapa de respuesta contiene una ruta o ID de entrada vacío".into(),
+            ));
+        }
+        if !expected_entries.insert((entry.file_path.as_str(), entry.entry_id.as_str())) {
+            return Err(AppError::Parse(
+                "El mapa de respuesta contiene una entrada duplicada".into(),
+            ));
+        }
+    }
+
+    let mut received_entries = HashSet::with_capacity(translations.len());
+    for translation in translations {
+        if !received_entries.insert((
+            translation.file_path.as_str(),
+            translation.entry_id.as_str(),
+        )) {
+            return Err(AppError::Parse(
+                "La respuesta contiene una entrada duplicada".into(),
+            ));
+        }
+        if !translation.skip && translation.translation.trim().is_empty() {
+            return Err(AppError::Parse(
+                "Respuesta incompleta: una entrada no tiene translation ni skip=true".into(),
+            ));
+        }
+    }
+
+    if expected_entries != received_entries {
+        let missing = expected_entries.difference(&received_entries).count();
+        let unexpected = received_entries.difference(&expected_entries).count();
+        return Err(AppError::Parse(format!(
+            "Los IDs de la respuesta no coinciden con el mapa: faltantes={missing}, inesperados={unexpected}"
+        )));
+    }
+
+    Ok(())
+}
+
+pub(crate) fn ensure_ai_batch_project_matches(
+    current_project_id: &str,
+    expected_project_id: &str,
+) -> Result<(), AppError> {
+    if current_project_id == expected_project_id {
+        Ok(())
+    } else {
+        Err(AppError::Project(
+            "El proyecto abierto no coincide con el lote de IA exportado".into(),
+        ))
+    }
+}
+
 fn merge_notes(existing: &str, incoming: Option<&str>) -> String {
     let Some(incoming) = incoming.map(str::trim).filter(|text| !text.is_empty()) else {
         return existing.to_string();
@@ -355,6 +430,18 @@ pub fn apply_ai_batch_updates(
                 .push(format!("{}::{}", update.file_path, update.entry_id));
             continue;
         };
+
+        if !translation_orchestrator::entry_is_pending_translation(entry) {
+            result.skipped_entries += 1;
+            push_warning(
+                &mut result.warnings,
+                &format!(
+                    "{}::{} se omitió porque dejó de estar pendiente después de exportar el lote.",
+                    update.file_path, update.entry_id
+                ),
+            );
+            continue;
+        }
 
         let merged_notes = merge_notes(&entry.notes, update.notes.as_deref());
         let normalized_translation =
@@ -645,6 +732,92 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_ai_batch_response_complete_rejects_partial_response() {
+        let response_map = vec![
+            AiBatchResponseRef {
+                local_id: 1,
+                file_path: "data/Map001.json".into(),
+                entry_id: "entry-1".into(),
+            },
+            AiBatchResponseRef {
+                local_id: 2,
+                file_path: "data/Map001.json".into(),
+                entry_id: "entry-2".into(),
+            },
+        ];
+        let translations = vec![AiBatchTranslation {
+            file_path: "data/Map001.json".into(),
+            entry_id: "entry-1".into(),
+            translation: "Hola".into(),
+            notes: None,
+            skip: false,
+        }];
+
+        let error = validate_ai_batch_response_complete(&response_map, &translations).unwrap_err();
+
+        assert!(error.to_string().contains("esperaban 2"));
+    }
+
+    #[test]
+    fn test_validate_ai_batch_response_complete_rejects_duplicate_entries() {
+        let response_map = vec![
+            AiBatchResponseRef {
+                local_id: 1,
+                file_path: "data/Map001.json".into(),
+                entry_id: "entry-1".into(),
+            },
+            AiBatchResponseRef {
+                local_id: 2,
+                file_path: "data/Map001.json".into(),
+                entry_id: "entry-2".into(),
+            },
+        ];
+        let duplicate = AiBatchTranslation {
+            file_path: "data/Map001.json".into(),
+            entry_id: "entry-1".into(),
+            translation: "Hola".into(),
+            notes: None,
+            skip: false,
+        };
+
+        let error =
+            validate_ai_batch_response_complete(&response_map, &[duplicate.clone(), duplicate])
+                .unwrap_err();
+
+        assert!(error.to_string().contains("duplicada"));
+    }
+
+    #[test]
+    fn test_validate_ai_batch_response_complete_requires_text_or_explicit_skip() {
+        let response_map = vec![AiBatchResponseRef {
+            local_id: 1,
+            file_path: "data/Map001.json".into(),
+            entry_id: "entry-1".into(),
+        }];
+        let mut translation = AiBatchTranslation {
+            file_path: "data/Map001.json".into(),
+            entry_id: "entry-1".into(),
+            translation: "  ".into(),
+            notes: None,
+            skip: false,
+        };
+
+        let error =
+            validate_ai_batch_response_complete(&response_map, &[translation.clone()]).unwrap_err();
+        assert!(error.to_string().contains("translation ni skip"));
+
+        translation.skip = true;
+        validate_ai_batch_response_complete(&response_map, &[translation]).unwrap();
+    }
+
+    #[test]
+    fn test_ensure_ai_batch_project_matches_rejects_changed_project() {
+        let error = ensure_ai_batch_project_matches("project-2", "project-1").unwrap_err();
+
+        assert!(error.to_string().contains("proyecto abierto"));
+    }
+
+    #[test]
     fn test_apply_ai_batch_updates_translations_and_skips_marked_entries() {
         let mut project = make_test_project();
         let result = apply_ai_batch_updates(
@@ -758,5 +931,35 @@ mod tests {
             .find(|entry| entry.id == "Map001:event:1:page:1:list:0")
             .unwrap();
         assert_eq!(translated.translation, "\\C[2]Bienvenida\nA casa");
+    }
+
+    #[test]
+    fn test_apply_ai_batch_updates_preserves_later_manual_edit() {
+        let mut project = make_test_project();
+        project.files[0].entries[0].translation = "Edición manual".into();
+        project.files[0].entries[0].status = EntryStatus::Reviewed;
+        project.files[0].entries[0].notes = "Nota manual".into();
+
+        let result = apply_ai_batch_updates(
+            &mut project,
+            &[AiBatchTranslation {
+                file_path: "data/Map001.json".into(),
+                entry_id: "Map001:event:1:page:1:list:0".into(),
+                translation: "Respuesta tardía".into(),
+                notes: Some("Nota de IA".into()),
+                skip: false,
+            }],
+            EntryStatus::Draft,
+        );
+
+        assert_eq!(result.applied_entries, 0);
+        assert_eq!(result.skipped_entries, 1);
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("dejó de estar pendiente")));
+        assert_eq!(project.files[0].entries[0].translation, "Edición manual");
+        assert_eq!(project.files[0].entries[0].status, EntryStatus::Reviewed);
+        assert_eq!(project.files[0].entries[0].notes, "Nota manual");
     }
 }

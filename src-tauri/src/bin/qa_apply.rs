@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -144,51 +143,6 @@ fn resolve_response_path(template_path: &Path) -> PathBuf {
     template_path.to_path_buf()
 }
 
-fn validate_response_complete(
-    expected_entries: &[AiBatchEntry],
-    translations: &[app_lib::models::AiBatchTranslation],
-) -> Result<(), String> {
-    if translations.len() != expected_entries.len() {
-        return Err(format!(
-            "Respuesta incompleta: esperaba {} entradas y recibí {}",
-            expected_entries.len(),
-            translations.len()
-        ));
-    }
-
-    let expected = expected_entries
-        .iter()
-        .map(|entry| format!("{}::{}", entry.file_path, entry.entry_id))
-        .collect::<HashSet<_>>();
-    let received = translations
-        .iter()
-        .map(|entry| format!("{}::{}", entry.file_path, entry.entry_id))
-        .collect::<HashSet<_>>();
-
-    if expected != received {
-        let missing = expected.difference(&received).cloned().collect::<Vec<_>>();
-        let unexpected = received.difference(&expected).cloned().collect::<Vec<_>>();
-        return Err(format!(
-            "IDs no coinciden; faltantes={}, inesperados={}",
-            missing.len(),
-            unexpected.len()
-        ));
-    }
-
-    let unresolved = translations
-        .iter()
-        .filter(|entry| entry.translation.trim().is_empty() && !entry.skip)
-        .count();
-    if unresolved > 0 {
-        return Err(format!(
-            "Respuesta incompleta: {} entradas siguen sin translation ni skip",
-            unresolved
-        ));
-    }
-
-    Ok(())
-}
-
 fn main() -> ExitCode {
     let options = match parse_args(env::args()) {
         Ok(options) => options,
@@ -248,6 +202,15 @@ fn main() -> ExitCode {
                 return ExitCode::from(1);
             }
         };
+        let response_map = expected_entries_batch
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| app_lib::models::AiBatchResponseRef {
+                local_id: u16::try_from(index + 1).unwrap_or(u16::MAX),
+                file_path: entry.file_path.clone(),
+                entry_id: entry.entry_id.clone(),
+            })
+            .collect::<Vec<_>>();
 
         let raw_response = match fs::read_to_string(&response_path) {
             Ok(content) => content,
@@ -269,15 +232,6 @@ fn main() -> ExitCode {
         ) {
             Ok(translations) => translations,
             Err(_error) => {
-                let response_map = expected_entries_batch
-                    .iter()
-                    .enumerate()
-                    .map(|(index, entry)| app_lib::models::AiBatchResponseRef {
-                        local_id: u16::try_from(index + 1).unwrap_or(u16::MAX),
-                        file_path: entry.file_path.clone(),
-                        entry_id: entry.entry_id.clone(),
-                    })
-                    .collect::<Vec<_>>();
                 match ai_batch::parse_ai_batch_response_with_refs(
                     &raw_response,
                     Some(&project.id),
@@ -298,7 +252,9 @@ fn main() -> ExitCode {
             }
         };
 
-        if let Err(error) = validate_response_complete(&expected_entries_batch, &translations) {
+        if let Err(error) =
+            ai_batch::validate_ai_batch_response_complete(&response_map, &translations)
+        {
             eprintln!(
                 "Respuesta incompleta para el lote {} ({}): {}",
                 batch.index,
