@@ -52,6 +52,7 @@ function applyTheme(theme: Theme) {
 }
 
 function applyLanguage(language: Language) {
+  if (typeof document !== "undefined") document.documentElement.lang = language;
   void i18n.changeLanguage(language);
 }
 

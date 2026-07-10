@@ -6,6 +6,7 @@ const STORAGE_KEY = "fairtranslator-settings";
 describe("settingsStore", () => {
   beforeEach(() => {
     localStorage.clear();
+    document.documentElement.lang = "es";
     useSettingsStore.setState({
       theme: "dark",
       language: "es",
@@ -37,5 +38,37 @@ describe("settingsStore", () => {
       useSettingsStore.getState().setWordWrapColumn(Number.NaN);
     });
     expect(useSettingsStore.getState().wordWrapColumn).toBe(0);
+  });
+
+  it("keeps the document language in sync when the UI language changes", () => {
+    act(() => {
+      useSettingsStore.getState().setLanguage("en");
+    });
+    expect(document.documentElement.lang).toBe("en");
+
+    act(() => {
+      useSettingsStore.getState().setLanguage("es");
+    });
+    expect(document.documentElement.lang).toBe("es");
+  });
+
+  it("restores the document language from persisted settings", async () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      state: {
+        theme: "dark",
+        language: "en",
+        wordWrapColumn: 0,
+        sidebarWidth: 224,
+        columnSizes: {},
+      },
+      version: 0,
+    }));
+
+    await act(async () => {
+      await useSettingsStore.persist.rehydrate();
+    });
+
+    expect(useSettingsStore.getState().language).toBe("en");
+    expect(document.documentElement.lang).toBe("en");
   });
 });
