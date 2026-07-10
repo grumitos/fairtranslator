@@ -26,7 +26,7 @@
   "errorBoundary": {
     "title": "Algo salió mal",
     "unexpected": "Ocurrió un error inesperado.",
-    "retry": "Intentar de nuevo"
+    "retry": "Recargar aplicación"
   },
   "languages": {
     "ja": "Japonés",

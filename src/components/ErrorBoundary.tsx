@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 interface ErrorBoundaryProps {
   children: ReactNode;
   fallback?: ReactNode;
+  reloadApp?: () => void;
 }
 
 interface ErrorBoundaryState {
@@ -50,7 +51,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
             )}
             <Button
               className="mt-4"
-              onClick={() => this.setState({ hasError: false, error: null })}
+              onClick={this.props.reloadApp ?? (() => window.location.reload())}
             >
               {i18n.t("common:errorBoundary.retry")}
             </Button>
