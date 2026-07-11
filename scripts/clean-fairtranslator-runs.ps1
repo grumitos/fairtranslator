@@ -15,17 +15,38 @@ function Get-TreeSizeBytes {
         return 0L
     }
 
-    $item = Get-Item -LiteralPath $Path -Force
-    if (-not $item.PSIsContainer) {
-        return [int64]$item.Length
-    }
-
-    $sum = (Get-ChildItem -LiteralPath $Path -Recurse -Force -File -ErrorAction SilentlyContinue |
-        Measure-Object -Property Length -Sum).Sum
+    $sum = (Get-SafeTreeFiles -Path $Path | Measure-Object -Property Length -Sum).Sum
     if ($null -eq $sum) {
         return 0L
     }
     return [int64]$sum
+}
+
+function Assert-NotReparsePoint {
+    param([Parameter(Mandatory = $true)][System.IO.FileSystemInfo]$Item)
+
+    if (($Item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Refusing to touch reparse point: $($Item.FullName)"
+    }
+}
+
+function Get-SafeTreeFiles {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $item = Get-Item -LiteralPath $Path -Force
+    Assert-NotReparsePoint -Item $item
+    if (-not $item.PSIsContainer) {
+        return $item
+    }
+
+    foreach ($child in (Get-ChildItem -LiteralPath $item.FullName -Force)) {
+        Assert-NotReparsePoint -Item $child
+        if ($child.PSIsContainer) {
+            Get-SafeTreeFiles -Path $child.FullName
+        } else {
+            $child
+        }
+    }
 }
 
 function Resolve-UnderRoot {
@@ -42,7 +63,26 @@ function Resolve-UnderRoot {
         throw "Refusing to touch path outside '$resolvedRoot': $resolvedPath"
     }
 
+    Assert-NotReparsePoint -Item (Get-Item -LiteralPath $resolvedPath -Force)
+
     return $resolvedPath
+}
+
+function Remove-SafeTree {
+    param(
+        [Parameter(Mandatory = $true)][string]$RootPath,
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+
+    $safePath = Resolve-UnderRoot -RootPath $RootPath -Path $Path
+    $item = Get-Item -LiteralPath $safePath -Force
+    Assert-NotReparsePoint -Item $item
+    if ($item.PSIsContainer) {
+        foreach ($child in (Get-ChildItem -LiteralPath $safePath -Force)) {
+            Remove-SafeTree -RootPath $RootPath -Path $child.FullName
+        }
+    }
+    Remove-Item -LiteralPath $safePath -Force
 }
 
 function Read-RunStatus {
@@ -65,12 +105,17 @@ if (-not (Test-Path -LiteralPath $Root)) {
 }
 
 $resolvedRoot = (Resolve-Path -LiteralPath $Root).Path.TrimEnd("\")
+Assert-NotReparsePoint -Item (Get-Item -LiteralPath $resolvedRoot -Force)
 $reportDir = Join-Path $resolvedRoot "_hygiene"
 $now = Get-Date
 $cutoff = $now.AddDays(-1 * $RetainDays)
 $actions = @()
 
-New-Item -ItemType Directory -Path $reportDir -Force | Out-Null
+if (Test-Path -LiteralPath $reportDir) {
+    Assert-NotReparsePoint -Item (Get-Item -LiteralPath $reportDir -Force)
+} else {
+    New-Item -ItemType Directory -Path $reportDir | Out-Null
+}
 
 $runDirs = Get-ChildItem -LiteralPath $resolvedRoot -Force -Directory |
     Where-Object { $_.Name -ne "_hygiene" }
@@ -109,25 +154,31 @@ foreach ($run in $runDirs) {
         continue
     }
 
-    $transientFiles = @()
-    $transientFiles += Get-ChildItem -LiteralPath $runPath -Force -File -ErrorAction SilentlyContinue |
+    $runFiles = @(Get-SafeTreeFiles -Path $runPath)
+    $transientFiles = @($runFiles |
         Where-Object {
-            $_.Name -eq "planner_cache.json" -or
-            $_.Name -like "before-*" -or
-            $_.Name -like "runner.*.log" -or
-            $_.Name -like "run-jpleft-*.ps1"
-        }
+            $_.DirectoryName -eq $runPath -and
+            (
+                $_.Name -eq "planner_cache.json" -or
+                $_.Name -like "before-*" -or
+                $_.Name -like "runner.*.log" -or
+                $_.Name -like "run-jpleft-*.ps1"
+            )
+        })
 
     $reviewDir = Join-Path $runPath "review-gpt55"
     if (Test-Path -LiteralPath $reviewDir) {
-        $transientFiles += Get-ChildItem -LiteralPath $reviewDir -Force -File -ErrorAction SilentlyContinue |
+        $transientFiles += @($runFiles |
             Where-Object {
-                $_.Name -like "gpt55_final_review_stdout*.log" -or
-                $_.Name -like "gpt55_final_review_stderr*.log"
-            }
+                $_.DirectoryName -eq $reviewDir -and
+                (
+                    $_.Name -like "gpt55_final_review_stdout*.log" -or
+                    $_.Name -like "gpt55_final_review_stderr*.log"
+                )
+            })
     }
 
-    $transientFiles += Get-ChildItem -LiteralPath $runPath -Recurse -Force -File -Filter "debug.log" -ErrorAction SilentlyContinue
+    $transientFiles += @($runFiles | Where-Object { $_.Name -eq "debug.log" })
 
     foreach ($file in ($transientFiles | Sort-Object FullName -Unique)) {
         $filePath = Resolve-UnderRoot -RootPath $resolvedRoot -Path $file.FullName
@@ -144,7 +195,7 @@ $beforeBytes = Get-TreeSizeBytes -Path $resolvedRoot
 if ($Apply) {
     foreach ($action in ($actions | Sort-Object Type, Path -Descending)) {
         if (Test-Path -LiteralPath $action.Path) {
-            Remove-Item -LiteralPath $action.Path -Recurse -Force
+            Remove-SafeTree -RootPath $resolvedRoot -Path $action.Path
         }
     }
 }
@@ -157,7 +208,7 @@ $remainingRuns = Get-ChildItem -LiteralPath $resolvedRoot -Force -Directory |
         [pscustomobject]@{
             Name = $_.Name
             SizeMB = [math]::Round($size / 1MB, 2)
-            Files = (Get-ChildItem -LiteralPath $_.FullName -Recurse -Force -File -ErrorAction SilentlyContinue | Measure-Object).Count
+            Files = @(Get-SafeTreeFiles -Path $_.FullName).Count
             LastWriteTime = $_.LastWriteTime.ToString("s")
         }
     } |
