@@ -141,3 +141,44 @@ Cambiar fuente, idiomas o tamaño de chunk es una campaña diferente. Cuando ya 
 - Reanudación real de `qa_prepare` sobre 133 lotes: código 0 y hash del manifest sin cambios.
 
 No se ejecutaron proveedores, `qa_apply` real ni exportación completa: habría enviado trabajo externo o escrito aproximadamente 1,9 GB sin ser necesario para demostrar estas mejoras.
+
+## Seguimiento: credenciales, tamaño adaptativo y esquema OpenCode
+
+Una ejecución posterior del mismo proyecto mostró `1.442` chunks directos para
+`22.801` entradas. La distribución confirmó que no era un límite de contexto:
+`1.410` chunks contenían exactamente 16 entradas, el máximo fijo de OpenCode.
+El percentil 95 tenía sólo 357 caracteres originales por chunk.
+
+La simulación por archivo sobre el inventario real dio esta línea base, sin
+mostrar texto del juego:
+
+| Máximo de entradas | Chunks aproximados | P95 caracteres | P95 salida estimada |
+|---:|---:|---:|---:|
+| 16 | 1.442 | 357 | 271 tokens |
+| 64 | 377 | 1.283 | 1.026 tokens |
+| 128 | 200 | 2.439 | 2.000 tokens |
+| 200 | 133 | 3.631 | 3.053 tokens |
+
+Se sustituyó el máximo fijo de 16 por un máximo de 128 con dos límites
+adaptativos: presupuesto total estimado de 18.000 tokens y presupuesto de salida
+estimada de 3.200 tokens frente a un máximo solicitado de 4.096. Las entradas
+cortas se agrupan; las largas se dividen antes. El fingerprint del planner se
+versionó para descartar caches con la política anterior sin perder checkpoints.
+
+El hilo operativo también mostró fallos de esquema con `minimax-m3`, incluso al
+reintentar entradas individuales. La causa era de negociación: FairTranslator
+aceptaba el primer contenido no vacío de una familia API y sólo después intentaba
+parsearlo. Ahora la validación inicial exige una traducción estructurada real,
+prueba familias hasta obtener un resultado completo y recuerda la familia válida
+para el resto de la instancia. Si todas fallan, el runner conserva su aislamiento
+y recuperación existentes.
+
+El runner headless carga por defecto la misma credencial de OpenCode que la UI
+guarda en el almacén seguro del sistema operativo. `--api-key-file` se conserva
+como compatibilidad explícita, no como flujo de producto.
+
+Para agentes externos, los 133 lotes preparados con tamaño 200 ya respetaban el
+presupuesto de prompt. La paralelización recomendada es un pool acotado de
+workers que reclame lotes independientes y publique cada respuesta atómicamente;
+no hace falta crear un agente por chunk ni acumular toda la campaña en una sola
+sesión susceptible de compactación.

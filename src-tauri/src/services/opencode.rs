@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::time::Duration;
 
 use reqwest::{Client, StatusCode, Url};
@@ -14,12 +14,13 @@ use crate::services::provider::{
     TranslationRequest, TranslationResponse,
 };
 
-const MAX_BATCH_SIZE: usize = 16;
+const MAX_BATCH_SIZE: usize = 128;
 const OPENCODE_WRAPPER_TOKEN_OVERHEAD: usize = 128;
-const OPENCODE_RESPONSE_HEADROOM_TOKENS: usize = 2048;
+const OPENCODE_RESPONSE_TOKEN_BUDGET: usize = 3200;
 const OPENCODE_MAX_OUTPUT_TOKENS: usize = 4096;
 const OPENCODE_TRANSIENT_RETRIES: usize = 2;
 const DEFAULT_ENDPOINT_BASE: &str = "https://opencode.ai/zen/go/v1";
+const NO_CACHED_FAMILY: u8 = 0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OpenCodeApiFamily {
@@ -30,6 +31,9 @@ enum OpenCodeApiFamily {
 }
 
 const GO_FAMILIES: &[OpenCodeApiFamily] = &[
+    // OpenCode Go publishes models across different endpoint families. Probe
+    // dynamically and cache the first family that also satisfies our schema.
+    // Source: https://opencode.ai/docs/go/#endpoints
     OpenCodeApiFamily::ChatCompletions,
     OpenCodeApiFamily::Messages,
     OpenCodeApiFamily::Responses,
@@ -42,9 +46,33 @@ pub struct OpenCodeProvider {
     model: String,
     endpoint_base: String,
     disable_chat_thinking: AtomicBool,
+    structured_family: AtomicU8,
 }
 
 impl OpenCodeProvider {
+    pub(crate) const fn max_batch_size() -> usize {
+        MAX_BATCH_SIZE
+    }
+
+    pub(crate) const fn response_token_budget() -> usize {
+        OPENCODE_RESPONSE_TOKEN_BUDGET
+    }
+
+    pub(crate) fn estimate_response_tokens(requests: &[TranslationRequest]) -> usize {
+        const PER_ENTRY_JSON_TOKENS: usize = 8;
+        const ENVELOPE_JSON_TOKENS: usize = 16;
+
+        let source_tokens = requests
+            .iter()
+            .map(|request| approximate_token_count(&request.text).saturating_sub(8))
+            .sum::<usize>();
+        let translated_text_tokens = source_tokens.saturating_mul(3).div_ceil(2);
+
+        translated_text_tokens
+            .saturating_add(requests.len().saturating_mul(PER_ENTRY_JSON_TOKENS))
+            .saturating_add(ENVELOPE_JSON_TOKENS)
+    }
+
     pub fn new(
         api_key: String,
         model: Option<String>,
@@ -62,6 +90,7 @@ impl OpenCodeProvider {
             model,
             endpoint_base,
             disable_chat_thinking: AtomicBool::new(false),
+            structured_family: AtomicU8::new(NO_CACHED_FAMILY),
         })
     }
 
@@ -83,7 +112,7 @@ impl OpenCodeProvider {
         approximate_token_count(&bundle.system_prompt)
             + approximate_token_count(&bundle.user_payload)
             + OPENCODE_WRAPPER_TOKEN_OVERHEAD
-            + OPENCODE_RESPONSE_HEADROOM_TOKENS
+            + Self::estimate_response_tokens(requests)
     }
 
     pub async fn list_models(
@@ -100,41 +129,65 @@ impl OpenCodeProvider {
         ai_models::list_openai_compatible_models(&client, &endpoint, Some(api_key), &[]).await
     }
 
-    fn preferred_families(&self) -> &'static [OpenCodeApiFamily] {
-        GO_FAMILIES
+    fn structured_family_order(&self) -> Vec<OpenCodeApiFamily> {
+        let cached = family_from_code(self.structured_family.load(Ordering::Relaxed));
+        cached
+            .into_iter()
+            .chain(
+                GO_FAMILIES
+                    .iter()
+                    .copied()
+                    .filter(|family| Some(*family) != cached),
+            )
+            .collect()
     }
 
-    async fn generate_text(
+    fn remember_structured_family(&self, family: OpenCodeApiFamily) {
+        self.structured_family
+            .store(family_code(family), Ordering::Relaxed);
+    }
+
+    async fn translate_structured_bundle(
         &self,
-        system_prompt: &str,
-        user_content: &str,
+        bundle: &compact_prompt::CompactPromptBundle,
         temperature: f32,
-    ) -> Result<String, AppError> {
-        let mut retryable_errors = Vec::new();
-        for family in self.preferred_families() {
+    ) -> Result<Vec<TranslationResponse>, AppError> {
+        let mut attempt_errors = Vec::new();
+        for family in self.structured_family_order() {
             match self
-                .generate_text_with_family(*family, system_prompt, user_content, temperature)
+                .generate_text_with_family(
+                    family,
+                    &bundle.system_prompt,
+                    &bundle.user_payload,
+                    temperature,
+                )
                 .await
             {
-                Ok(content) => return Ok(content),
+                Ok(content) => {
+                    match compact_prompt::parse_provider_response(&content, &bundle.entry_refs) {
+                        Ok(parsed) => {
+                            self.remember_structured_family(family);
+                            return Ok(parsed);
+                        }
+                        Err(error) => attempt_errors.push(format!(
+                            "{family:?} returned an invalid structured translation: {error}"
+                        )),
+                    }
+                }
                 Err(OpenCodeRequestError::Terminal(error)) => return Err(error),
                 Err(OpenCodeRequestError::Retryable(error)) => {
-                    retryable_errors.push(error.to_string());
+                    attempt_errors.push(format!("{family:?}: {error}"));
                 }
-                Err(OpenCodeRequestError::RetryWithoutThinking(error)) => return Err(error),
+                Err(OpenCodeRequestError::RetryWithoutThinking(error)) => {
+                    attempt_errors.push(format!("{family:?}: {error}"));
+                }
             }
         }
 
-        if retryable_errors.is_empty() {
-            Err(AppError::Api(
-                "OpenCode did not return a usable response from any API family".into(),
-            ))
-        } else {
-            Err(AppError::Api(format!(
-                "OpenCode did not return a usable response from any API family. Attempts: {}",
-                retryable_errors.join(" | ")
-            )))
-        }
+        Err(AppError::Api(format!(
+            "OpenCode did not return a valid structured translation from any supported API family. Attempts: {}",
+            attempt_errors.join(" | ")
+        )))
     }
 
     async fn generate_text_with_family(
@@ -408,16 +461,30 @@ impl TranslationProvider for OpenCodeProvider {
     }
 
     async fn validate(&self) -> Result<(), AppError> {
-        let content = self
-            .generate_text(
-                "Return a plain readiness check response.",
-                "Say exactly: ok",
-                0.0,
-            )
-            .await?;
-        if content.trim().is_empty() {
+        let request = TranslationRequest {
+            entry_id: "fairtranslator-structured-readiness".into(),
+            file_context: "Provider readiness check".into(),
+            text: "Ready".into(),
+            notes: String::new(),
+        };
+        let bundle = compact_prompt::build_provider_bundle(
+            "English",
+            "Spanish",
+            std::slice::from_ref(&request),
+            &[],
+            &TranslationBatchContext {
+                project_name: "FairTranslator readiness".into(),
+                file_path: "provider-readiness".into(),
+                file_kind: "Validation".into(),
+                chunk_index: 1,
+                total_chunks: 1,
+                ..TranslationBatchContext::default()
+            },
+        )?;
+        let responses = self.translate_structured_bundle(&bundle, 0.0).await?;
+        if responses.len() != 1 || responses[0].translated_text.trim().is_empty() {
             return Err(AppError::Api(
-                "OpenCode returned an empty validation response".into(),
+                "OpenCode did not pass the structured translation readiness check".into(),
             ));
         }
         Ok(())
@@ -441,21 +508,30 @@ impl TranslationProvider for OpenCodeProvider {
                 glossary,
                 context,
             )?;
-            let content = self
-                .generate_text(&bundle.system_prompt, &bundle.user_payload, 0.3)
-                .await?;
-
-            let parsed = compact_prompt::parse_provider_response(&content, &bundle.entry_refs)
-                .map_err(|error| {
-                    AppError::Api(format!(
-                        "Failed to parse OpenCode response as translation JSON: {}",
-                        error
-                    ))
-                })?;
+            let parsed = self.translate_structured_bundle(&bundle, 0.2).await?;
             all_responses.extend(parsed);
         }
 
         Ok(all_responses)
+    }
+}
+
+const fn family_code(family: OpenCodeApiFamily) -> u8 {
+    match family {
+        OpenCodeApiFamily::Responses => 1,
+        OpenCodeApiFamily::ChatCompletions => 2,
+        OpenCodeApiFamily::Messages => 3,
+        OpenCodeApiFamily::GoogleGenerateContent => 4,
+    }
+}
+
+const fn family_from_code(code: u8) -> Option<OpenCodeApiFamily> {
+    match code {
+        1 => Some(OpenCodeApiFamily::Responses),
+        2 => Some(OpenCodeApiFamily::ChatCompletions),
+        3 => Some(OpenCodeApiFamily::Messages),
+        4 => Some(OpenCodeApiFamily::GoogleGenerateContent),
+        _ => None,
     }
 }
 
@@ -751,6 +827,54 @@ mod tests {
             )
             .unwrap(),
             "https://opencode.ai/zen/v1/models/gemini-3.5-flash:generateContent"
+        );
+    }
+
+    #[test]
+    fn caches_the_first_family_that_returns_a_valid_structured_translation() {
+        let provider = OpenCodeProvider::new(
+            "key".into(),
+            Some("dynamic-model".into()),
+            Some("https://opencode.ai/zen/go/v1".into()),
+        )
+        .unwrap();
+
+        assert_eq!(provider.structured_family_order(), GO_FAMILIES);
+
+        provider.remember_structured_family(OpenCodeApiFamily::Messages);
+        let reordered = provider.structured_family_order();
+
+        assert_eq!(reordered[0], OpenCodeApiFamily::Messages);
+        assert_eq!(reordered.len(), GO_FAMILIES.len());
+        assert!(GO_FAMILIES.iter().all(|family| reordered.contains(family)));
+    }
+
+    #[test]
+    fn estimates_response_growth_and_keeps_short_batches_within_budget() {
+        let short_requests = (0..128)
+            .map(|index| TranslationRequest {
+                entry_id: format!("entry-{index}"),
+                file_context: "dialogue".into(),
+                text: "Short dialogue line".into(),
+                notes: String::new(),
+            })
+            .collect::<Vec<_>>();
+        let long_requests = (0..128)
+            .map(|index| TranslationRequest {
+                entry_id: format!("entry-{index}"),
+                file_context: "dialogue".into(),
+                text: "x".repeat(1_000),
+                notes: String::new(),
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            OpenCodeProvider::estimate_response_tokens(&short_requests)
+                <= OpenCodeProvider::response_token_budget()
+        );
+        assert!(
+            OpenCodeProvider::estimate_response_tokens(&long_requests)
+                > OpenCodeProvider::response_token_budget()
         );
     }
 

@@ -1,6 +1,18 @@
 use crate::error::AppError;
+use crate::models::ProviderType;
 
 const SERVICE_NAME: &str = "com.fairtranslator.desktop";
+
+pub fn api_key_secret_id(provider: &ProviderType) -> String {
+    let provider_id = match provider {
+        ProviderType::Openai => "openai",
+        ProviderType::Opencode => "opencode",
+        ProviderType::Codex => "codex",
+        ProviderType::Deepl => "deepl",
+        ProviderType::Google => "google",
+    };
+    format!("fairtranslator:api_key_{provider_id}")
+}
 
 pub fn load_secret(key: &str) -> Result<Option<String>, AppError> {
     platform::load_secret(key)
@@ -49,6 +61,23 @@ mod platform {
                 "Failed to delete secure key store entry: {error}"
             ))),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provider_secret_ids_preserve_the_existing_keyring_contract() {
+        assert_eq!(
+            api_key_secret_id(&ProviderType::Opencode),
+            "fairtranslator:api_key_opencode"
+        );
+        assert_eq!(
+            api_key_secret_id(&ProviderType::Openai),
+            "fairtranslator:api_key_openai"
+        );
     }
 }
 

@@ -19,7 +19,6 @@ use crate::services::translation_text::{
 
 const DEFAULT_MAX_ENTRIES_PER_CHUNK: usize = 20;
 const LLM_MAX_ENTRIES_PER_CHUNK: usize = 24;
-const OPENCODE_MAX_ENTRIES_PER_CHUNK: usize = 16;
 const EXTERNAL_AI_DEFAULT_MAX_ENTRIES_PER_CHUNK: usize = 200;
 const MAX_TERM_HINTS: usize = 12;
 const MAX_TRANSLATION_EXAMPLES: usize = 6;
@@ -202,6 +201,20 @@ fn ensure_plan_within_budget_for_mode(
     }
 
     for chunk in plan {
+        if mode == ChunkPlanningMode::OpenCode {
+            let estimated_response = OpenCodeProvider::estimate_response_tokens(&chunk.entries);
+            if estimated_response > OpenCodeProvider::response_token_budget() {
+                return Err(AppError::Project(format!(
+                    "OpenCode chunk '{}' {}/{} exceeds the estimated response budget ({} > {}). Reduce the maximum entries or split the oversized source entry before running this flow.",
+                    chunk.relative_path,
+                    chunk.context.chunk_index,
+                    chunk.context.total_chunks,
+                    estimated_response,
+                    OpenCodeProvider::response_token_budget()
+                )));
+            }
+        }
+
         let estimated = chunk.estimated_prompt_tokens;
         if estimated <= MAX_ESTIMATED_TOTAL_TOKENS {
             continue;
@@ -696,6 +709,7 @@ fn planner_cache_fingerprint_for_mode(
         mode: &'a str,
         max_entries_per_chunk: usize,
         max_estimated_total_tokens: usize,
+        max_estimated_response_tokens: Option<usize>,
         selected_files: Vec<&'a str>,
         style_guide: &'a [String],
         glossary: Vec<(&'a str, &'a str, bool)>,
@@ -752,13 +766,15 @@ fn planner_cache_fingerprint_for_mode(
         .collect::<Vec<_>>();
 
     let fingerprint_payload = serde_json::to_string(&Fingerprint {
-        version: "planner-cache-v3-source-plan",
+        version: "planner-cache-v4-adaptive-output-budget",
         project_id: project.id.as_str(),
         source_lang: project.source_lang.as_str(),
         target_lang: project.target_lang.as_str(),
         mode: mode_label,
         max_entries_per_chunk,
         max_estimated_total_tokens: MAX_ESTIMATED_TOTAL_TOKENS,
+        max_estimated_response_tokens: matches!(mode, ChunkPlanningMode::OpenCode)
+            .then(OpenCodeProvider::response_token_budget),
         selected_files,
         style_guide: &project.style_guide,
         glossary,
@@ -767,7 +783,7 @@ fn planner_cache_fingerprint_for_mode(
     .expect("planner fingerprint serialization should not fail");
 
     format!(
-        "planner-cache-v3-source-plan:{}",
+        "planner-cache-v4-adaptive-output-budget:{}",
         stable_hash_hex(fingerprint_payload.as_bytes())
     )
 }
@@ -788,7 +804,7 @@ fn max_entries_for_mode(mode: ChunkPlanningMode, max_entries: Option<usize>) -> 
     match mode {
         ChunkPlanningMode::Standard => DEFAULT_MAX_ENTRIES_PER_CHUNK,
         ChunkPlanningMode::OpenAi | ChunkPlanningMode::Codex => LLM_MAX_ENTRIES_PER_CHUNK,
-        ChunkPlanningMode::OpenCode => OPENCODE_MAX_ENTRIES_PER_CHUNK,
+        ChunkPlanningMode::OpenCode => OpenCodeProvider::max_batch_size(),
         ChunkPlanningMode::ExternalAi => max_entries
             .unwrap_or(EXTERNAL_AI_DEFAULT_MAX_ENTRIES_PER_CHUNK)
             .max(1),
@@ -886,6 +902,13 @@ fn chunk_would_exceed_budget(
     translation_examples: &[PreparedTranslationExample],
     mode: ChunkPlanningMode,
 ) -> bool {
+    if mode == ChunkPlanningMode::OpenCode
+        && OpenCodeProvider::estimate_response_tokens(candidate)
+            > OpenCodeProvider::response_token_budget()
+    {
+        return true;
+    }
+
     let (_, estimated_tokens) = build_context_for_chunk(
         project,
         file_path,
@@ -1321,6 +1344,59 @@ mod tests {
             .file_context_hints
             .iter()
             .any(|hint| hint.contains("Show Text")));
+    }
+
+    #[test]
+    fn test_opencode_chunks_scale_past_the_legacy_sixteen_entry_cap() {
+        let mut project = make_project();
+        project.files = vec![TranslationFile {
+            relative_path: "data/Map001.json".into(),
+            entries: (0..300)
+                .map(|index| {
+                    make_entry(
+                        &format!("Map001:line:{index}"),
+                        "Map001 > Event 1 > Show Text",
+                        "Short dialogue line",
+                        "",
+                        EntryStatus::Untranslated,
+                    )
+                })
+                .collect(),
+        }];
+
+        let plan = build_translation_plan(&project, &[], &ProviderType::Opencode);
+
+        assert_eq!(plan.len(), 3);
+        assert_eq!(plan[0].entries.len(), 128);
+        assert_eq!(plan[1].entries.len(), 128);
+        assert_eq!(plan[2].entries.len(), 44);
+    }
+
+    #[test]
+    fn test_opencode_chunks_split_before_the_estimated_response_budget() {
+        let mut project = make_project();
+        project.files = vec![TranslationFile {
+            relative_path: "data/Map001.json".into(),
+            entries: (0..40)
+                .map(|index| {
+                    make_entry(
+                        &format!("Map001:line:{index}"),
+                        "Map001 > Event 1 > Show Text",
+                        &"Long dialogue sentence. ".repeat(40),
+                        "",
+                        EntryStatus::Untranslated,
+                    )
+                })
+                .collect(),
+        }];
+
+        let plan = build_translation_plan(&project, &[], &ProviderType::Opencode);
+
+        assert!(plan.len() > 1);
+        assert!(plan.iter().all(|chunk| {
+            OpenCodeProvider::estimate_response_tokens(&chunk.entries)
+                <= OpenCodeProvider::response_token_budget()
+        }));
     }
 
     #[test]

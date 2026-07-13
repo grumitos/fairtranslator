@@ -91,10 +91,6 @@ fn provider_requires_api_key(provider: &ProviderType) -> bool {
     !matches!(provider, ProviderType::Codex)
 }
 
-fn api_key_secret_id(provider: &ProviderType) -> String {
-    format!("fairtranslator:{}", api_key_for(provider))
-}
-
 fn normalize_provider_endpoint_override(
     provider: &ProviderType,
     endpoint: Option<String>,
@@ -144,7 +140,7 @@ pub async fn apikey_save(
         .map_err(|e| AppError::Project(format!("Failed to open key store: {}", e)))?;
 
     if let Some(api_key) = api_key_update.as_deref() {
-        secrets::save_secret(&api_key_secret_id(&provider), api_key)?;
+        secrets::save_secret(&secrets::api_key_secret_id(&provider), api_key)?;
     }
     if api_key_update.is_some() || provider_requires_api_key(&provider) {
         let _ = store.delete(api_key_for(&provider));
@@ -206,11 +202,11 @@ async fn load_provider_info(
         .and_then(|v| v.as_str().map(|s| s.to_string()))
         .unwrap_or_default();
     let api_key = if provider_requires_api_key(&provider) {
-        match secrets::load_secret(&api_key_secret_id(&provider))? {
+        match secrets::load_secret(&secrets::api_key_secret_id(&provider))? {
             Some(secret) => secret,
             None if !legacy_api_key.trim().is_empty() => {
                 let migrated = legacy_api_key.trim().to_string();
-                secrets::save_secret(&api_key_secret_id(&provider), &migrated)?;
+                secrets::save_secret(&secrets::api_key_secret_id(&provider), &migrated)?;
                 let _ = store.delete(api_key_for(&provider));
                 store.save().map_err(|e| {
                     AppError::Project(format!("Failed to remove legacy API key from store: {}", e))
@@ -288,7 +284,7 @@ pub async fn apikey_delete(app: tauri::AppHandle, provider: ProviderType) -> Res
         .store(STORE_NAME)
         .map_err(|e| AppError::Project(format!("Failed to open key store: {}", e)))?;
 
-    secrets::delete_secret(&api_key_secret_id(&provider))?;
+    secrets::delete_secret(&secrets::api_key_secret_id(&provider))?;
     let _ = store.delete(api_key_for(&provider));
     let _ = store.delete(model_key_for(&provider));
     let _ = store.delete(endpoint_key_for(&provider));

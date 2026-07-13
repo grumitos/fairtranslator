@@ -21,9 +21,8 @@ presenting unsupported Unity formats as compatible.
 - Provider models come from discovery or active local configuration; model IDs
   are never hardcoded.
 - Credentials and authentication file contents never enter logs or UI payloads.
-- The current provider payload is compact JSON, not TOON. TOON adoption requires
-  measured token benefit, strict round-trip validation and a compatible current
-  implementation; it will not be introduced by renaming the existing format.
+- Provider prompts and responses use one compact JSON contract with strict
+  response mapping, completeness checks and recovery for malformed output.
 - Unity support starts only where parser and exporter are symmetric and tested.
   AssetBundles, Addressables, managed DLL strings, IL2CPP, encrypted content and
   mobile/WebGL builds remain unsupported in this iteration.
@@ -77,14 +76,13 @@ presenting unsupported Unity formats as compatible.
 - Add `Engine::Unity` only when detection, parsing, export, readback and source
   immutability tests all pass together.
 
-### 5. Prompt-format decision
+### 5. Prompt-contract hardening
 
 - Add regression coverage for delimiter-like and instruction-like game text so
   untrusted source text remains data rather than prompt instructions.
 - Record representative compact-JSON payload size and round-trip behavior.
-- Adopt TOON only in a later increment if the current spec/runtime combination
-  is compatible and the measured benefit exceeds the added parser and recovery
-  complexity.
+- Keep one versioned compact-JSON contract across integrated providers and the
+  external-agent flow so validation and recovery do not diverge by transport.
 
 ## Success criteria
 
@@ -95,7 +93,7 @@ presenting unsupported Unity formats as compatible.
 - Export tests prove the source folder remains byte-identical.
 - UI copy in English and Spanish describes unfinished, cancelled, unsupported
   and completed states truthfully.
-- Documentation does not claim general Unity or TOON support.
+- Documentation does not claim general Unity support.
 
 ## Non-goals
 
@@ -108,8 +106,6 @@ presenting unsupported Unity formats as compatible.
 
 ## Primary references
 
-- TOON specification: <https://toonformat.dev/reference/spec>
-- Official Rust TOON implementation: <https://github.com/toon-format/toon-rust>
 - Unity Streaming Assets: <https://docs.unity3d.com/6000.0/Documentation/Manual/StreamingAssets.html>
 - Unity Text Assets: <https://docs.unity3d.com/6000.0/Documentation/Manual/class-TextAsset.html>
 - Vite release policy: <https://vite.dev/releases>

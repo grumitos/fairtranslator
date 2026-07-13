@@ -68,11 +68,21 @@ cargo run --release --manifest-path src-tauri\Cargo.toml --bin qa_translate_prov
   --workspace "D:\FairTranslatorRuns\<run-name>" `
   --source-lang "Japanese" `
   --target-lang "es" `
-  --api-key-file "<api-key-file>" `
   --endpoint "https://opencode.ai/zen/go/v1" `
   --model "<model-from-/models>" `
   --strict-target-language
 ```
+
+By default the headless runner loads the OpenCode credential saved by the
+FairTranslator settings UI from the operating-system credential store. The
+secret never enters the command line, workspace, status JSON or agent prompt.
+`--api-key-file` remains only as a compatibility override for development and
+existing automation; do not use it as the product default.
+
+OpenCode readiness validation performs a real one-entry structured translation,
+not a plain connectivity check. FairTranslator tries the supported API families
+until both transport and response schema validate, then reuses that family for
+the rest of the run. Model IDs still come from `/models` or local configuration.
 
 Resume the same command with the same `--workspace`. The runner reloads
 `project.fairtl`, refreshes newly extractable entries, skips completed entries,
@@ -82,6 +92,12 @@ run restores the last complete directory backup before deciding whether to
 build or resume. A chunk interrupted before its checkpoint is retried; chunks
 whose checkpoint was published are not sent again. Progress logs are appended
 across sessions.
+
+OpenCode chunks are adaptive rather than fixed at 16 entries. Short entries can
+share a chunk up to the provider cap, while prompt and estimated-response token
+budgets split long content earlier. A planner-budget change invalidates only the
+plan cache; already checkpointed translations remain complete and are excluded
+from the rebuilt plan.
 
 ## Required Checks
 
@@ -195,6 +211,13 @@ Rules:
 - `skip: true` is a candidate exclusion, not final QA truth.
 - Do not rewrite the source text field. Fill only translation/status/notes fields
   defined by the template.
+- Parallelize through a bounded worker pool, not one permanent agent per batch.
+  Each worker claims one independent batch at a time and publishes only its own
+  complete response through temporary-file plus rename.
+- Never concatenate multiple prompts into one model request. If a worker handles
+  several batches sequentially, reset its model session before accumulated
+  context approaches that model's compaction threshold; the batch prompt already
+  carries the context required to run independently.
 
 ## Known Edge Cases
 

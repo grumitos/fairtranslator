@@ -7,6 +7,19 @@ and this project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- Made OpenCode provider chunks adaptive up to 128 entries, with independent
+  prompt and estimated-response token budgets instead of a fixed 16-entry cap.
+- Made the headless OpenCode runner reuse the credential saved by FairTranslator
+  in the operating-system secure store by default; key files are compatibility
+  overrides only.
+
+### Fixed
+- Strengthened OpenCode readiness checks to require a valid structured
+  translation and negotiate/cache the API family that satisfies the schema.
+- Preserved completed checkpoints when planner-budget changes rebuild a chunk
+  plan during resume.
+
 ## [0.9.2] - 2026-05-04
 
 ### Added

@@ -11,6 +11,7 @@ use app_lib::parser::{parse_game, resolve_game_dir};
 use app_lib::services::exporter;
 use app_lib::services::persistence;
 use app_lib::services::provider::{TranslationProvider, TranslationRequest, TranslationResponse};
+use app_lib::services::secrets;
 use app_lib::services::translation_apply;
 use app_lib::services::translation_coverage::{
     mark_project_coverage_issues_for_repair, validate_project_translation_coverage,
@@ -136,7 +137,7 @@ fn print_usage() {
            --fallback-model <m>     Modelo de relevo si el primario falla\n\
            --fallback-profile <p>   Perfil Codex CLI para el relevo (opcional)\n\
            --fallback-reasoning-effort <v>  Esfuerzo de razonamiento del relevo\n\
-           --api-key-file <ruta>    Archivo con la API key o auth.json de OpenCode (requerido para OpenCode)\n\
+           --api-key-file <ruta>    Compatibilidad: archivo con API key/auth.json; por defecto usa la credencial segura de FairTranslator\n\
            --endpoint <url>         Endpoint/base URL del proveedor (opcional)\n\
            --strict-target-language Trata texto traducible idéntico al original como fallo de QA\n\
            --repair-coverage        Reintenta entradas que fallan cobertura estricta en un proyecto existente\n\
@@ -673,11 +674,9 @@ fn create_provider(config: &ProviderRunConfig) -> Result<Box<dyn TranslationProv
             config.reasoning_effort.clone(),
         ))),
         ProviderType::Opencode => {
-            let key_path = config
-                .api_key_file
-                .as_ref()
-                .ok_or_else(|| "OpenCode requiere --api-key-file".to_string())?;
-            let api_key = read_opencode_api_key_file(key_path, &config.provider)?;
+            let api_key = resolve_opencode_api_key(config.api_key_file.as_deref(), || {
+                secrets::load_secret(&secrets::api_key_secret_id(&config.provider))
+            })?;
             Ok(Box::new(
                 app_lib::services::opencode::OpenCodeProvider::new(
                     api_key,
@@ -692,6 +691,27 @@ fn create_provider(config: &ProviderRunConfig) -> Result<Box<dyn TranslationProv
             provider_label(&config.provider)
         )),
     }
+}
+
+fn resolve_opencode_api_key<F>(
+    key_path: Option<&Path>,
+    load_stored_secret: F,
+) -> Result<String, String>
+where
+    F: FnOnce() -> Result<Option<String>, app_lib::error::AppError>,
+{
+    if let Some(path) = key_path {
+        return read_opencode_api_key_file(path, &ProviderType::Opencode);
+    }
+
+    load_stored_secret()
+        .map_err(|error| format!("No se pudo leer la credencial segura de OpenCode: {error}"))?
+        .map(|secret| secret.trim().to_string())
+        .filter(|secret| !secret.is_empty())
+        .ok_or_else(|| {
+            "OpenCode no tiene una credencial guardada por FairTranslator. Configúrala en Settings > Providers o usa --api-key-file como compatibilidad temporal."
+                .to_string()
+        })
 }
 
 fn read_opencode_api_key_file(key_path: &Path, provider: &ProviderType) -> Result<String, String> {
@@ -771,6 +791,7 @@ fn is_retryable_provider_shape_error(message: &str) -> bool {
         || normalized.contains("unexpected entry id")
         || normalized.contains("duplicate entry id")
         || normalized.contains("failed to parse opencode response as translation json")
+        || normalized.contains("did not return a valid structured translation")
         || normalized.contains("no se pudo leer la respuesta del proveedor")
 }
 
@@ -2115,7 +2136,7 @@ mod tests {
     use super::{
         create_playable_copy_if_nested_mv_mz_www, is_provider_content_inspection_error,
         is_retryable_provider_shape_error, merge_missing_entries, parse_args,
-        prepare_workspace_export_dir, read_opencode_api_key_file,
+        prepare_workspace_export_dir, read_opencode_api_key_file, resolve_opencode_api_key,
     };
     use app_lib::models::{
         Engine, EntryStatus, Project, ProviderType, TranslationEntry, TranslationFile,
@@ -2135,6 +2156,9 @@ mod tests {
         ));
         assert!(is_retryable_provider_shape_error(
             "Failed to parse OpenCode response as translation JSON: No se pudo leer la respuesta del proveedor"
+        ));
+        assert!(is_retryable_provider_shape_error(
+            "OpenCode did not return a valid structured translation from any supported API family"
         ));
         assert!(!is_retryable_provider_shape_error(
             "Codex CLI is installed but not authenticated"
@@ -2261,6 +2285,40 @@ mod tests {
         let key = read_opencode_api_key_file(&auth_path, &ProviderType::Opencode).unwrap();
 
         assert_eq!(key, "sk-test-local");
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn uses_the_fairtranslator_secure_credential_when_no_key_file_is_given() {
+        let key = resolve_opencode_api_key(None, || Ok(Some("stored-secret".into()))).unwrap();
+
+        assert_eq!(key, "stored-secret");
+    }
+
+    #[test]
+    fn reports_how_to_configure_opencode_when_no_credential_exists() {
+        let error = resolve_opencode_api_key(None, || Ok(None)).unwrap_err();
+
+        assert!(error.contains("FairTranslator"));
+        assert!(error.contains("--api-key-file"));
+    }
+
+    #[test]
+    fn explicit_key_files_remain_a_compatibility_override() {
+        let temp = std::env::temp_dir().join(format!(
+            "fairtranslator-qa-provider-test-{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        std::fs::create_dir_all(&temp).unwrap();
+        let key_path = temp.join("opencode.key");
+        std::fs::write(&key_path, "file-secret").unwrap();
+
+        let key = resolve_opencode_api_key(Some(&key_path), || {
+            panic!("the secure store must not be read when an explicit compatibility file exists")
+        })
+        .unwrap();
+
+        assert_eq!(key, "file-secret");
         let _ = std::fs::remove_dir_all(&temp);
     }
 

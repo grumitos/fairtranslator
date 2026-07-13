@@ -14,7 +14,9 @@ translated output.
 3. Choose the provider/model from dynamic provider discovery or existing local
    config. Do not hardcode model IDs.
 4. For headless provider translation, use `qa_translate_provider` only with
-   Codex CLI or OpenCode Go. Use the app UI for OpenAI, DeepL, and Google.
+   Codex CLI or OpenCode Go. OpenCode uses the credential saved by the app unless
+   an explicit compatibility key file is supplied. Use the app UI for OpenAI,
+   DeepL, and Google.
 5. For external AI translation, run `qa_prepare`, translate every
    `.response.template.json` into a sibling `.response.json`, then run
    `qa_apply`.
@@ -22,6 +24,9 @@ translated output.
    options, keep every response that validates completely, and continue at the
    first missing or invalid response. Publish each response through a temporary
    sibling plus rename so a partial chunk never looks complete.
+   For parallel execution, use a bounded worker pool that claims independent
+   batches; do not assign one long-lived agent to the whole campaign or merge
+   several batch prompts into one request.
 6. If validation fails, rerun the same provider flow with `--repair-coverage`
    when available, or regenerate/apply a corrected external AI response.
 7. Validate with `qa_validate_translation --strict-unchanged --json`.
