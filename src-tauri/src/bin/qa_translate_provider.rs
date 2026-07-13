@@ -17,6 +17,7 @@ use app_lib::services::translation_coverage::{
     CoverageOptions, TranslationCoverageReport,
 };
 use app_lib::services::translation_orchestrator;
+use app_lib::services::workspace_lock::WorkspaceRunLock;
 use chrono::Local;
 use serde::Serialize;
 use tokio::runtime::Builder;
@@ -844,13 +845,32 @@ fn main() -> ExitCode {
         );
         return ExitCode::from(1);
     }
+    let _workspace_lock = match WorkspaceRunLock::acquire(&options.workspace) {
+        Ok(lock) => lock,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(1);
+        }
+    };
     let progress_log = options.workspace.join("qa_translate.progress.log");
-    let _ = std::fs::remove_file(&progress_log);
     let project_path = options.workspace.join("project.fairtl");
     let status_path = options.workspace.join("qa_translate.status.json");
     let planner_cache_path = options.workspace.join("planner_cache.json");
     let failure_manifest_path = options.workspace.join("translation_failures.json");
     let _ = std::fs::remove_file(&failure_manifest_path);
+
+    let recovered_interrupted_checkpoint =
+        match persistence::recover_interrupted_save(&project_path) {
+            Ok(recovered) => recovered,
+            Err(error) => {
+                eprintln!(
+                    "No se pudo recuperar el último checkpoint completo '{}': {}",
+                    project_path.display(),
+                    error
+                );
+                return ExitCode::from(1);
+            }
+        };
 
     let mut project = if project_path.exists() {
         match persistence::load_project(&project_path) {
@@ -903,6 +923,19 @@ fn main() -> ExitCode {
     };
     let started_at = Instant::now();
     let resumed = project_path.exists();
+    print_progress_line(
+        &progress_log,
+        &format!(
+            "[{}] Nueva sesión | reanudar={} | checkpoint_interrumpido_recuperado={}",
+            format_elapsed(started_at),
+            if resumed { "si" } else { "no" },
+            if recovered_interrupted_checkpoint {
+                "si"
+            } else {
+                "no"
+            }
+        ),
+    );
     let provider_type = options.provider.clone();
     let primary_config = ProviderRunConfig {
         provider: provider_type.clone(),
@@ -2087,6 +2120,7 @@ mod tests {
     use app_lib::models::{
         Engine, EntryStatus, Project, ProviderType, TranslationEntry, TranslationFile,
     };
+    use app_lib::services::{persistence, translation_orchestrator};
 
     #[test]
     fn provider_shape_errors_are_retryable() {
@@ -2276,5 +2310,67 @@ mod tests {
         assert_eq!(added, 1);
         assert_eq!(project.files[0].entries.len(), 2);
         assert_eq!(project.files[0].entries[0].translation, "Hola");
+    }
+
+    #[test]
+    fn recovered_checkpoint_plans_only_entries_after_the_last_completed_chunk() {
+        let temp = std::env::temp_dir().join(format!(
+            "fairtranslator-qa-resume-test-{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        let project_path = temp.join("project.fairtl");
+        let backup_path = temp.join(".project.fairtl.backup");
+        std::fs::create_dir_all(&temp).unwrap();
+
+        let project = Project {
+            id: "resume-test".into(),
+            name: "resume-test".into(),
+            source_lang: "ja".into(),
+            target_lang: "es".into(),
+            engine: Engine::Mv,
+            game_dir: temp.display().to_string(),
+            files: vec![TranslationFile {
+                relative_path: "data/CommonEvents.json".into(),
+                entries: vec![
+                    TranslationEntry {
+                        id: "CommonEvents:1:text:0".into(),
+                        file_context: "text".into(),
+                        original: "First".into(),
+                        translation: "Primero".into(),
+                        status: EntryStatus::Draft,
+                        notes: String::new(),
+                    },
+                    TranslationEntry {
+                        id: "CommonEvents:1:text:1".into(),
+                        file_context: "text".into(),
+                        original: "Second".into(),
+                        translation: String::new(),
+                        status: EntryStatus::Untranslated,
+                        notes: String::new(),
+                    },
+                ],
+            }],
+            glossary: vec![],
+            style_guide: vec![],
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        persistence::save_project(&project, &project_path).unwrap();
+
+        // Simulate the process stopping while publishing the next checkpoint.
+        std::fs::rename(&project_path, &backup_path).unwrap();
+
+        assert!(persistence::recover_interrupted_save(&project_path).unwrap());
+        let recovered = persistence::load_project(&project_path).unwrap();
+        let plan =
+            translation_orchestrator::build_translation_plan(&recovered, &[], &ProviderType::Codex);
+        let planned_ids = plan
+            .iter()
+            .flat_map(|chunk| chunk.entries.iter())
+            .map(|entry| entry.entry_id.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(planned_ids, vec!["CommonEvents:1:text:1"]);
+        let _ = std::fs::remove_dir_all(&temp);
     }
 }

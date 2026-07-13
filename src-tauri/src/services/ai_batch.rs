@@ -94,14 +94,15 @@ pub(crate) fn estimate_ai_batch_prompt_tokens(
             instruction_reason: None,
         })
         .collect::<Vec<_>>();
-    let bundle =
-        compact_prompt::build_external_ai_bundle(project, "budget-estimate", &entries, context)
-            .expect("serializing compact external AI prompt should not fail");
-    let response_map = bundle.response_map();
+    let response_map = response_map_for_entries(&entries)
+        .expect("external AI budget chunks should fit the local-id range");
     let translation_sheet =
-        translation_sheet_for(project, "budget-estimate", &entries, context, &response_map)
-            .expect("serializing external AI translation sheet should not fail");
-    let prompt = render_external_ai_prompt(&bundle.system_prompt, &translation_sheet.compact);
+        translation_sheet_value(project, "budget-estimate", &entries, context, &response_map);
+    let compact_sheet = serde_json::to_string(&translation_sheet)
+        .expect("serializing external AI translation sheet should not fail");
+    let system_prompt =
+        compact_prompt::build_external_ai_system_prompt(&project.source_lang, &project.target_lang);
+    let prompt = render_external_ai_prompt(&system_prompt, &compact_sheet);
 
     approximate_token_count(&prompt)
         + EXTERNAL_AI_PROMPT_WRAPPER_TOKEN_OVERHEAD
@@ -163,11 +164,12 @@ fn make_ai_batch_export(
             },
         )
     };
-    let bundle = compact_prompt::build_external_ai_bundle(project, &batch_id, &entries, &context)?;
-    let response_map = bundle.response_map();
+    let response_map = response_map_for_entries(&entries)?;
     let translation_sheet =
         translation_sheet_for(project, &batch_id, &entries, &context, &response_map)?;
-    let prompt = render_external_ai_prompt(&bundle.system_prompt, &translation_sheet.compact);
+    let system_prompt =
+        compact_prompt::build_external_ai_system_prompt(&project.source_lang, &project.target_lang);
+    let prompt = render_external_ai_prompt(&system_prompt, &translation_sheet.compact);
 
     Ok(AiBatchExport {
         project_id: project.id.clone(),
@@ -185,6 +187,23 @@ fn make_ai_batch_export(
     })
 }
 
+fn response_map_for_entries(entries: &[AiBatchEntry]) -> Result<Vec<AiBatchResponseRef>, AppError> {
+    entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            let local_id = u16::try_from(index + 1).map_err(|_| {
+                AppError::Project("External AI batch exceeded supported local-id range".into())
+            })?;
+            Ok(AiBatchResponseRef {
+                local_id,
+                file_path: entry.file_path.clone(),
+                entry_id: entry.entry_id.clone(),
+            })
+        })
+        .collect()
+}
+
 fn render_external_ai_prompt(system_prompt: &str, translation_sheet: &str) -> String {
     format!(
         "{system_prompt}\n\nEditable translation sheet JSON:\n{translation_sheet}\n\nReturn ONLY the same JSON object with each translations[].t filled. Keep p, b and k unchanged. Do not rewrite source text in translations[].o; it is reference-only."
@@ -198,6 +217,21 @@ fn translation_sheet_for(
     context: &TranslationBatchContext,
     response_map: &[AiBatchResponseRef],
 ) -> Result<ExternalAiTranslationSheet, AppError> {
+    let sheet = translation_sheet_value(project, batch_id, entries, context, response_map);
+
+    Ok(ExternalAiTranslationSheet {
+        editable: serde_json::to_string_pretty(&sheet)?,
+        compact: serde_json::to_string(&sheet)?,
+    })
+}
+
+fn translation_sheet_value(
+    project: &Project,
+    batch_id: &str,
+    entries: &[AiBatchEntry],
+    context: &TranslationBatchContext,
+    response_map: &[AiBatchResponseRef],
+) -> serde_json::Value {
     let rows = entries
         .iter()
         .zip(response_map.iter())
@@ -213,7 +247,7 @@ fn translation_sheet_for(
         })
         .collect::<Vec<_>>();
 
-    let sheet = json!({
+    json!({
         "p": &project.id,
         "b": batch_id,
         "sourceLanguage": &project.source_lang,
@@ -238,11 +272,6 @@ fn translation_sheet_for(
             "Use s=true only for entries that should stay skipped; keep n short."
         ],
         "translations": rows
-    });
-
-    Ok(ExternalAiTranslationSheet {
-        editable: serde_json::to_string_pretty(&sheet)?,
-        compact: serde_json::to_string(&sheet)?,
     })
 }
 

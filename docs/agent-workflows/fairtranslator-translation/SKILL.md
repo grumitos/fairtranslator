@@ -18,6 +18,10 @@ translated output.
 5. For external AI translation, run `qa_prepare`, translate every
    `.response.template.json` into a sibling `.response.json`, then run
    `qa_apply`.
+   On interruption, rerun `qa_prepare` with the identical workspace and
+   options, keep every response that validates completely, and continue at the
+   first missing or invalid response. Publish each response through a temporary
+   sibling plus rename so a partial chunk never looks complete.
 6. If validation fails, rerun the same provider flow with `--repair-coverage`
    when available, or regenerate/apply a corrected external AI response.
 7. Validate with `qa_validate_translation --strict-unchanged --json`.

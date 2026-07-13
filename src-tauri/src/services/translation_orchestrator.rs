@@ -817,33 +817,60 @@ fn chunk_requests(
             .collect();
     }
 
+    chunk_requests_by_budget(entries, max_entries_per_chunk, |candidate| {
+        chunk_would_exceed_budget(
+            project,
+            file_path,
+            file_kind,
+            candidate,
+            style_guide,
+            term_hints,
+            translation_examples,
+            mode,
+        )
+    })
+}
+
+fn chunk_requests_by_budget<F>(
+    entries: &[TranslationRequest],
+    max_entries_per_chunk: usize,
+    mut exceeds_budget: F,
+) -> Vec<Vec<TranslationRequest>>
+where
+    F: FnMut(&[TranslationRequest]) -> bool,
+{
+    let max_entries_per_chunk = max_entries_per_chunk.max(1);
     let mut chunks = Vec::new();
-    let mut current = Vec::new();
-    for entry in entries {
-        let exceeds_entry_limit = current.len() >= max_entries_per_chunk;
-        let exceeds_prompt_budget = !current.is_empty()
-            && chunk_would_exceed_budget(
-                project,
-                file_path,
-                file_kind,
-                &current,
-                entry,
-                style_guide,
-                term_hints,
-                translation_examples,
-                mode,
-            );
+    let mut offset = 0usize;
 
-        if exceeds_entry_limit || exceeds_prompt_budget {
-            chunks.push(current);
-            current = Vec::new();
-        }
+    while offset < entries.len() {
+        // Rendering a complete prompt is expensive. Probe the largest allowed
+        // candidate first and only bisect when that candidate exceeds budget.
+        let candidate_len = max_entries_per_chunk.min(entries.len() - offset);
+        let candidate = &entries[offset..offset + candidate_len];
+        let chunk_len = if candidate_len == 1 || !exceeds_budget(candidate) {
+            candidate_len
+        } else {
+            let mut smallest = 2usize;
+            let mut largest = candidate_len - 1;
+            let mut best = 1usize;
 
-        current.push(entry.clone());
-    }
+            while smallest <= largest {
+                let middle = smallest + (largest - smallest) / 2;
+                let candidate = &entries[offset..offset + middle];
+                if exceeds_budget(candidate) {
+                    largest = middle - 1;
+                } else {
+                    best = middle;
+                    smallest = middle + 1;
+                }
+            }
 
-    if !current.is_empty() {
-        chunks.push(current);
+            best
+        };
+
+        chunks.push(entries[offset..offset + chunk_len].to_vec());
+        offset += chunk_len;
     }
 
     chunks
@@ -853,21 +880,17 @@ fn chunk_would_exceed_budget(
     project: &Project,
     file_path: &str,
     file_kind: &str,
-    current: &[TranslationRequest],
-    next_entry: &TranslationRequest,
+    candidate: &[TranslationRequest],
     style_guide: &[String],
     term_hints: &[TranslationTermHint],
     translation_examples: &[PreparedTranslationExample],
     mode: ChunkPlanningMode,
 ) -> bool {
-    let mut candidate = current.to_vec();
-    candidate.push(next_entry.clone());
-
     let (_, estimated_tokens) = build_context_for_chunk(
         project,
         file_path,
         file_kind,
-        &candidate,
+        candidate,
         style_guide,
         term_hints,
         translation_examples,
@@ -1546,6 +1569,68 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(!all_entry_ids.contains(&"Map001:line:blank"));
+    }
+
+    #[test]
+    fn test_chunk_requests_checks_full_candidates_once_when_they_fit() {
+        let entries = (0..1_000)
+            .map(|index| TranslationRequest {
+                entry_id: format!("entry-{index}"),
+                file_context: String::new(),
+                text: "short text".into(),
+                notes: String::new(),
+            })
+            .collect::<Vec<_>>();
+        let mut budget_checks = 0usize;
+
+        let chunks = chunk_requests_by_budget(&entries, 200, |_| {
+            budget_checks += 1;
+            false
+        });
+
+        assert_eq!(
+            chunks.iter().map(Vec::len).collect::<Vec<_>>(),
+            vec![200; 5]
+        );
+        assert_eq!(budget_checks, 5);
+    }
+
+    #[test]
+    fn test_chunk_requests_finds_the_largest_fitting_candidate() {
+        let entries = (0..100)
+            .map(|index| TranslationRequest {
+                entry_id: format!("entry-{index}"),
+                file_context: String::new(),
+                text: "short text".into(),
+                notes: String::new(),
+            })
+            .collect::<Vec<_>>();
+
+        let chunks = chunk_requests_by_budget(&entries, 100, |candidate| candidate.len() > 37);
+
+        assert_eq!(
+            chunks.iter().map(Vec::len).collect::<Vec<_>>(),
+            vec![37, 37, 26]
+        );
+    }
+
+    #[test]
+    fn test_chunk_requests_keeps_an_oversized_single_entry_for_validation() {
+        let entries = (0..3)
+            .map(|index| TranslationRequest {
+                entry_id: format!("entry-{index}"),
+                file_context: String::new(),
+                text: "oversized".into(),
+                notes: String::new(),
+            })
+            .collect::<Vec<_>>();
+
+        let chunks = chunk_requests_by_budget(&entries, 200, |_| true);
+
+        assert_eq!(
+            chunks.iter().map(Vec::len).collect::<Vec<_>>(),
+            vec![1, 1, 1]
+        );
     }
 
     #[test]

@@ -19,3 +19,4 @@ pub mod translation_integrity;
 pub mod translation_orchestrator;
 pub mod translation_replacements;
 pub mod translation_text;
+pub mod workspace_lock;

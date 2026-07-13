@@ -280,6 +280,10 @@ pub fn build_external_ai_bundle(
     )
 }
 
+pub(crate) fn build_external_ai_system_prompt(source_lang: &str, target_lang: &str) -> String {
+    build_system_prompt(ProviderKind::ExternalAi, source_lang, target_lang)
+}
+
 pub fn provider_response_schema() -> serde_json::Value {
     json!({
         "type": "object",

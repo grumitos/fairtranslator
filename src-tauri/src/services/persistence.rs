@@ -12,6 +12,88 @@ use crate::models::{Engine, GlossaryTerm, Project, TranslationEntry, Translation
 
 const SCHEMA_VERSION: u32 = 2;
 
+fn project_backup_path(project_path: &Path) -> Result<PathBuf, AppError> {
+    let parent = project_path
+        .parent()
+        .ok_or_else(|| AppError::Io("Cannot determine parent directory".into()))?;
+    let file_name = project_path
+        .file_name()
+        .ok_or_else(|| AppError::Io("Cannot determine project directory name".into()))?;
+    Ok(parent.join(format!(".{}.backup", file_name.to_string_lossy())))
+}
+
+/// Restores the last complete project directory when a process stopped in the
+/// narrow window between moving the previous checkpoint aside and publishing
+/// the replacement.
+pub fn recover_interrupted_save(project_path: &Path) -> Result<bool, AppError> {
+    if project_path.exists() {
+        return Ok(false);
+    }
+
+    let deterministic_backup = project_backup_path(project_path)?;
+    let backup = if deterministic_backup.exists() {
+        deterministic_backup
+    } else {
+        let parent = project_path
+            .parent()
+            .ok_or_else(|| AppError::Io("Cannot determine parent directory".into()))?;
+        let is_legacy_qa_workspace = project_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| name.eq_ignore_ascii_case("project.fairtl"))
+            .unwrap_or(false)
+            && parent.join("qa_translate.status.json").is_file();
+        if !is_legacy_qa_workspace {
+            return Ok(false);
+        }
+        let mut legacy_backups = std::fs::read_dir(parent)
+            .map_err(|error| {
+                AppError::Io(format!(
+                    "Failed to inspect project recovery directory '{}': {error}",
+                    parent.display()
+                ))
+            })?
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.is_dir()
+                    && path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .map(|name| name.starts_with(".fairtl_backup_"))
+                        .unwrap_or(false)
+                    && path.join("project.json").is_file()
+            })
+            .collect::<Vec<_>>();
+        legacy_backups.sort();
+        match legacy_backups.len() {
+            0 => return Ok(false),
+            1 => legacy_backups.remove(0),
+            count => {
+                return Err(AppError::Io(format!(
+                    "Found {count} legacy project checkpoints in '{}'; recovery is ambiguous",
+                    parent.display()
+                )))
+            }
+        }
+    };
+    if !backup.is_dir() {
+        return Err(AppError::Io(format!(
+            "Project recovery path is not a directory: {}",
+            backup.display()
+        )));
+    }
+
+    std::fs::rename(&backup, project_path).map_err(|error| {
+        AppError::Io(format!(
+            "Failed to restore interrupted project checkpoint '{}' from '{}': {error}",
+            project_path.display(),
+            backup.display()
+        ))
+    })?;
+    Ok(true)
+}
+
 // ---------------------------------------------------------------------------
 // On-disk structures (project.json inside .fairtl directory)
 // ---------------------------------------------------------------------------
@@ -47,6 +129,10 @@ struct ProjectMeta {
 /// If `project_path` already exists, the old directory is replaced atomically.
 pub fn save_project(project: &Project, project_path: &Path) -> Result<(), AppError> {
     validate_project(project)?;
+
+    // If the previous process stopped during the directory swap, restore the
+    // last complete checkpoint before attempting another save.
+    recover_interrupted_save(project_path)?;
 
     let parent = project_path
         .parent()
@@ -96,13 +182,9 @@ pub fn save_project(project: &Project, project_path: &Path) -> Result<(), AppErr
     }
 
     // Atomic swap: remove old, rename temp to final
+    let backup = project_backup_path(project_path)?;
     if project_path.exists() {
         // Rename old to a backup first, so if rename fails we don't lose data
-        let backup = parent.join(format!(
-            ".fairtl_backup_{}_{}",
-            std::process::id(),
-            uuid::Uuid::new_v4().as_simple()
-        ));
         if backup.exists() {
             std::fs::remove_dir_all(&backup)?;
         }
@@ -131,6 +213,8 @@ pub fn save_project(project: &Project, project_path: &Path) -> Result<(), AppErr
 
 /// Load a project from a `.fairtl` directory.
 pub fn load_project(project_path: &Path) -> Result<Project, AppError> {
+    recover_interrupted_save(project_path)?;
+
     if !project_path.is_dir() {
         return Err(AppError::NotFound(format!(
             "Project directory not found: {}",
@@ -471,6 +555,64 @@ mod tests {
 
         // Clean up
         fs::remove_dir_all(&temp).unwrap();
+    }
+
+    #[test]
+    fn test_load_recovers_checkpoint_interrupted_during_atomic_swap() {
+        let project = make_test_project();
+        let temp = std::env::temp_dir().join(format!(
+            "fairtl_test_recover_swap_{}.fairtl",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        let backup = temp.with_file_name(format!(
+            ".{}.backup",
+            temp.file_name().unwrap().to_string_lossy()
+        ));
+
+        let _ = fs::remove_dir_all(&temp);
+        let _ = fs::remove_dir_all(&backup);
+        save_project(&project, &temp).unwrap();
+
+        // Simulate an interruption after the current checkpoint was moved out
+        // of the canonical path but before the replacement became visible.
+        fs::rename(&temp, &backup).unwrap();
+
+        let loaded = load_project(&temp).unwrap();
+
+        assert_eq!(loaded.id, project.id);
+        assert!(temp.exists());
+        assert!(!backup.exists());
+
+        let _ = fs::remove_dir_all(&temp);
+        let _ = fs::remove_dir_all(&backup);
+    }
+
+    #[test]
+    fn test_load_recovers_unambiguous_legacy_checkpoint_backup() {
+        let project = make_test_project();
+        let root = std::env::temp_dir().join(format!(
+            "fairtl_test_recover_legacy_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        let temp = root.join("project.fairtl");
+        let legacy_backup = root.join(format!(
+            ".fairtl_backup_999_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("qa_translate.status.json"), "{}").unwrap();
+        save_project(&project, &temp).unwrap();
+        fs::rename(&temp, &legacy_backup).unwrap();
+
+        let loaded = load_project(&temp).unwrap();
+
+        assert_eq!(loaded.id, project.id);
+        assert!(temp.exists());
+        assert!(!legacy_backup.exists());
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

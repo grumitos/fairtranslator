@@ -3,11 +3,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use app_lib::models::{AiBatchExport, Project, TranslationFile};
+use app_lib::models::{AiBatchEntry, AiBatchExport, AiBatchResponseRef, Project, TranslationFile};
 use app_lib::parser::{parse_game, resolve_game_dir};
+use app_lib::services::workspace_lock::WorkspaceRunLock;
 use app_lib::services::{ai_batch, persistence};
 use chrono::Local;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 mod qa_inventory_fingerprint;
@@ -22,7 +23,7 @@ struct Options {
     paths: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct BatchArtifactRow {
     index: usize,
@@ -35,7 +36,7 @@ struct BatchArtifactRow {
     response_template_path: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SampleManifest {
     sample_name: String,
@@ -47,6 +48,8 @@ struct SampleManifest {
     inventory_fingerprint: String,
     source_lang: String,
     target_lang: String,
+    #[serde(default)]
+    chunk_size: Option<usize>,
     stable_import: bool,
     project_path: String,
     exports_dir: String,
@@ -57,9 +60,15 @@ struct SampleManifest {
     batches: Vec<BatchArtifactRow>,
 }
 
+#[derive(Debug)]
+struct ReusableSample {
+    manifest: SampleManifest,
+    completed_responses: usize,
+}
+
 fn print_usage() {
     eprintln!(
-        "Uso: cargo run --bin qa_prepare -- [opciones] <ruta> [ruta...]\n\
+        "Uso: cargo run --release --bin qa_prepare -- [opciones] <ruta> [ruta...]\n\
          \n\
          Opciones:\n\
            --workspace <ruta>    Directorio base para artefactos generados\n\
@@ -255,6 +264,229 @@ fn response_template_for(batch: &AiBatchExport) -> serde_json::Value {
     })
 }
 
+fn response_path_for(template_path: &Path) -> PathBuf {
+    let Some(template_name) = template_path.file_name().and_then(|value| value.to_str()) else {
+        return template_path.to_path_buf();
+    };
+    template_path.with_file_name(template_name.replace(".response.template.json", ".response.json"))
+}
+
+fn batch_dir_has_responses(batch_dir: &Path) -> bool {
+    fs::read_dir(batch_dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .any(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .map(|name| name.ends_with(".response.json"))
+                .unwrap_or(false)
+        })
+}
+
+fn refuse_rebuild_with_responses(
+    batch_dir: &Path,
+    reason: impl AsRef<str>,
+) -> Result<Option<ReusableSample>, String> {
+    if batch_dir_has_responses(batch_dir) {
+        Err(format!(
+            "La preparación existente no se puede reutilizar ({}) y ya contiene respuestas. No se reconstruirá para no perder chunks completos; usa un workspace nuevo o conserva/corrige el manifest actual.",
+            reason.as_ref()
+        ))
+    } else {
+        Ok(None)
+    }
+}
+
+fn completed_response_count(manifest: &SampleManifest, project: &Project) -> usize {
+    manifest
+        .batches
+        .iter()
+        .filter(|batch| {
+            let entries_path = PathBuf::from(&batch.entries_path);
+            let template_path = PathBuf::from(&batch.response_template_path);
+            let response_path = response_path_for(&template_path);
+            let Ok(entries_text) = fs::read_to_string(&entries_path) else {
+                return false;
+            };
+            let Ok(entries) = serde_json::from_str::<Vec<AiBatchEntry>>(&entries_text) else {
+                return false;
+            };
+            let response_map = entries
+                .iter()
+                .enumerate()
+                .filter_map(|(index, entry)| {
+                    u16::try_from(index + 1)
+                        .ok()
+                        .map(|local_id| AiBatchResponseRef {
+                            local_id,
+                            file_path: entry.file_path.clone(),
+                            entry_id: entry.entry_id.clone(),
+                        })
+                })
+                .collect::<Vec<_>>();
+            if response_map.len() != entries.len() {
+                return false;
+            }
+            let Ok(raw_response) = fs::read_to_string(response_path) else {
+                return false;
+            };
+            let Ok(translations) = ai_batch::parse_ai_batch_response_with_refs(
+                &raw_response,
+                Some(&project.id),
+                Some(&batch.batch_id),
+                Some(&response_map),
+            ) else {
+                return false;
+            };
+            ai_batch::validate_ai_batch_response_complete(&response_map, &translations).is_ok()
+        })
+        .count()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn try_load_reusable_sample(
+    manifest_path: &Path,
+    batch_dir: &Path,
+    resolved: &Path,
+    engine: &str,
+    files: usize,
+    entries: usize,
+    inventory_fingerprint: &str,
+    options: &Options,
+) -> Result<Option<ReusableSample>, String> {
+    if !manifest_path.is_file() {
+        return Ok(None);
+    }
+
+    let manifest_text = match fs::read_to_string(manifest_path) {
+        Ok(text) => text,
+        Err(error) => {
+            return refuse_rebuild_with_responses(
+                batch_dir,
+                format!("no se pudo leer el manifest: {error}"),
+            )
+        }
+    };
+    let manifest = match serde_json::from_str::<SampleManifest>(&manifest_text) {
+        Ok(manifest) => manifest,
+        Err(error) => {
+            return refuse_rebuild_with_responses(
+                batch_dir,
+                format!("el manifest no es válido: {error}"),
+            )
+        }
+    };
+
+    let metadata_matches = Path::new(&manifest.resolved_path) == resolved
+        && manifest.engine == engine
+        && manifest.files == files
+        && manifest.entries == entries
+        && manifest.inventory_fingerprint == inventory_fingerprint
+        && manifest.source_lang == options.source_lang
+        && manifest.target_lang == options.target_lang
+        && manifest
+            .chunk_size
+            .map(|chunk_size| chunk_size == options.chunk_size)
+            .unwrap_or(true)
+        && Path::new(&manifest.batch_dir) == batch_dir
+        && manifest.batch_count == manifest.batches.len();
+    if !metadata_matches {
+        return refuse_rebuild_with_responses(batch_dir, "cambió la fuente o la configuración");
+    }
+
+    let project = match persistence::load_project(Path::new(&manifest.project_path)) {
+        Ok(project) => project,
+        Err(error) => {
+            return refuse_rebuild_with_responses(
+                batch_dir,
+                format!("no se pudo abrir el proyecto: {error}"),
+            )
+        }
+    };
+    if project.source_lang != options.source_lang
+        || project.target_lang != options.target_lang
+        || qa_inventory_fingerprint::inventory_fingerprint(&project.files) != inventory_fingerprint
+    {
+        return refuse_rebuild_with_responses(batch_dir, "el proyecto no coincide con la fuente");
+    }
+
+    for (offset, batch) in manifest.batches.iter().enumerate() {
+        let prompt_path = PathBuf::from(&batch.prompt_path);
+        let entries_path = PathBuf::from(&batch.entries_path);
+        let template_path = PathBuf::from(&batch.response_template_path);
+        if batch.index != offset + 1
+            || !prompt_path.is_file()
+            || !entries_path.is_file()
+            || !template_path.is_file()
+        {
+            return refuse_rebuild_with_responses(batch_dir, "faltan artefactos de un chunk");
+        }
+
+        let entries_text = match fs::read_to_string(&entries_path) {
+            Ok(text) => text,
+            Err(error) => {
+                return refuse_rebuild_with_responses(
+                    batch_dir,
+                    format!("no se pudo leer un chunk: {error}"),
+                )
+            }
+        };
+        let parsed_entries = match serde_json::from_str::<Vec<AiBatchEntry>>(&entries_text) {
+            Ok(entries) => entries,
+            Err(error) => {
+                return refuse_rebuild_with_responses(
+                    batch_dir,
+                    format!("un chunk no es válido: {error}"),
+                )
+            }
+        };
+        let fingerprint =
+            qa_inventory_fingerprint::batch_entries_fingerprint(&batch.batch_id, &parsed_entries);
+        if fingerprint != batch.entries_fingerprint
+            || parsed_entries.len() != batch.exported_entries
+        {
+            return refuse_rebuild_with_responses(batch_dir, "cambió el contenido de un chunk");
+        }
+
+        let template_text = match fs::read_to_string(&template_path) {
+            Ok(text) => text,
+            Err(error) => {
+                return refuse_rebuild_with_responses(
+                    batch_dir,
+                    format!("no se pudo leer un template: {error}"),
+                )
+            }
+        };
+        let template = match serde_json::from_str::<serde_json::Value>(&template_text) {
+            Ok(template) => template,
+            Err(error) => {
+                return refuse_rebuild_with_responses(
+                    batch_dir,
+                    format!("un template no es válido: {error}"),
+                )
+            }
+        };
+        if template.get("p").and_then(serde_json::Value::as_str) != Some(project.id.as_str())
+            || template.get("b").and_then(serde_json::Value::as_str)
+                != Some(batch.batch_id.as_str())
+        {
+            return refuse_rebuild_with_responses(
+                batch_dir,
+                "el template no coincide con el chunk",
+            );
+        }
+    }
+
+    let completed_responses = completed_response_count(&manifest, &project);
+    Ok(Some(ReusableSample {
+        manifest,
+        completed_responses,
+    }))
+}
+
 fn prepare_sample(
     selected: &str,
     options: &Options,
@@ -263,25 +495,9 @@ fn prepare_sample(
     let selected_path = PathBuf::from(selected);
     let resolved = resolve_game_dir(&selected_path).map_err(|error| error.to_string())?;
     let parsed_a = parse_game(&resolved).map_err(|error| error.to_string())?;
-    let parsed_b = parse_game(&resolved).map_err(|error| error.to_string())?;
-
-    if parsed_a.engine != parsed_b.engine {
-        return Err(format!(
-            "Import inestable: engine distinto entre corridas para '{}'",
-            selected
-        ));
-    }
-    if qa_inventory_fingerprint::inventory_fingerprint(&parsed_a.files)
-        != qa_inventory_fingerprint::inventory_fingerprint(&parsed_b.files)
-    {
-        return Err(format!(
-            "Import inestable: firma de archivos distinta entre corridas para '{}'",
-            selected
-        ));
-    }
-
     let files = parsed_a.files.len();
     let entries = total_entries(&parsed_a.files);
+    let inventory_fingerprint = qa_inventory_fingerprint::inventory_fingerprint(&parsed_a.files);
     let sample_name = sample_name(&selected_path, &resolved);
     let slug_base = slugify(&format!("{:?}-{}", parsed_a.engine, sample_name));
     let slug = if slug_base.is_empty() {
@@ -298,6 +514,39 @@ fn prepare_sample(
     fs::create_dir_all(&batch_dir).map_err(|error| error.to_string())?;
     fs::create_dir_all(&exports_dir).map_err(|error| error.to_string())?;
 
+    if let Some(reusable) = try_load_reusable_sample(
+        &manifest_path,
+        &batch_dir,
+        &resolved,
+        &format!("{:?}", parsed_a.engine),
+        files,
+        entries,
+        &inventory_fingerprint,
+        options,
+    )? {
+        eprintln!(
+            "[RESUME] {} => preparación reutilizada; respuestas completas={}/{}",
+            reusable.manifest.sample_name,
+            reusable.completed_responses,
+            reusable.manifest.batch_count
+        );
+        return Ok(reusable.manifest);
+    }
+
+    let parsed_b = parse_game(&resolved).map_err(|error| error.to_string())?;
+    if parsed_a.engine != parsed_b.engine {
+        return Err(format!(
+            "Import inestable: engine distinto entre corridas para '{}'",
+            selected
+        ));
+    }
+    if inventory_fingerprint != qa_inventory_fingerprint::inventory_fingerprint(&parsed_b.files) {
+        return Err(format!(
+            "Import inestable: firma de archivos distinta entre corridas para '{}'",
+            selected
+        ));
+    }
+
     let project = build_project(
         sample_name.clone(),
         &options.source_lang,
@@ -305,7 +554,6 @@ fn prepare_sample(
         &resolved,
         parsed_a,
     );
-    let inventory_fingerprint = qa_inventory_fingerprint::inventory_fingerprint(&project.files);
     persistence::save_project(&project, &project_dir).map_err(|error| error.to_string())?;
 
     let batches = ai_batch::export_ai_batches(&project, &[], Some(options.chunk_size))
@@ -364,6 +612,7 @@ fn prepare_sample(
         inventory_fingerprint,
         source_lang: options.source_lang.clone(),
         target_lang: options.target_lang.clone(),
+        chunk_size: Some(options.chunk_size),
         stable_import: true,
         project_path: project_dir.display().to_string(),
         exports_dir: exports_dir.display().to_string(),
@@ -439,6 +688,13 @@ fn main() -> ExitCode {
         );
         return ExitCode::from(1);
     }
+    let _workspace_lock = match WorkspaceRunLock::acquire(&options.workspace) {
+        Ok(lock) => lock,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(1);
+        }
+    };
 
     let mut manifests = Vec::new();
 
@@ -481,4 +737,177 @@ fn main() -> ExitCode {
     println!("Espacio de trabajo: {}", options.workspace.display());
 
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use app_lib::models::{Engine, EntryStatus, TranslationEntry};
+
+    fn reusable_fixture() -> (PathBuf, PathBuf, PathBuf, Options, String) {
+        let root = std::env::temp_dir().join(format!(
+            "fairtranslator-qa-prepare-resume-test-{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        let batch_dir = root.join("ai-batches");
+        let project_path = root.join("project.fairtl");
+        let manifest_path = root.join("manifest.json");
+        fs::create_dir_all(&batch_dir).unwrap();
+
+        let project = Project {
+            id: "stable-project".into(),
+            name: "sample".into(),
+            source_lang: "ja".into(),
+            target_lang: "es".into(),
+            engine: Engine::Mv,
+            game_dir: root.join("game").display().to_string(),
+            files: vec![TranslationFile {
+                relative_path: "data/CommonEvents.json".into(),
+                entries: vec![TranslationEntry {
+                    id: "CommonEvents:1:text:0".into(),
+                    file_context: "text".into(),
+                    original: "Hello".into(),
+                    translation: String::new(),
+                    status: EntryStatus::Untranslated,
+                    notes: String::new(),
+                }],
+            }],
+            glossary: vec![],
+            style_guide: vec![],
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        persistence::save_project(&project, &project_path).unwrap();
+        let inventory_fingerprint = qa_inventory_fingerprint::inventory_fingerprint(&project.files);
+
+        let entries = vec![AiBatchEntry {
+            file_path: "data/CommonEvents.json".into(),
+            entry_id: "CommonEvents:1:text:0".into(),
+            file_context: "text".into(),
+            original: "Hello".into(),
+            current_translation: String::new(),
+            instruction_candidate: false,
+            instruction_reason: None,
+        }];
+        let prompt_path = batch_dir.join("batch-0001.prompt.txt");
+        let entries_path = batch_dir.join("batch-0001.entries.json");
+        let template_path = batch_dir.join("batch-0001.response.template.json");
+        let response_path = batch_dir.join("batch-0001.response.json");
+        fs::write(&prompt_path, "prompt").unwrap();
+        fs::write(&entries_path, serde_json::to_string(&entries).unwrap()).unwrap();
+        fs::write(
+            &template_path,
+            serde_json::json!({"p": project.id, "b": "stable-batch", "translations": []})
+                .to_string(),
+        )
+        .unwrap();
+        fs::write(
+            &response_path,
+            serde_json::json!({
+                "p": "stable-project",
+                "b": "stable-batch",
+                "translations": [{"k": 1, "t": "Hola", "n": "", "s": false}]
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let manifest = SampleManifest {
+            sample_name: "sample".into(),
+            selected_path: root.join("game").display().to_string(),
+            resolved_path: root.join("game").display().to_string(),
+            engine: "Mv".into(),
+            files: 1,
+            entries: 1,
+            inventory_fingerprint: inventory_fingerprint.clone(),
+            source_lang: "ja".into(),
+            target_lang: "es".into(),
+            chunk_size: Some(200),
+            stable_import: true,
+            project_path: project_path.display().to_string(),
+            exports_dir: root.join("exports").display().to_string(),
+            batch_dir: batch_dir.display().to_string(),
+            manifest_path: manifest_path.display().to_string(),
+            instruction_candidates: 0,
+            batch_count: 1,
+            batches: vec![BatchArtifactRow {
+                index: 1,
+                batch_id: "stable-batch".into(),
+                entries_fingerprint: qa_inventory_fingerprint::batch_entries_fingerprint(
+                    "stable-batch",
+                    &entries,
+                ),
+                exported_entries: 1,
+                instruction_candidates: 0,
+                prompt_path: prompt_path.display().to_string(),
+                entries_path: entries_path.display().to_string(),
+                response_template_path: template_path.display().to_string(),
+            }],
+        };
+        fs::write(
+            &manifest_path,
+            serde_json::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let options = Options {
+            workspace: root.clone(),
+            report: None,
+            source_lang: "ja".into(),
+            target_lang: "es".into(),
+            chunk_size: 200,
+            paths: vec![root.join("game").display().to_string()],
+        };
+        (
+            root,
+            batch_dir,
+            manifest_path,
+            options,
+            inventory_fingerprint,
+        )
+    }
+
+    #[test]
+    fn valid_preparation_reuses_completed_responses() {
+        let (root, batch_dir, manifest_path, options, fingerprint) = reusable_fixture();
+        let resolved = root.join("game");
+
+        let reusable = try_load_reusable_sample(
+            &manifest_path,
+            &batch_dir,
+            &resolved,
+            "Mv",
+            1,
+            1,
+            &fingerprint,
+            &options,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(reusable.completed_responses, 1);
+        assert_eq!(reusable.manifest.batches[0].batch_id, "stable-batch");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn preparation_refuses_to_invalidate_existing_responses() {
+        let (root, batch_dir, manifest_path, options, _fingerprint) = reusable_fixture();
+        let resolved = root.join("game");
+
+        let error = try_load_reusable_sample(
+            &manifest_path,
+            &batch_dir,
+            &resolved,
+            "Mv",
+            1,
+            1,
+            "different-inventory",
+            &options,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("no perder chunks completos"));
+        let _ = fs::remove_dir_all(root);
+    }
 }

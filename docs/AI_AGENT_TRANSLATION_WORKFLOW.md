@@ -43,13 +43,13 @@ Recommended:
 Inventory first:
 
 ```powershell
-cargo run --manifest-path src-tauri\Cargo.toml --bin qa_inventory -- --json "<game-folder>"
+cargo run --release --manifest-path src-tauri\Cargo.toml --bin qa_inventory -- --json "<game-folder>"
 ```
 
 Translate with Codex CLI:
 
 ```powershell
-cargo run --manifest-path src-tauri\Cargo.toml --bin qa_translate_provider -- `
+cargo run --release --manifest-path src-tauri\Cargo.toml --bin qa_translate_provider -- `
   --provider codex `
   --game-dir "<game-folder>" `
   --workspace "D:\FairTranslatorRuns\<run-name>" `
@@ -62,7 +62,7 @@ cargo run --manifest-path src-tauri\Cargo.toml --bin qa_translate_provider -- `
 Translate with OpenCode Go:
 
 ```powershell
-cargo run --manifest-path src-tauri\Cargo.toml --bin qa_translate_provider -- `
+cargo run --release --manifest-path src-tauri\Cargo.toml --bin qa_translate_provider -- `
   --provider opencode `
   --game-dir "<game-folder>" `
   --workspace "D:\FairTranslatorRuns\<run-name>" `
@@ -76,14 +76,19 @@ cargo run --manifest-path src-tauri\Cargo.toml --bin qa_translate_provider -- `
 
 Resume the same command with the same `--workspace`. The runner reloads
 `project.fairtl`, refreshes newly extractable entries, skips completed entries,
-and checkpoints after successful chunks.
+and checkpoints after successful chunks. The workspace is locked against a
+second writer. If the process stops while publishing a checkpoint, the next
+run restores the last complete directory backup before deciding whether to
+build or resume. A chunk interrupted before its checkpoint is retried; chunks
+whose checkpoint was published are not sent again. Progress logs are appended
+across sessions.
 
 ## Required Checks
 
 After translation:
 
 ```powershell
-cargo run --manifest-path src-tauri\Cargo.toml --bin qa_validate_translation -- `
+cargo run --release --manifest-path src-tauri\Cargo.toml --bin qa_validate_translation -- `
   --project "D:\FairTranslatorRuns\<run-name>\project.fairtl" `
   --strict-unchanged `
   --json
@@ -119,7 +124,7 @@ game. Prefer the playable folder when it exists.
 If strict validation fails:
 
 ```powershell
-cargo run --manifest-path src-tauri\Cargo.toml --bin qa_translate_provider -- `
+cargo run --release --manifest-path src-tauri\Cargo.toml --bin qa_translate_provider -- `
   --provider <same-provider> `
   --game-dir "<game-folder>" `
   --workspace "D:\FairTranslatorRuns\<run-name>" `
@@ -143,7 +148,7 @@ the translation:
 Headless preparation:
 
 ```powershell
-cargo run --manifest-path src-tauri\Cargo.toml --bin qa_prepare -- `
+cargo run --release --manifest-path src-tauri\Cargo.toml --bin qa_prepare -- `
   --workspace "D:\FairTranslatorRuns\<run-name>" `
   --source-lang "Japanese" `
   --target-lang "es" `
@@ -151,25 +156,38 @@ cargo run --manifest-path src-tauri\Cargo.toml --bin qa_prepare -- `
   "<game-folder>"
 ```
 
+Use the release profile for campaign preparation. The planner performs CPU-heavy
+prompt budgeting, and Rust's unoptimized development profile is intended for
+debugging rather than large translation inventories.
+
 For each sample, `qa_prepare` writes:
 
 - `manifest.json`: authoritative list of batches, paths, the versioned source-inventory fingerprint, and each batch's ordered-entry fingerprint.
-- `batches\<n>.prompt.txt`: prompt to give the external agent.
-- `batches\<n>.entries.json`: source/reference entries for inspection.
-- `batches\<n>.response.template.json`: response skeleton.
+- `ai-batches\batch-<n>.prompt.txt`: prompt to give the external agent.
+- `ai-batches\batch-<n>.entries.json`: source/reference entries for inspection.
+- `ai-batches\batch-<n>.response.template.json`: response skeleton.
 
 The external agent must write a sibling file named
 `<same-name>.response.json`, replacing `.response.template.json` with
-`.response.json`. Then apply:
+`.response.json`. Write it to a temporary sibling first, validate the JSON and
+expected IDs, and rename it to `.response.json` only when the complete chunk is
+ready. Then apply:
 
 ```powershell
-cargo run --manifest-path src-tauri\Cargo.toml --bin qa_apply -- `
+cargo run --release --manifest-path src-tauri\Cargo.toml --bin qa_apply -- `
   --manifest "D:\FairTranslatorRuns\<run-name>\<sample>\manifest.json" `
   --status reviewed
 ```
 
 Rules:
 
+- To resume external-agent work, rerun the identical `qa_prepare` command with
+  the same workspace. A matching project, manifest, configuration and set of
+  fingerprints are reused byte-for-byte; valid `.response.json` chunks are
+  counted and preserved. Continue at the first missing or invalid response.
+- If source/configuration drift is found after any response exists,
+  `qa_prepare` refuses to rebuild the batch IDs. Use a new workspace for an
+  intentional rebuild.
 - `qa_apply` rejects legacy/unknown fingerprints and any project or current source-inventory drift before applying responses.
 - The AI response must echo the project and batch IDs.
 - It must return every requested entry exactly once.
