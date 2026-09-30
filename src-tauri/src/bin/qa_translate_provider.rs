@@ -32,9 +32,11 @@ struct Options {
     source_lang: String,
     target_lang: String,
     style_guide: Vec<String>,
+    codex_command: Option<String>,
     model: Option<String>,
     profile: Option<String>,
     reasoning_effort: Option<String>,
+    service_tier: Option<String>,
     fallback_model: Option<String>,
     fallback_profile: Option<String>,
     fallback_reasoning_effort: Option<String>,
@@ -59,6 +61,7 @@ struct RunReport {
     model: Option<String>,
     profile: Option<String>,
     reasoning_effort: Option<String>,
+    service_tier: Option<String>,
     fallback_model: Option<String>,
     fallback_profile: Option<String>,
     fallback_reasoning_effort: Option<String>,
@@ -74,9 +77,11 @@ struct RunReport {
 #[derive(Debug, Clone)]
 struct ProviderRunConfig {
     provider: ProviderType,
+    codex_command: Option<String>,
     model: Option<String>,
     profile: Option<String>,
     reasoning_effort: Option<String>,
+    service_tier: Option<String>,
     api_key_file: Option<PathBuf>,
     endpoint: Option<String>,
 }
@@ -131,9 +136,11 @@ fn print_usage() {
            --source-lang <texto>    Idioma fuente (default: mixed Japanese and English)\n\
            --target-lang <texto>    Idioma destino (default: es)\n\
            --style <texto>          Regla de guía de estilo; se puede repetir\n\
+           --codex-command <ruta>   Binario Codex CLI explícito (opcional)\n\
            --model <nombre>         Modelo del proveedor; requerido para OpenCode\n\
            --profile <nombre>       Perfil Codex CLI (opcional)\n\
            --reasoning-effort <v>   Esfuerzo de razonamiento Codex CLI (ej. low, medium, high)\n\
+           --service-tier <v>       Nivel de servicio Codex CLI (ej. fast, default)\n\
            --fallback-model <m>     Modelo de relevo si el primario falla\n\
            --fallback-profile <p>   Perfil Codex CLI para el relevo (opcional)\n\
            --fallback-reasoning-effort <v>  Esfuerzo de razonamiento del relevo\n\
@@ -166,9 +173,11 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Options, String> {
     let mut source_lang = "mixed Japanese and English".to_string();
     let mut target_lang = "es".to_string();
     let mut style_guide = Vec::new();
+    let mut codex_command = None;
     let mut model = None;
     let mut profile = None;
     let mut reasoning_effort = None;
+    let mut service_tier = None;
     let mut fallback_model = None;
     let mut fallback_profile = None;
     let mut fallback_reasoning_effort = None;
@@ -225,6 +234,12 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Options, String> {
                         .ok_or_else(|| "Falta valor para --style".to_string())?,
                 );
             }
+            "--codex-command" => {
+                codex_command = Some(
+                    args.next()
+                        .ok_or_else(|| "Falta valor para --codex-command".to_string())?,
+                );
+            }
             "--model" => {
                 model = Some(
                     args.next()
@@ -241,6 +256,12 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Options, String> {
                 reasoning_effort = Some(
                     args.next()
                         .ok_or_else(|| "Falta valor para --reasoning-effort".to_string())?,
+                );
+            }
+            "--service-tier" => {
+                service_tier = Some(
+                    args.next()
+                        .ok_or_else(|| "Falta valor para --service-tier".to_string())?,
                 );
             }
             "--fallback-model" => {
@@ -291,9 +312,11 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Options, String> {
         source_lang,
         target_lang,
         style_guide,
+        codex_command,
         model,
         profile,
         reasoning_effort,
+        service_tier,
         fallback_model,
         fallback_profile,
         fallback_reasoning_effort,
@@ -651,10 +674,11 @@ fn run_config_label(config: &ProviderRunConfig) -> String {
     );
     match config.provider {
         ProviderType::Codex => format!(
-            "{} profile={} reasoning={}",
+            "{} profile={} reasoning={} service_tier={}",
             base,
             config.profile.as_deref().unwrap_or("default"),
-            config.reasoning_effort.as_deref().unwrap_or("default")
+            config.reasoning_effort.as_deref().unwrap_or("default"),
+            config.service_tier.as_deref().unwrap_or("default")
         ),
         ProviderType::Opencode => format!(
             "{} endpoint={}",
@@ -667,12 +691,15 @@ fn run_config_label(config: &ProviderRunConfig) -> String {
 
 fn create_provider(config: &ProviderRunConfig) -> Result<Box<dyn TranslationProvider>, String> {
     match config.provider {
-        ProviderType::Codex => Ok(Box::new(app_lib::services::codex::CodexProvider::new(
-            None,
-            config.model.clone(),
-            config.profile.clone(),
-            config.reasoning_effort.clone(),
-        ))),
+        ProviderType::Codex => Ok(Box::new(
+            app_lib::services::codex::CodexProvider::new(
+                config.codex_command.clone(),
+                config.model.clone(),
+                config.profile.clone(),
+                config.reasoning_effort.clone(),
+            )
+            .with_service_tier(config.service_tier.clone()),
+        )),
         ProviderType::Opencode => {
             let api_key = resolve_opencode_api_key(config.api_key_file.as_deref(), || {
                 secrets::load_secret(&secrets::api_key_secret_id(&config.provider))
@@ -960,9 +987,11 @@ fn main() -> ExitCode {
     let provider_type = options.provider.clone();
     let primary_config = ProviderRunConfig {
         provider: provider_type.clone(),
+        codex_command: options.codex_command.clone(),
         model: options.model.clone(),
         profile: options.profile.clone(),
         reasoning_effort: options.reasoning_effort.clone(),
+        service_tier: options.service_tier.clone(),
         api_key_file: options.api_key_file.clone(),
         endpoint: options.endpoint.clone(),
     };
@@ -971,6 +1000,7 @@ fn main() -> ExitCode {
         .clone()
         .map(|model| ProviderRunConfig {
             provider: provider_type.clone(),
+            codex_command: options.codex_command.clone(),
             model: Some(model),
             profile: if provider_type == ProviderType::Codex {
                 options.fallback_profile.clone()
@@ -982,6 +1012,7 @@ fn main() -> ExitCode {
             } else {
                 options.reasoning_effort.clone()
             },
+            service_tier: options.service_tier.clone(),
             api_key_file: options.api_key_file.clone(),
             endpoint: options.endpoint.clone(),
         });
@@ -2076,6 +2107,7 @@ fn main() -> ExitCode {
         model: options.model,
         profile: options.profile,
         reasoning_effort: options.reasoning_effort,
+        service_tier: options.service_tier,
         fallback_model: options.fallback_model,
         fallback_profile: options.fallback_profile,
         fallback_reasoning_effort: options.fallback_reasoning_effort,
@@ -2250,12 +2282,14 @@ mod tests {
     }
 
     #[test]
-    fn parse_args_accepts_repair_coverage_flag() {
+    fn parse_args_accepts_repair_coverage_and_codex_command() {
         let options = parse_args(
             [
                 "qa_translate_provider",
                 "--game-dir",
                 "D:\\Games\\Demo",
+                "--codex-command",
+                "D:\\Tools\\codex.exe",
                 "--repair-coverage",
                 "--strict-target-language",
             ]
@@ -2266,6 +2300,10 @@ mod tests {
 
         assert!(options.repair_coverage);
         assert!(options.strict_target_language);
+        assert_eq!(
+            options.codex_command.as_deref(),
+            Some("D:\\Tools\\codex.exe")
+        );
     }
 
     #[test]

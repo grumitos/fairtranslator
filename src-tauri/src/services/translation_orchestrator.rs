@@ -18,7 +18,8 @@ use crate::services::translation_text::{
 };
 
 const DEFAULT_MAX_ENTRIES_PER_CHUNK: usize = 20;
-const LLM_MAX_ENTRIES_PER_CHUNK: usize = 24;
+const OPENAI_MAX_ENTRIES_PER_CHUNK: usize = 24;
+const CODEX_MAX_ENTRIES_PER_CHUNK: usize = 72;
 const EXTERNAL_AI_DEFAULT_MAX_ENTRIES_PER_CHUNK: usize = 200;
 const MAX_TERM_HINTS: usize = 12;
 const MAX_TRANSLATION_EXAMPLES: usize = 6;
@@ -803,7 +804,8 @@ fn stable_hash_hex(bytes: &[u8]) -> String {
 fn max_entries_for_mode(mode: ChunkPlanningMode, max_entries: Option<usize>) -> usize {
     match mode {
         ChunkPlanningMode::Standard => DEFAULT_MAX_ENTRIES_PER_CHUNK,
-        ChunkPlanningMode::OpenAi | ChunkPlanningMode::Codex => LLM_MAX_ENTRIES_PER_CHUNK,
+        ChunkPlanningMode::OpenAi => OPENAI_MAX_ENTRIES_PER_CHUNK,
+        ChunkPlanningMode::Codex => CODEX_MAX_ENTRIES_PER_CHUNK,
         ChunkPlanningMode::OpenCode => OpenCodeProvider::max_batch_size(),
         ChunkPlanningMode::ExternalAi => max_entries
             .unwrap_or(EXTERNAL_AI_DEFAULT_MAX_ENTRIES_PER_CHUNK)
@@ -1303,6 +1305,20 @@ mod tests {
             .map(|index| format!("Long rule {index}: {}", "z".repeat(320)))
             .collect();
         project
+    }
+
+    #[test]
+    fn test_codex_uses_larger_batches_without_changing_openai_limit() {
+        assert_eq!(
+            max_entries_for_mode(ChunkPlanningMode::Codex, None),
+            CODEX_MAX_ENTRIES_PER_CHUNK
+        );
+        assert_eq!(CODEX_MAX_ENTRIES_PER_CHUNK, 72);
+        assert_eq!(
+            max_entries_for_mode(ChunkPlanningMode::OpenAi, None),
+            OPENAI_MAX_ENTRIES_PER_CHUNK
+        );
+        assert_eq!(OPENAI_MAX_ENTRIES_PER_CHUNK, 24);
     }
 
     #[test]

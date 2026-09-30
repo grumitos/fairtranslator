@@ -337,6 +337,10 @@ fn match_control_code(slice: &[char]) -> Option<usize> {
         return None;
     }
 
+    if matches!(marker, 'n' | 'r' | 't') && slice.get(2) != Some(&'[') {
+        return Some(2);
+    }
+
     let mut cursor = 2usize;
     while cursor < slice.len() && slice[cursor].is_ascii_alphabetic() {
         cursor += 1;
@@ -613,6 +617,14 @@ mod tests {
         let spans = collect_special_token_spans(&text);
 
         assert!(spans.is_empty());
+    }
+
+    #[test]
+    fn test_escaped_newline_does_not_consume_following_translated_word() {
+        let spans = collect_special_token_spans(r"Error\nTras cargar");
+        let tokens = spans.into_iter().map(|span| span.token).collect::<Vec<_>>();
+
+        assert_eq!(tokens, vec![r"\n".to_string()]);
     }
 
     #[test]

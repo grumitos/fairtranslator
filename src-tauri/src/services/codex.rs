@@ -105,6 +105,7 @@ pub struct CodexProvider {
     model: Option<String>,
     profile: Option<String>,
     reasoning_effort: Option<String>,
+    service_tier: Option<String>,
     primary_tree_terminator: PrimaryTreeTerminator,
 }
 
@@ -147,8 +148,14 @@ impl CodexProvider {
             model: model.and_then(normalize_optional),
             profile: profile.and_then(normalize_optional),
             reasoning_effort: reasoning_effort.and_then(normalize_optional),
+            service_tier: None,
             primary_tree_terminator: terminate_tree_with_taskkill,
         }
+    }
+
+    pub fn with_service_tier(mut self, service_tier: Option<String>) -> Self {
+        self.service_tier = service_tier.and_then(normalize_optional);
+        self
     }
 
     #[cfg(test)]
@@ -212,7 +219,12 @@ impl CodexProvider {
         let login_output = self
             .run_command(
                 &runtime.candidate,
-                vec!["login".to_string(), "status".to_string()],
+                vec![
+                    "-c".to_string(),
+                    approvals_reviewer_config_arg(),
+                    "login".to_string(),
+                    "status".to_string(),
+                ],
                 None,
                 None,
                 Some(CODEX_STATUS_TIMEOUT),
@@ -484,6 +496,10 @@ impl CodexProvider {
         workdir: PathBuf,
     ) -> Result<std::process::Output, AppError> {
         let mut args = vec![
+            "-c".to_string(),
+            approvals_reviewer_config_arg(),
+            "-c".to_string(),
+            disabled_mcp_servers_config_arg(),
             "exec".to_string(),
             "--sandbox".to_string(),
             "read-only".to_string(),
@@ -507,6 +523,10 @@ impl CodexProvider {
         if let Some(reasoning_effort) = &self.reasoning_effort {
             args.push("-c".to_string());
             args.push(reasoning_effort_config_arg(reasoning_effort));
+        }
+        if let Some(service_tier) = &self.service_tier {
+            args.push("-c".to_string());
+            args.push(service_tier_config_arg(service_tier));
         }
         args.push("--".to_string());
         args.push("-".to_string());
@@ -743,7 +763,7 @@ fn terminate_child_tree(
             return Ok(status);
         }
 
-        return wait_for_child_exit(child, pid);
+        wait_for_child_exit(child, pid)
     }
 
     #[cfg(not(windows))]
@@ -955,6 +975,21 @@ fn reasoning_effort_config_arg(reasoning_effort: &str) -> String {
         "model_reasoning_effort={}",
         serde_json::to_string(reasoning_effort).unwrap_or_else(|_| "\"low\"".to_string())
     )
+}
+
+fn service_tier_config_arg(service_tier: &str) -> String {
+    format!(
+        "service_tier={}",
+        serde_json::to_string(service_tier).unwrap_or_else(|_| "\"default\"".to_string())
+    )
+}
+
+fn approvals_reviewer_config_arg() -> String {
+    "approvals_reviewer=\"guardian_subagent\"".to_string()
+}
+
+fn disabled_mcp_servers_config_arg() -> String {
+    "mcp_servers={}".to_string()
 }
 
 fn resolve_command_path(command_path: &str) -> Option<PathBuf> {
@@ -1220,6 +1255,12 @@ if "%~1"=="--version" (
   echo codex-test 1.0
   exit /b 0
 )
+:global_args
+if "%~1"=="-c" (
+  shift
+  shift
+  goto global_args
+)
 if "%~1"=="login" (
   echo Logged in using test helper
   exit /b 0
@@ -1351,6 +1392,24 @@ powershell.exe -NoProfile -NonInteractive -Command "$stream = [IO.File]::Open((J
             reasoning_effort_config_arg("low"),
             "model_reasoning_effort=\"low\""
         );
+    }
+
+    #[test]
+    fn test_service_tier_uses_current_codex_config_key() {
+        assert_eq!(service_tier_config_arg("fast"), "service_tier=\"fast\"");
+    }
+
+    #[test]
+    fn test_cli_compatibility_keeps_guardian_approval_review() {
+        assert_eq!(
+            approvals_reviewer_config_arg(),
+            "approvals_reviewer=\"guardian_subagent\""
+        );
+    }
+
+    #[test]
+    fn test_translation_exec_disables_unneeded_mcp_servers() {
+        assert_eq!(disabled_mcp_servers_config_arg(), "mcp_servers={}");
     }
 
     #[test]
