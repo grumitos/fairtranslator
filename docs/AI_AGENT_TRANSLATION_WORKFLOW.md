@@ -59,6 +59,19 @@ cargo run --release --manifest-path src-tauri\Cargo.toml --bin qa_translate_prov
   --strict-target-language
 ```
 
+Codex runtime and model notes:
+
+- The runner resolves Codex as: `--codex-command`, then a sidecar binary, then
+  `codex` on `PATH`. Builds also look for the git-ignored sidecar at
+  `src-tauri\binaries\codex-<target>.exe` of the checkout they were compiled
+  from, which can be older than the installed CLI. Pass `--codex-command "<path-to-installed-codex.exe>"` to be
+  sure which runtime runs.
+- List the model IDs available to that CLI with `codex debug models` (JSON
+  catalog; use `slug` from entries whose `visibility` is `list`). Current CLIs
+  have no `codex models` subcommand.
+- Use `--files data/System.json,data/Map001.json` to bound a smoke run to a few
+  files.
+
 Translate with OpenCode Go:
 
 ```powershell
@@ -119,6 +132,10 @@ The run is not done until:
 - Exported JSON/MARSHAL files can be parsed by the app.
 - A playable copy exists when the original game has a launcher outside the data
   root. For nested MV/MZ `www` exports, the QA runner creates `playable-es`.
+- `textFit.overflowCount` is zero, or every entry listed in `textFit.overflow`
+  (for example a long choice or a one-row help text) was shortened or is
+  justified. The exporter already wraps and pages messages, scrolling text and
+  help texts to the engine's window.
 
 ## Output Contract
 
@@ -231,6 +248,13 @@ Rules:
 - Asset references must not be translated; export normalizes copied asset names
   where safe.
 - Image text is a separate OCR/asset-editing pass and must be reported as such.
+- Packed RPG Maker XP/VX/VX Ace games (`Game.rgssad`, `.rgss2a` or `.rgss3a`
+  without a `Data` folder) are not read: project creation and the QA tools stop
+  with a clear error. Work from an unpacked copy.
+- RPG Maker XP: the first line of each message (command 101) is extracted now,
+  so `qa_prepare` manifests created earlier for XP games are rejected for
+  inventory drift; regenerate them. Existing projects gain those entries when
+  opened or resumed, without renumbering.
 
 ## Definition Of Done
 

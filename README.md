@@ -24,8 +24,10 @@ RPG Maker is the supported product family. Unity support is limited to one exper
 - Applies glossary guidance during provider-based translation
 - Supports external AI workflows by exporting an editor-friendly translation sheet plus prompt guidance, then applying the structured JSON response
 - Exports a translated copy of the game to a separate output directory
+- Fits translated text to each engine's windows: messages are rewrapped to the real window width (face graphics, font size, message plugins and the game's own text are taken into account) and split into extra pages when needed (native paging on MV/MZ/VX Ace/VX, new show-text commands on XP). Whatever still does not fit, such as choices, one-line help windows or long names, is listed in the export result and in `qa_validate_translation --json` (`textFit`)
+- Saves projects to `Documents\FairTranslator\<name>.fairtl` by default, always outside the game folder; "Save as" picks another location
 
-The exporter copies the original game to the target folder first and only writes translations into the copied output. The source game directory is not modified.
+The exporter copies the original game to the target folder first and only writes translations into the copied output. The source game directory is not modified. Packed RPG Maker games (`Game.rgssad`, `.rgss2a` or `.rgss3a` without a `Data` folder) are not supported: unpack them first.
 
 ## Provider Notes
 
@@ -44,7 +46,9 @@ For Codex, authentication is managed by the installed Codex CLI. FairTranslator 
 2. A bundled sidecar binary
 3. `codex` from `PATH`
 
-For the standard release workflow, assume option `1` or `3`. Sidecar builds are supported by the codebase, but they are not the default public release artifact.
+For the standard release workflow, assume option `1` or `3`. Sidecar builds are supported by the codebase, but they are not the default public release artifact. Builds made from a repository checkout also find the ignored `src-tauri/binaries/codex-*` sidecar of that checkout, which takes precedence over `PATH`; configure the executable path if that copy is outdated.
+
+FairTranslator keeps a standard Codex CLI install up to date: at startup it checks the npm registry and runs `codex update` when a newer version exists ("Update on startup" in Settings, on by default; the change applies on the next start). It never touches a bundled sidecar or a custom executable path, and a translation run that needs Codex waits until the check finishes.
 
 ## Honest Product Positioning
 
@@ -94,10 +98,10 @@ The practical gate for `1.0.0` should be:
 
 Requirements:
 
-- Node.js
+- Node.js 22 LTS and npm 11.10 or newer. `package.json` declares `devEngines`, so every npm command in this repository fails with `EBADDEVENGINES` on npm 10 (the version bundled with Node 22). `.npmrc` also relies on `min-release-age`, which older npm ignores. Upgrade with `npm install --global npm@11.16.0`, the version CI uses.
 - Rust toolchain
 - Tauri prerequisites for your platform
-- Windows release/build validation: Visual Studio Build Tools 2022 with the C++ toolchain
+- Windows release/build validation: Visual Studio Build Tools (2022 or newer) with the C++ toolchain
 
 Common commands:
 
@@ -108,23 +112,33 @@ npm run test:run
 cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast
 ```
 
-On Windows, if `cargo` cannot find `link.exe`, run Rust/Tauri validation from a Visual Studio developer environment:
+On Windows, if `cargo` cannot find `link.exe`, run Rust/Tauri validation from a Visual Studio developer environment. `vswhere` finds the installed version (2022, 18, …):
 
 ```powershell
-& $env:ComSpec /c '"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 && cargo test --manifest-path src-tauri\Cargo.toml --no-fail-fast'
+$vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+& $env:ComSpec /c "`"$vs\Common7\Tools\VsDevCmd.bat`" -arch=x64 -host_arch=x64 && cargo test --manifest-path src-tauri\Cargo.toml --no-fail-fast"
 ```
 
 Release-quality local checks used for the current hardening pass:
 
 ```powershell
 npx tsc --noEmit
+node src/styles/kit/check.mjs --brand-from src/styles/brand.css
 npm run test:run
 npm run build
 npm audit --audit-level=high
-cargo check --manifest-path src-tauri\Cargo.toml
-cargo test --manifest-path src-tauri\Cargo.toml --no-fail-fast
+cargo fmt --manifest-path src-tauri\Cargo.toml --check
+cargo check --manifest-path src-tauri\Cargo.toml --all-targets --locked
+cargo test --manifest-path src-tauri\Cargo.toml --no-fail-fast --locked
 npm run tauri -- build
 ```
+
+Interface and design system:
+
+- The UI is dark only. Colors, type, radii and motion come from the shared design kit `@nosky/design-kit` (also used by ChronoRift), vendored in `src/styles/kit` with its `KIT_VERSION`. Do not edit the vendored files; FairTranslator's accent lives in `src/styles/brand.css`.
+- Keep the Tauri family aligned: the `tauri` crate and `@tauri-apps/api`/`@tauri-apps/cli` must share major.minor (the CLI refuses mismatches), and each plugin crate matches its npm package. `.npmrc` rejects npm releases younger than 7 days, so move both sides together once the npm packages qualify. The Tauri crates are pinned with `=` and their transitive dependencies are held by `Cargo.lock`; use `--locked`.
+- Update the vendored copy from a kit checkout with `node <design-kit>/scripts/sync.mjs src/styles/kit --brand-from src/styles/brand.css`, then run the kit check above. `src/styles/kit/DESIGN.md` holds the rules (closed list of accent uses, monochrome logos, copy limited to labels and data).
+- To review the UI without Tauri, run `npm run dev` and open `http://localhost:1420/?visualDemo=1`. It loads a sample project; `&panel=batch|context|styleGuide|settings|export|newProject` opens a panel directly. Development builds only.
 
 QA run hygiene for local campaign artifacts:
 

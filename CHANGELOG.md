@@ -7,7 +7,36 @@ and this project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- Fitted translated text to each engine's windows on export: messages are
+  rewrapped to the real window width (face graphics, font size changes, message
+  plugins and the width the original text already uses) and split into extra
+  pages when needed, with native paging on MV/MZ/VX Ace/VX and new show-text
+  commands on XP. The export result, the Export panel and
+  `qa_validate_translation --json` report rewrapped entries, added pages and
+  what still does not fit, and the Export panel can run the same analysis
+  before exporting.
+- Added "Save as" (Ctrl+Shift+S), a default project location under
+  `Documents\FairTranslator`, the project path in the project menu and a
+  recent-projects list on the welcome screen.
+- Added game inspection to the new-project dialog: engine, text files and
+  entries, and a clear block for packed RPG Maker games.
+- Added background updates of the standard Codex CLI install at startup
+  ("Update on startup" in Settings, on by default) and Codex model discovery
+  through `codex debug models`.
+
 ### Changed
+- Redesigned the interface on the shared `@nosky/design-kit` (vendored in
+  `src/styles/kit`): dark only, frameless window with its own title bar, a
+  monochrome logo, side drawers for batch translation, project context, export
+  and settings, control codes shown as chips, and in-app confirmation dialogs
+  instead of the browser's.
+- Find and replace now counts and replaces only the rows the grid shows.
+- Editing the style guide now writes only `project.json` and keeps unsaved entry
+  edits pending.
+- Aligned Tauri at 2.11 on both sides (`tauri` 2.11.6, `@tauri-apps/api`
+  2.11.1, `@tauri-apps/cli` 2.11.5, dialog plugin 2.7.3); 2.12 waits for the
+  7-day npm release-age rule.
 - Made OpenCode provider chunks adaptive up to 128 entries, with independent
   prompt and estimated-response token budgets instead of a fixed 16-entry cap.
 - Made the headless OpenCode runner reuse the credential saved by FairTranslator
@@ -15,10 +44,34 @@ and this project follows [Semantic Versioning](https://semver.org/).
   overrides only.
 
 ### Fixed
+- Extracted and exported the first line of every RPG Maker XP message (show-text
+  command 101); existing XP projects gain the missing entries when opened.
+- Stopped squeezing MV/MZ text that did not fit the original lines into one
+  overlong last line.
+- Kept the project marked as unsaved when an edit lands while a save is
+  running, so closing the app still warns about it.
+- Promoted an untranslated entry to draft when a translation is typed in the
+  entry drawer, so the export no longer skips it.
+- Fixed Enter, arrows and Home inside the entry drawer, trailing spaces in style
+  guide rules, literal replacement text and IME composition in the grid.
+- Allowed the main window to close when the unsaved-changes guard is active
+  (missing `core:window:allow-destroy` permission).
+- "Save as" onto an existing folder that is not a project no longer deletes it.
+- Surfaced write errors of VX Ace/VX/XP exports instead of reporting success,
+  and flushed saved and exported files to disk before replacing them.
+- Kept nested default values of MV/MZ plugin parameters on export.
 - Strengthened OpenCode readiness checks to require a valid structured
   translation and negotiate/cache the API family that satisfies the schema.
 - Preserved completed checkpoints when planner-budget changes rebuild a chunk
   plan during resume.
+
+### Removed
+- Removed the light theme and its setting.
+
+### Security
+- Removed webview permissions the interface does not use (`store:default`, which
+  let page scripts read the legacy `api-keys.json`, plus unused dialog
+  permissions) and `https:` from the `connect-src` content security policy.
 
 ## [0.9.2] - 2026-05-04
 

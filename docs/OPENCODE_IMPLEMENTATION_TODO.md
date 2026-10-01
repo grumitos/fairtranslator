@@ -53,7 +53,7 @@ model refresh.
 - [x] Add IPC command `apikey_models(provider)` to fetch model lists.
 - [x] Implement dynamic OpenAI model listing via `GET /v1/models`.
 - [x] Implement dynamic OpenCode model listing via `{base}/models`.
-- [x] Implement Codex CLI model discovery through `codex models` when available, or return current configured/default metadata when not available.
+- [x] Implement Codex CLI model discovery through `codex debug models` (catalog entries with `visibility: "list"`), or return current configured/default metadata when not available. (There is no `codex models` subcommand.)
 - [x] Normalize OpenCode endpoint base securely: HTTPS only, no embedded credentials, no query or fragment.
 
 ### Phase 2: OpenCode Provider

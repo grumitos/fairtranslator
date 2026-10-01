@@ -27,11 +27,14 @@ src-tauri/
   tauri.conf.json
 src/
   components/
-    ui/                     # shadcn/ui primitives (Button, Dialog, Sheet, Tabs, Progress, etc.)
-    editor/                 # TranslationGrid.tsx, EditEntryDialog.tsx, StatusBadge.tsx,
-                            # FindReplaceBar.tsx, HighlightedText.tsx
-    layout/                 # AppShell.tsx, Sidebar.tsx, Toolbar.tsx, StatusBar.tsx, WelcomeScreen.tsx,
-                            # NewProjectDialog.tsx, SettingsPanel.tsx, GlossaryPanel.tsx, StyleGuidePanel.tsx, BatchTranslatePanel.tsx
+    ui/                     # shadcn/ui primitives restyled on the design kit (Button, Dialog, Sheet, Tabs, etc.)
+    brand/                  # BrandMark.tsx (monochrome "Dos ventanas" logo)
+    common/                 # StatusGlyph, ProgressRing, Kbd, engineLabel, fileGroups
+    editor/                 # TranslationGrid.tsx, EditEntryDialog.tsx (entry drawer), EditorHeader.tsx,
+                            # FindReplaceBar.tsx, ControlCodeText.tsx + controlCodes.ts
+    layout/                 # AppShell.tsx, TitleBar.tsx (frameless window), Toolbar.tsx (panel controller),
+                            # Sidebar.tsx, WelcomeScreen.tsx, NewProjectDialog.tsx, SettingsPanel.tsx,
+                            # ContextPanel.tsx (glossary + style guide), BatchTranslatePanel.tsx, ExportPanel.tsx
   hooks/                    # useProject.ts, useApiKeys.ts, useGlossary.ts, useStyleGuide.ts, useTranslation.ts
   stores/                   # projectStore.ts, editorStore.ts, settingsStore.ts
   lib/
@@ -75,16 +78,16 @@ src/
 ## UI
 
 - shadcn/ui components live in `src/components/ui/`. Tailwind only — no CSS modules or styled-components.
-- Dark mode via Tailwind `class` strategy. Persist preference in `settingsStore`. Toggle applies/removes `.dark` on `<html>`.
+- Dark UI only (no theme toggle). Colors, radii and motion come from the shared design kit vendored in `src/styles/kit/` (sync with `node D:/Dev/design-kit/scripts/sync.mjs src/styles/kit --brand-from src/styles/brand.css`) plus the app accent in `src/styles/brand.css`. The accent is limited to the main action of each view, progress fills, the active tab indicator and the "Final" glyph; logos stay monochrome.
 - Grid: TanStack Table with `@tanstack/react-virtual` for row virtualization (RPG Maker maps can have 10k+ entries).
 - Use `cn()` from `src/lib/utils.ts` for conditional class merging (`clsx` + `tailwind-merge`).
 
 ## Domain Model
 
 ```typescript
-type Engine = "mv" | "mz" | "vxAce" | "vx" | "xp";
+type Engine = "mv" | "mz" | "vxAce" | "vx" | "xp" | "unity";
 type EntryStatus = "untranslated" | "draft" | "reviewed" | "final";
-type ProviderType = "openai" | "deepl" | "google" | "codex";
+type ProviderType = "openai" | "deepl" | "google" | "codex" | "opencode";
 
 interface Project {
   id: string; name: string; sourceLang: string; targetLang: string;
@@ -132,7 +135,7 @@ Keep these interfaces aligned with the Rust models and command DTOs, using camel
 - MV/MZ export also preserves translated `js/plugins.js` values and restores asset references to the copied filenames when normalization changes ASCII/full-width or whitespace forms.
 - The exporter imports parser constants (`DB_TEXT_FIELDS`, event command codes) to avoid duplication.
 - `export_project` Tauri command takes `output_dir` string and returns `ExportResult { filesExported, entriesApplied, totalEntries, warnings }`.
-- Frontend shows a directory picker dialog then displays a success toast with export stats.
+- The Export panel shows the per-status summary, asks for the destination and keeps the full report (files, applied entries, warnings) until closed.
 
 ## AI Translation (Phase 5)
 
@@ -144,18 +147,17 @@ Keep these interfaces aligned with the Rust models and command DTOs, using camel
 - **Batch translation flow:** `translate_batch_start` spawns `tokio::spawn`, plans prompt-budgeted chunks through `translation_orchestrator`, skips blank-source entries, applies responses through `translation_apply`, and emits `translation:progress` with file, chunk, entry, failed-entry, failed-batch, and warning counters before `translation:complete`.
 - **API key commands:** `apikey_save`, `apikey_load`, `apikey_delete`, `apikey_validate`. Validation sends a minimal API request to verify the key works.
 - **Glossary commands:** `glossary_add`, `glossary_update`, `glossary_remove`, `glossary_list`. Stored in the project's glossary array. Glossary terms are included in OpenAI system prompts and as context hints for other providers.
-- **Frontend panels:** Settings (Sheet + Tabs for API keys and appearance), Glossary (Sheet with CRUD table), BatchTranslate (Sheet with provider selector, file checkboxes, progress bar). All in `src/components/layout/`.
+- **Frontend panels:** side drawers (`Sheet`) opened from the title bar and coordinated by `panelStore`: Settings (provider accordion, language, line wrapping), Context (Glossary and Style guide tabs), BatchTranslate (provider radiogroup, file selection, progress), Export (status summary, destination, report). All in `src/components/layout/`.
 - **Frontend hooks:** `useApiKeys` (CRUD + validation), `useGlossary` (CRUD), `useTranslation` (batch start + Tauri event listeners for progress/complete).
 - **Test coverage:** Rust tests cover parser, persistence, exporter, provider flows, and Codex runtime resolution. Frontend tests cover IPC, stores, and editor UI behavior.
 
 ## Quality of Life (Phase 6)
 
 - **Find & Replace** (`FindReplaceBar.tsx`): Collapsible bar toggled via Ctrl+H or toolbar button. Supports regex, case-sensitive, and search target (original/translation/both). Replace one or all. Exports `buildFindRegex()` utility used by `TranslationGrid.tsx` for match highlighting. State managed in `editorStore.ts` (`showFindReplace`, `findQuery`, `replaceText`, `matchCase`, `useRegex`, `searchTarget`, `currentMatchIndex`). Rendered conditionally in `AppShell.tsx`.
-- **Highlighted Text** (`HighlightedText.tsx`): Extracted component that renders text with `<mark>` tags for regex matches. Used by `TranslationGrid` to highlight find matches in grid rows (yellow background on matching rows).
-- **Visual Progress**: `Sidebar.tsx` shows a global progress bar and per-file mini progress bars with color coding (red→orange→yellow→green based on translation completion %). `StatusBar.tsx` shows an inline progress bar with the same color coding.
-- **Word Wrap**: `settingsStore.ts` has `wordWrapColumn` (0 = disabled). `TranslationGrid.tsx` reads it and applies `wrapStyle` to cells. `SettingsPanel.tsx` appearance tab has a numeric input for configuring the column limit.
-- **Dark Mode Quick Toggle**: Sun/Moon icon button in `Toolbar.tsx` right side. Cycles between light/dark themes instantly.
-- **i18n Keys Added**: `findReplace.*` and `toolbar.toggleTheme` in editor namespace. `wordWrap.*` in settings namespace. Both `es` and `en` locales.
+- **Control codes and matches** (`ControlCodeText.tsx`, `controlCodes.ts`): renders RPG Maker control codes as chips (TS port of the Rust `collect_special_token_spans`) and find matches as `<mark>`.
+- **Visual Progress**: `Sidebar.tsx` shows the global percentage with a meter and a `ProgressRing` per file; `EditorHeader.tsx` shows entries, translated and progress for the current view.
+- **Word Wrap**: `settingsStore.ts` has `wordWrapColumn` (0 = disabled). `TranslationGrid.tsx` reads it and applies `wrapStyle` to cells. `SettingsPanel.tsx` has a numeric input for the column limit.
+- **i18n Keys**: `findReplace.*` in the editor namespace. Both `es` and `en` locales; keep them in parity and delete keys that lose their last use.
 
 ## Packaging & Distribution (Phase 7)
 
@@ -175,8 +177,7 @@ Keep these interfaces aligned with the Rust models and command DTOs, using camel
 ## Error Handling (Frontend)
 
 - `ErrorBoundary` component (`src/components/ErrorBoundary.tsx`) wraps `AppShell` in `App.tsx` to catch rendering crashes gracefully.
-- Extracted `StatusBadge` component (`src/components/editor/StatusBadge.tsx`) keeps `TranslationGrid.tsx` under the 200-line guideline.
-- Extracted `NewProjectDialog` component (`src/components/layout/NewProjectDialog.tsx`) is shared between `WelcomeScreen` and `Toolbar` — avoids code duplication.
+- `NewProjectDialog` (`src/components/layout/NewProjectDialog.tsx`) is opened through `panelStore` from both the welcome screen and the title bar.
 
 ## API Key Storage
 
