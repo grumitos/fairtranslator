@@ -48,13 +48,6 @@
     "category": "DeveloperTool",
     "shortDescription": "Desktop translation tool for RPG Maker games",
     "longDescription": "FairTranslator is a desktop application for translating RPG Maker MZ, MV, VX Ace, VX, and XP games. It supports manual editing, glossary-based workflows, built-in providers such as OpenAI, DeepL, Google Translate, and Codex, plus structured external AI batch flows. Commercial releases are intended for direct-license distribution without mandatory subscriptions.",
-    "fileAssociations": [
-      {
-        "ext": ["fairtl"],
-        "mimeType": "application/x-fairtranslator-project",
-        "description": "FairTranslator Project"
-      }
-    ],
     "windows": {
       "nsis": {
         "installMode": "both",
