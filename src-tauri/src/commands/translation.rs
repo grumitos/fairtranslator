@@ -87,6 +87,17 @@ fn profile_key_for(provider: &ProviderType) -> String {
     format!("{}{}", PROFILE_PREFIX, provider_id(provider))
 }
 
+/// Non-secret command path configured for a CLI-backed provider, if any.
+pub(crate) fn configured_command_path(
+    app: &tauri::AppHandle,
+    provider: &ProviderType,
+) -> Option<String> {
+    app.store(STORE_NAME)
+        .ok()?
+        .get(command_path_key_for(provider))
+        .and_then(|value| value.as_str().map(str::to_string))
+}
+
 fn provider_requires_api_key(provider: &ProviderType) -> bool {
     !matches!(provider, ProviderType::Codex)
 }
@@ -819,10 +830,8 @@ where
     final_progress
 }
 
-/// Start batch translation for selected files (or all files if `file_paths` is empty).
-///
-/// The command returns immediately with initial progress and runs translation
-/// work in a background task that emits progress/complete events.
+/// Request cancellation of the active batch run. Returns `false` when `run_id`
+/// is not the run currently in progress.
 #[tauri::command]
 pub fn translate_batch_cancel(run_id: String) -> Result<bool, AppError> {
     let run_id = run_id
@@ -831,6 +840,10 @@ pub fn translate_batch_cancel(run_id: String) -> Result<bool, AppError> {
     Ok(BATCH_RUN_CONTROL.cancel(run_id))
 }
 
+/// Start batch translation for selected files (or all files if `file_paths` is empty).
+///
+/// The command returns immediately with initial progress and runs translation
+/// work in a background task that emits progress/complete events.
 #[tauri::command]
 pub async fn translate_batch_start(
     app: tauri::AppHandle,

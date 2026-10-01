@@ -16,6 +16,8 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::default().build())
         .manage(AppState::new())
         .invoke_handler(tauri::generate_handler![
+            commands::project::game_inspect,
+            commands::project::project_location,
             commands::project::project_create,
             commands::project::project_open,
             commands::project::project_save,
@@ -23,6 +25,7 @@ pub fn run() {
             commands::project::project_update_entry,
             commands::project::project_update_entries,
             commands::export::export_project,
+            commands::export::text_fit_analyze,
             commands::translation::apikey_save,
             commands::translation::apikey_load,
             commands::translation::apikey_delete,
@@ -40,6 +43,9 @@ pub fn run() {
             commands::glossary::glossary_list,
             commands::style_guide::style_guide_replace,
             commands::style_guide::style_guide_list,
+            commands::cli::cli_update_status,
+            commands::cli::cli_auto_update_get,
+            commands::cli::cli_auto_update_set,
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {
@@ -49,6 +55,7 @@ pub fn run() {
                         .build(),
                 )?;
             }
+            commands::cli::start_background_updates(app.handle());
             Ok(())
         })
         .run(tauri::generate_context!())

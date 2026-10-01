@@ -17,6 +17,7 @@ use tokio::task;
 use crate::error::AppError;
 use crate::models::GlossaryTerm;
 use crate::services::ai_models::ProviderModel;
+use crate::services::cli_updates::{self, CliInstall, CliUpdates};
 use crate::services::compact_prompt::{self, CompactPromptBundle};
 use crate::services::provider::{
     approximate_token_count, TranslationBatchContext, TranslationProvider, TranslationRequest,
@@ -107,6 +108,8 @@ pub struct CodexProvider {
     reasoning_effort: Option<String>,
     service_tier: Option<String>,
     primary_tree_terminator: PrimaryTreeTerminator,
+    /// Update status every spawn waits on, so Codex never runs mid-update.
+    update_gate: &'static CliUpdates,
 }
 
 impl CodexProvider {
@@ -150,11 +153,18 @@ impl CodexProvider {
             reasoning_effort: reasoning_effort.and_then(normalize_optional),
             service_tier: None,
             primary_tree_terminator: terminate_tree_with_taskkill,
+            update_gate: cli_updates::registry(),
         }
     }
 
     pub fn with_service_tier(mut self, service_tier: Option<String>) -> Self {
         self.service_tier = service_tier.and_then(normalize_optional);
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_update_gate_for_test(mut self, gate: &'static CliUpdates) -> Self {
+        self.update_gate = gate;
         self
     }
 
@@ -299,44 +309,27 @@ impl CodexProvider {
             .resolve_runtime()
             .await
             .map_err(|failure| AppError::Api(failure.message))?;
+        // Current CLIs have no `models` subcommand (`codex models` would start
+        // an interactive session); `debug models` renders the model catalog.
         let output = self
             .run_command(
                 &runtime.candidate,
-                vec!["models".to_string()],
+                vec!["debug".to_string(), "models".to_string()],
                 None,
                 None,
                 Some(CODEX_STATUS_TIMEOUT),
             )
             .await?;
 
-        let mut models = Vec::new();
-        if output.status.success() {
-            let combined = format!(
-                "{}\n{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
+        let mut models = if output.status.success() {
+            parse_model_catalog(&output.stdout)
+        } else {
+            log::warn!(
+                "Codex model discovery failed: {}",
+                command_output_detail(&output)
             );
-            for line in combined
-                .lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-            {
-                for token in line.split_whitespace() {
-                    let token = token.trim_matches(|ch: char| {
-                        matches!(ch, ',' | ';' | '*' | '[' | ']' | '(' | ')' | '"' | '\'')
-                    });
-                    if looks_like_model_id(token)
-                        && !models.iter().any(|model: &ProviderModel| model.id == token)
-                    {
-                        models.push(ProviderModel {
-                            id: token.to_string(),
-                            owned_by: Some("codex-cli".to_string()),
-                            created: None,
-                        });
-                    }
-                }
-            }
-        }
+            Vec::new()
+        };
 
         if let Some(configured_model) = &self.model {
             if !models.iter().any(|model| model.id == *configured_model) {
@@ -395,6 +388,27 @@ impl CodexProvider {
     }
 
     async fn resolve_runtime(&self) -> Result<ResolvedRuntime, RuntimeResolutionFailure> {
+        if let Err(error) = self
+            .update_gate
+            .wait_until_idle(cli_updates::CODEX.id, cli_updates::RUN_WAIT_TIMEOUT)
+            .await
+        {
+            let (source, effective_command_path) = match &self.configured_command_path {
+                Some(path) => (RuntimeSource::Configured, path.clone()),
+                None => (RuntimeSource::Path, DEFAULT_COMMAND_PATH.to_string()),
+            };
+            return Err(RuntimeResolutionFailure {
+                candidate: RuntimeCandidate {
+                    source,
+                    effective_command_path,
+                    resolved_command_path: None,
+                },
+                state: RuntimeFailureState::Error,
+                message: error.to_string(),
+                version: None,
+            });
+        }
+
         if let Some(configured_path) = &self.configured_command_path {
             let resolved = resolve_command_path(configured_path);
             let candidate = RuntimeCandidate {
@@ -439,6 +453,24 @@ impl CodexProvider {
         }
 
         self.probe_runtime(candidate).await
+    }
+
+    /// The install a run would use, classified for the auto-updater. Mirrors
+    /// `resolve_runtime` without waiting on the update gate: the configured
+    /// path, else a working bundled sidecar, else `codex` on PATH.
+    pub(crate) async fn update_target(&self, standard_roots: &[PathBuf]) -> CliInstall {
+        if let Some(configured_path) = &self.configured_command_path {
+            let resolved = resolve_command_path(configured_path);
+            return cli_updates::classify_install(resolved.as_deref(), false, standard_roots);
+        }
+        if let Some(sidecar) = self.sidecar_candidate() {
+            if self.probe_runtime(sidecar.clone()).await.is_ok() {
+                let path = sidecar.resolved_command_path.map(PathBuf::from);
+                return cli_updates::classify_install(path.as_deref(), true, standard_roots);
+            }
+        }
+        let resolved = resolve_command_path(DEFAULT_COMMAND_PATH);
+        cli_updates::classify_install(resolved.as_deref(), false, standard_roots)
     }
 
     fn sidecar_candidate(&self) -> Option<RuntimeCandidate> {
@@ -557,9 +589,13 @@ impl CodexProvider {
 
         let task = task::spawn_blocking(move || {
             let _completion = CommandCompletion(finished_tx);
-            if stdin_text.is_some() {
-                command.stdin(Stdio::piped());
-            }
+            // Never inherit a console: a CLI that falls back to its interactive
+            // mode must fail instead of waiting on the user's terminal.
+            command.stdin(if stdin_text.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            });
             command.stdout(Stdio::piped()).stderr(Stdio::piped());
 
             let child = command.spawn().map_err(AppError::from)?;
@@ -956,18 +992,41 @@ fn login_is_authenticated(output: &str, command_succeeded: bool) -> bool {
         && (command_succeeded || output.to_ascii_lowercase().contains("logged in"))
 }
 
-fn looks_like_model_id(value: &str) -> bool {
-    let value = value.trim();
-    !value.is_empty()
-        && value.len() <= 128
-        && value
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '/' | ':'))
-        && (value.contains('-') || value.contains('/') || value.starts_with("gpt"))
-        && !matches!(
-            value.to_ascii_lowercase().as_str(),
-            "models" | "model" | "provider" | "available"
-        )
+/// Parses `codex debug models` output: `{"models":[{"slug", "visibility", …}]}`.
+/// Entries the CLI hides from its own picker (`visibility` other than
+/// `"list"`) are skipped; IDs are never hardcoded here.
+fn parse_model_catalog(stdout: &[u8]) -> Vec<ProviderModel> {
+    let Ok(catalog) = serde_json::from_slice::<serde_json::Value>(stdout) else {
+        return Vec::new();
+    };
+    let mut models: Vec<ProviderModel> = Vec::new();
+    for model in catalog
+        .get("models")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let listed = model
+            .get("visibility")
+            .and_then(serde_json::Value::as_str)
+            .is_none_or(|visibility| visibility == "list");
+        let Some(slug) = model
+            .get("slug")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|slug| !slug.is_empty())
+        else {
+            continue;
+        };
+        if listed && !models.iter().any(|known| known.id == slug) {
+            models.push(ProviderModel {
+                id: slug.to_string(),
+                owned_by: Some("codex-cli".to_string()),
+                created: None,
+            });
+        }
+    }
+    models
 }
 
 fn reasoning_effort_config_arg(reasoning_effort: &str) -> String {
@@ -1373,6 +1432,119 @@ powershell.exe -NoProfile -NonInteractive -Command "$stream = [IO.File]::Open((J
         assert!(!temp_survived_cancel, "cancel left Codex temp files behind");
     }
 
+    /// The CLI contract, checked against a fake runtime: discovery reads the
+    /// `debug models` catalog (listed entries only, configured model first),
+    /// and `exec` gets the prompt on stdin with the read-only, ephemeral and
+    /// config overrides FairTranslator relies on.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn codex_cli_contract_with_fake_runtime() {
+        let root = std::env::temp_dir().join(format!(
+            "fairtranslator-codex-contract-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let catalog = root.join("catalog.json");
+        std::fs::write(
+            &catalog,
+            r#"{"models":[{"slug":"model-listed-a","visibility":"list"},{"slug":"model-hidden","visibility":"hide"},{"slug":"model-listed-b","visibility":"list"}]}"#,
+        )
+        .unwrap();
+        let args_log = root.join("args.txt");
+        let stdin_log = root.join("stdin.txt");
+        let script = root.join("codex-fake.cmd");
+        std::fs::write(
+            &script,
+            format!(
+                r#"@echo off
+if "%~1"=="--version" (
+  echo codex-cli 9.9.9
+  exit /b 0
+)
+if "%~1"=="debug" if "%~2"=="models" (
+  type "{catalog}"
+  exit /b 0
+)
+>"{args_log}" echo %*
+findstr "^" > "{stdin_log}"
+set "OUT="
+:args
+if "%~1"=="" goto run
+if "%~1"=="--output-last-message" set "OUT=%~2"
+shift
+goto args
+:run
+>"%OUT%" echo {{"translations":[{{"k":1,"t":"Hola"}}]}}
+exit /b 0
+"#,
+                catalog = catalog.display(),
+                args_log = args_log.display(),
+                stdin_log = stdin_log.display(),
+            ),
+        )
+        .unwrap();
+
+        let provider = CodexProvider::new(
+            Some(script.to_string_lossy().into_owned()),
+            Some("configured-model".into()),
+            None,
+            Some("low".into()),
+        )
+        .with_service_tier(Some("fast".into()));
+
+        let models = provider
+            .list_models()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|model| model.id)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            models,
+            ["configured-model", "model-listed-a", "model-listed-b"]
+        );
+
+        let requests = [TranslationRequest {
+            entry_id: "entry-1".to_string(),
+            file_context: String::new(),
+            text: "Hello".to_string(),
+            notes: String::new(),
+        }];
+        let responses = provider
+            .translate_batch(
+                &requests,
+                "en",
+                "es",
+                &[],
+                &TranslationBatchContext::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(responses[0].translated_text, "Hola");
+
+        // The TOML quotes arrive escaped for cmd.exe (`""`); compare unescaped.
+        let args = std::fs::read_to_string(&args_log)
+            .unwrap()
+            .replace("\"\"", "\"");
+        for expected in [
+            "approvals_reviewer=\"guardian_subagent\"",
+            "mcp_servers={}",
+            "exec",
+            "--sandbox read-only",
+            "--ephemeral",
+            "--model configured-model",
+            "model_reasoning_effort=\"low\"",
+            "service_tier=\"fast\"",
+        ] {
+            assert!(args.contains(expected), "missing `{expected}` in: {args}");
+        }
+        assert!(std::fs::read_to_string(&stdin_log)
+            .unwrap()
+            .contains("Hello"));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn test_default_command_path_and_model_normalization() {
         let provider = CodexProvider::new(
@@ -1384,38 +1556,6 @@ powershell.exe -NoProfile -NonInteractive -Command "$stream = [IO.File]::Open((J
         assert!(provider.configured_command_path.is_none());
         assert_eq!(provider.model.as_deref(), Some("gpt-5.4"));
         assert_eq!(provider.profile.as_deref(), Some("codex-default"));
-    }
-
-    #[test]
-    fn test_reasoning_effort_uses_current_codex_config_key() {
-        assert_eq!(
-            reasoning_effort_config_arg("low"),
-            "model_reasoning_effort=\"low\""
-        );
-    }
-
-    #[test]
-    fn test_service_tier_uses_current_codex_config_key() {
-        assert_eq!(service_tier_config_arg("fast"), "service_tier=\"fast\"");
-    }
-
-    #[test]
-    fn test_cli_compatibility_keeps_guardian_approval_review() {
-        assert_eq!(
-            approvals_reviewer_config_arg(),
-            "approvals_reviewer=\"guardian_subagent\""
-        );
-    }
-
-    #[test]
-    fn test_translation_exec_disables_unneeded_mcp_servers() {
-        assert_eq!(disabled_mcp_servers_config_arg(), "mcp_servers={}");
-    }
-
-    #[test]
-    fn test_codex_command_timeouts_are_bounded() {
-        assert_eq!(CODEX_STATUS_TIMEOUT.as_secs(), 30);
-        assert_eq!(CODEX_EXEC_TIMEOUT.as_secs(), 300);
     }
 
     #[test]

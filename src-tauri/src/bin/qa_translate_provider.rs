@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Instant;
 
-use app_lib::models::{GlossaryTerm, Project, ProviderType, TranslationEntry, TranslationFile};
+use app_lib::models::{GlossaryTerm, Project, ProviderType, TranslationEntry};
 use app_lib::parser::{parse_game, resolve_game_dir};
 use app_lib::services::exporter;
 use app_lib::services::persistence;
@@ -354,33 +354,6 @@ fn build_project(
         created_at: now.clone(),
         updated_at: now,
     })
-}
-
-fn merge_missing_entries(project: &mut Project, parsed_files: Vec<TranslationFile>) -> usize {
-    let mut added = 0;
-    for parsed_file in parsed_files {
-        if let Some(project_file) = project
-            .files
-            .iter_mut()
-            .find(|file| file.relative_path == parsed_file.relative_path)
-        {
-            let existing = project_file
-                .entries
-                .iter()
-                .map(|entry| entry.id.clone())
-                .collect::<HashSet<_>>();
-            for entry in parsed_file.entries {
-                if !existing.contains(&entry.id) {
-                    project_file.entries.push(entry);
-                    added += 1;
-                }
-            }
-        } else {
-            added += parsed_file.entries.len();
-            project.files.push(parsed_file);
-        }
-    }
-    added
 }
 
 fn format_elapsed(started_at: Instant) -> String {
@@ -925,7 +898,10 @@ fn main() -> ExitCode {
             Ok(mut project) => {
                 match parse_game(Path::new(&project.game_dir)) {
                     Ok(parsed) => {
-                        let added = merge_missing_entries(&mut project, parsed.files);
+                        let added = app_lib::services::project_refresh::merge_new_entries(
+                            &mut project,
+                            parsed.files,
+                        );
                         if added > 0 {
                             eprintln!(
                                 "Se añadieron {added} entradas nuevas detectadas al reanudar."
@@ -2167,8 +2143,8 @@ fn main() -> ExitCode {
 mod tests {
     use super::{
         create_playable_copy_if_nested_mv_mz_www, is_provider_content_inspection_error,
-        is_retryable_provider_shape_error, merge_missing_entries, parse_args,
-        prepare_workspace_export_dir, read_opencode_api_key_file, resolve_opencode_api_key,
+        is_retryable_provider_shape_error, parse_args, prepare_workspace_export_dir,
+        read_opencode_api_key_file, resolve_opencode_api_key,
     };
     use app_lib::models::{
         Engine, EntryStatus, Project, ProviderType, TranslationEntry, TranslationFile,
@@ -2358,54 +2334,6 @@ mod tests {
 
         assert_eq!(key, "file-secret");
         let _ = std::fs::remove_dir_all(&temp);
-    }
-
-    #[test]
-    fn resume_adds_only_newly_extracted_entries() {
-        let existing = TranslationEntry {
-            id: "CommonEvents:1:text:0".into(),
-            file_context: "text".into(),
-            original: "Hello".into(),
-            translation: "Hola".into(),
-            status: EntryStatus::Draft,
-            notes: String::new(),
-        };
-        let new_entry = TranslationEntry {
-            id: "CommonEvents:1:variableText:1".into(),
-            file_context: "variable text".into(),
-            original: "Waste Plant".into(),
-            translation: String::new(),
-            status: EntryStatus::Untranslated,
-            notes: String::new(),
-        };
-        let mut project = Project {
-            id: "test".into(),
-            name: "test".into(),
-            source_lang: "en".into(),
-            target_lang: "es".into(),
-            engine: Engine::Mv,
-            game_dir: String::new(),
-            files: vec![TranslationFile {
-                relative_path: "data/CommonEvents.json".into(),
-                entries: vec![existing.clone()],
-            }],
-            glossary: vec![],
-            style_guide: vec![],
-            created_at: String::new(),
-            updated_at: String::new(),
-        };
-
-        let added = merge_missing_entries(
-            &mut project,
-            vec![TranslationFile {
-                relative_path: "data/CommonEvents.json".into(),
-                entries: vec![existing, new_entry],
-            }],
-        );
-
-        assert_eq!(added, 1);
-        assert_eq!(project.files[0].entries.len(), 2);
-        assert_eq!(project.files[0].entries[0].translation, "Hola");
     }
 
     #[test]

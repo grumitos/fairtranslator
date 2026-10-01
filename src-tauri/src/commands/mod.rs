@@ -1,3 +1,4 @@
+pub mod cli;
 pub mod export;
 pub mod glossary;
 pub mod project;

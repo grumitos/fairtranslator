@@ -1058,6 +1058,53 @@ mod tests {
         }
     }
 
+    /// The glossary travels in the payload (`gl`) only when there is one.
+    #[test]
+    fn test_build_provider_bundle_sends_glossary_only_when_present() {
+        let request = TranslationRequest {
+            entry_id: "entry-1".into(),
+            file_context: "ctx".into(),
+            text: "勇者 魔王".into(),
+            notes: String::new(),
+        };
+        let without = build_provider_bundle(
+            "ja",
+            "es",
+            std::slice::from_ref(&request),
+            &[],
+            &TranslationBatchContext::default(),
+        )
+        .unwrap();
+        assert!(!without.user_payload.contains("\"gl\""));
+
+        let glossary = [
+            GlossaryTerm {
+                source: "勇者".to_string(),
+                target: "Héroe".to_string(),
+                case_sensitive: true,
+            },
+            GlossaryTerm {
+                source: "魔王".to_string(),
+                target: "Rey Demonio".to_string(),
+                case_sensitive: false,
+            },
+        ];
+        let with = build_provider_bundle(
+            "ja",
+            "es",
+            std::slice::from_ref(&request),
+            &glossary,
+            &TranslationBatchContext::default(),
+        )
+        .unwrap();
+        assert!(with
+            .user_payload
+            .contains("\"gl\":[{\"s\":\"勇者\",\"t\":\"Héroe\""));
+        assert!(with
+            .user_payload
+            .contains("\"s\":\"魔王\",\"t\":\"Rey Demonio\""));
+    }
+
     #[test]
     fn test_build_provider_bundle_uses_local_ids_and_masks_tokens() {
         let bundle = build_provider_bundle(
