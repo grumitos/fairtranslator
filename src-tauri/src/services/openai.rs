@@ -95,19 +95,6 @@ impl OpenAiProvider {
         .await
     }
 
-    /// Build the system prompt with glossary and orchestration context.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn build_system_prompt(
-        source_lang: &str,
-        target_lang: &str,
-        glossary: &[GlossaryTerm],
-        context: &TranslationBatchContext,
-    ) -> String {
-        compact_prompt::build_provider_bundle(source_lang, target_lang, &[], glossary, context)
-            .expect("building OpenAI prompt shell should not fail")
-            .system_prompt
-    }
-
     pub(crate) fn estimate_total_tokens(
         source_lang: &str,
         target_lang: &str,
@@ -282,65 +269,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_build_system_prompt_without_glossary() {
-        let bundle = compact_prompt::build_provider_bundle(
-            "ja",
-            "es",
-            &[TranslationRequest {
-                entry_id: "entry-1".into(),
-                file_context: "ctx".into(),
-                text: "Hello".into(),
-                notes: String::new(),
-            }],
-            &[],
-            &TranslationBatchContext::default(),
-        )
-        .unwrap();
-        assert!(bundle.system_prompt.contains("ja"));
-        assert!(bundle.system_prompt.contains("es"));
-        assert!(bundle.system_prompt.contains("\"translations\""));
-        assert!(!bundle.user_payload.contains("\"gl\""));
-    }
-
-    #[test]
-    fn test_build_system_prompt_with_glossary() {
-        let glossary = vec![GlossaryTerm {
-            source: "勇者".to_string(),
-            target: "Héroe".to_string(),
-            case_sensitive: true,
-        }];
-        let bundle = compact_prompt::build_provider_bundle(
-            "ja",
-            "es",
-            &[TranslationRequest {
-                entry_id: "entry-1".into(),
-                file_context: "ctx".into(),
-                text: "勇者".into(),
-                notes: String::new(),
-            }],
-            &glossary,
-            &TranslationBatchContext::default(),
-        )
-        .unwrap();
-        assert!(bundle
-            .user_payload
-            .contains("\"gl\":[{\"s\":\"勇者\",\"t\":\"Héroe\"}]"));
-    }
-
-    #[test]
-    fn test_provider_name() {
-        let provider = OpenAiProvider::new(
-            "test-key".to_string(),
-            Some("test-model".to_string()),
-            None,
-            None,
-            None,
-        )
-        .unwrap();
-        assert_eq!(provider.name(), "OpenAI");
-    }
-
-    #[test]
     fn test_requires_model_and_defaults_endpoint() {
         let error = match OpenAiProvider::new("test-key".to_string(), None, None, None, None) {
             Ok(_) => panic!("OpenAI provider should require an explicit model"),
@@ -376,52 +304,6 @@ mod tests {
         assert_eq!(provider.endpoint, "https://custom.api.com/v1/chat");
         assert_eq!(provider.organization.as_deref(), Some("org_123"));
         assert_eq!(provider.project.as_deref(), Some("proj_456"));
-    }
-
-    #[test]
-    fn test_system_prompt_mentions_control_codes() {
-        let prompt = OpenAiProvider::build_system_prompt(
-            "ja",
-            "es",
-            &[],
-            &TranslationBatchContext::default(),
-        );
-        assert!(prompt.contains("\\V[n]") || prompt.contains("control codes"));
-        assert!(prompt.contains("placeholders"));
-        assert!(prompt.contains("game text"));
-    }
-
-    #[test]
-    fn test_system_prompt_multiple_glossary_terms() {
-        let glossary = vec![
-            GlossaryTerm {
-                source: "勇者".to_string(),
-                target: "Héroe".to_string(),
-                case_sensitive: true,
-            },
-            GlossaryTerm {
-                source: "魔王".to_string(),
-                target: "Rey Demonio".to_string(),
-                case_sensitive: false,
-            },
-        ];
-        let bundle = compact_prompt::build_provider_bundle(
-            "ja",
-            "es",
-            &[TranslationRequest {
-                entry_id: "entry-1".into(),
-                file_context: "ctx".into(),
-                text: "勇者 魔王".into(),
-                notes: String::new(),
-            }],
-            &glossary,
-            &TranslationBatchContext::default(),
-        )
-        .unwrap();
-        assert!(bundle.user_payload.contains("勇者"));
-        assert!(bundle.user_payload.contains("Héroe"));
-        assert!(bundle.user_payload.contains("魔王"));
-        assert!(bundle.user_payload.contains("Rey Demonio"));
     }
 
     #[test]

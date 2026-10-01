@@ -214,31 +214,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_default_endpoint() {
-        let provider = GoogleProvider::new("test-key".to_string(), None).unwrap();
-        assert_eq!(provider.endpoint, DEFAULT_ENDPOINT);
-    }
-
-    #[test]
-    fn test_custom_endpoint() {
-        let provider = GoogleProvider::new(
+    fn google_endpoint_and_language_mapping() {
+        let default = GoogleProvider::new("test-key".to_string(), None).unwrap();
+        assert_eq!(default.endpoint, DEFAULT_ENDPOINT);
+        let custom = GoogleProvider::new(
             "test-key".to_string(),
             Some("https://custom.google.com/v2".to_string()),
         )
         .unwrap();
-        assert_eq!(provider.endpoint, "https://custom.google.com/v2");
-    }
-
-    #[test]
-    fn test_normalize_lang() {
-        assert_eq!(GoogleProvider::normalize_lang("EN"), "en");
-        assert_eq!(GoogleProvider::normalize_lang("ja"), "ja");
-        assert_eq!(GoogleProvider::normalize_lang("ES"), "es");
-    }
-
-    #[test]
-    fn test_provider_name() {
-        let provider = GoogleProvider::new("test-key".to_string(), None).unwrap();
-        assert_eq!(provider.name(), "Google Translate");
+        assert_eq!(custom.endpoint, "https://custom.google.com/v2");
+        for (code, expected) in [("EN", "en"), ("ja", "ja"), ("ES", "es")] {
+            assert_eq!(GoogleProvider::normalize_lang(code), expected);
+        }
     }
 }

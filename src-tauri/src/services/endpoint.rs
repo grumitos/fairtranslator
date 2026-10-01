@@ -46,16 +46,14 @@ pub fn normalize_https_endpoint_override(
 mod tests {
     use super::*;
 
+    /// Overrides are trimmed and must be plain HTTPS URLs: no HTTP, embedded
+    /// credentials or query strings (they would leak API keys or secrets).
     #[test]
-    fn trims_empty_endpoint_override() {
+    fn endpoint_overrides_must_be_plain_https() {
         assert_eq!(
             normalize_https_endpoint_override(Some("   ".into())).unwrap(),
             None
         );
-    }
-
-    #[test]
-    fn accepts_https_endpoint_override() {
         assert_eq!(
             normalize_https_endpoint_override(Some(
                 " https://api.example.com/v1/translate ".into()
@@ -64,28 +62,15 @@ mod tests {
             .as_deref(),
             Some("https://api.example.com/v1/translate")
         );
-    }
-
-    #[test]
-    fn rejects_http_endpoint_override() {
-        let error = normalize_https_endpoint_override(Some("http://api.example.com".into()))
-            .expect_err("HTTP endpoints must be rejected");
-        assert!(error.to_string().contains("HTTPS"));
-    }
-
-    #[test]
-    fn rejects_endpoint_override_with_credentials() {
-        let error =
-            normalize_https_endpoint_override(Some("https://user:pass@api.example.com/v1".into()))
-                .expect_err("embedded credentials must be rejected");
-        assert!(error.to_string().contains("credentials"));
-    }
-
-    #[test]
-    fn rejects_endpoint_override_with_query() {
-        let error =
-            normalize_https_endpoint_override(Some("https://api.example.com/v1?key=secret".into()))
-                .expect_err("query strings must be rejected");
-        assert!(error.to_string().contains("query strings"));
+        for (endpoint, reason) in [
+            ("http://api.example.com", "HTTPS"),
+            ("https://user:pass@api.example.com/v1", "credentials"),
+            ("https://api.example.com/v1?key=secret", "query strings"),
+        ] {
+            let error = normalize_https_endpoint_override(Some(endpoint.into()))
+                .expect_err(endpoint)
+                .to_string();
+            assert!(error.contains(reason), "{endpoint}: {error}");
+        }
     }
 }

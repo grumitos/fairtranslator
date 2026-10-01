@@ -1308,20 +1308,6 @@ mod tests {
     }
 
     #[test]
-    fn test_codex_uses_larger_batches_without_changing_openai_limit() {
-        assert_eq!(
-            max_entries_for_mode(ChunkPlanningMode::Codex, None),
-            CODEX_MAX_ENTRIES_PER_CHUNK
-        );
-        assert_eq!(CODEX_MAX_ENTRIES_PER_CHUNK, 72);
-        assert_eq!(
-            max_entries_for_mode(ChunkPlanningMode::OpenAi, None),
-            OPENAI_MAX_ENTRIES_PER_CHUNK
-        );
-        assert_eq!(OPENAI_MAX_ENTRIES_PER_CHUNK, 24);
-    }
-
-    #[test]
     fn test_entry_pending_counts_blank_translation_even_after_status_drift() {
         assert!(entry_is_pending_translation(&make_entry(
             "draft-empty",

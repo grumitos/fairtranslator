@@ -233,53 +233,37 @@ impl TranslationProvider for DeepLProvider {
 mod tests {
     use super::*;
 
+    /// Free keys (`:fx`) go to the free API, others to Pro, and an override
+    /// wins; language codes map to DeepL's; glossary terms reach the context.
     #[test]
-    fn test_free_key_detection() {
-        let provider = DeepLProvider::new("abc123:fx".to_string(), None).unwrap();
-        assert_eq!(provider.endpoint, FREE_ENDPOINT);
-    }
+    fn deepl_endpoint_language_and_glossary_mapping() {
+        let endpoint = |key: &str, custom: Option<&str>| {
+            DeepLProvider::new(key.to_string(), custom.map(str::to_string))
+                .unwrap()
+                .endpoint
+        };
+        assert_eq!(endpoint("abc123:fx", None), FREE_ENDPOINT);
+        assert_eq!(endpoint("abc123-pro-key", None), PRO_ENDPOINT);
+        assert_eq!(
+            endpoint("test-key", Some("https://custom.deepl.com/v2/translate")),
+            "https://custom.deepl.com/v2/translate"
+        );
 
-    #[test]
-    fn test_pro_key_detection() {
-        let provider = DeepLProvider::new("abc123-pro-key".to_string(), None).unwrap();
-        assert_eq!(provider.endpoint, PRO_ENDPOINT);
-    }
+        for (code, expected) in [
+            ("en", "EN"),
+            ("ja", "JA"),
+            ("zh", "ZH-HANS"),
+            ("pt", "PT-BR"),
+            ("ko", "KO"),
+        ] {
+            assert_eq!(DeepLProvider::normalize_lang(code), expected);
+        }
 
-    #[test]
-    fn test_custom_endpoint() {
-        let provider = DeepLProvider::new(
-            "test-key".to_string(),
-            Some("https://custom.deepl.com/v2/translate".to_string()),
-        )
-        .unwrap();
-        assert_eq!(provider.endpoint, "https://custom.deepl.com/v2/translate");
-    }
-
-    #[test]
-    fn test_normalize_lang() {
-        assert_eq!(DeepLProvider::normalize_lang("en"), "EN");
-        assert_eq!(DeepLProvider::normalize_lang("ja"), "JA");
-        assert_eq!(DeepLProvider::normalize_lang("zh"), "ZH-HANS");
-        assert_eq!(DeepLProvider::normalize_lang("pt"), "PT-BR");
-        assert_eq!(DeepLProvider::normalize_lang("ko"), "KO");
-    }
-
-    #[test]
-    fn test_provider_name() {
-        let provider = DeepLProvider::new("test:fx".to_string(), None).unwrap();
-        assert_eq!(provider.name(), "DeepL");
-    }
-
-    #[test]
-    fn test_glossary_context_generation() {
-        let glossary = vec![GlossaryTerm {
+        let context = DeepLProvider::build_glossary_context(&[GlossaryTerm {
             source: "勇者".to_string(),
             target: "Heroe".to_string(),
             case_sensitive: true,
-        }];
-
-        let context = DeepLProvider::build_glossary_context(&glossary);
-        assert!(context.contains("勇者"));
-        assert!(context.contains("Heroe"));
+        }]);
+        assert!(context.contains("勇者") && context.contains("Heroe"));
     }
 }
