@@ -3223,7 +3223,7 @@ mod tests {
     }
 
     #[test]
-    fn test_export_project_warns_on_multiline_drift() {
+    fn test_export_project_rewraps_message_line_drift_without_warning() {
         let temp_dir = std::env::temp_dir().join(format!(
             "fairtl_export_block_{}",
             uuid::Uuid::new_v4().as_simple()
@@ -3267,7 +3267,7 @@ mod tests {
         ));
         let result = export_project(&project, &output_dir).unwrap();
 
-        assert!(result
+        assert!(!result
             .warnings
             .iter()
             .any(|warning| warning.contains("cantidad de líneas")));

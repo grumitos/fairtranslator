@@ -436,6 +436,7 @@ pub fn apply_ai_batch_updates(
         warnings: Vec::new(),
     };
     let mut seen: HashSet<(String, String)> = HashSet::new();
+    let engine = project.engine.clone();
 
     for update in translations {
         let dedupe_key = (update.file_path.clone(), update.entry_id.clone());
@@ -495,6 +496,7 @@ pub fn apply_ai_batch_updates(
             entry,
             &normalized_translation,
             IntegrityMode::AutomatedApply,
+            &engine,
         );
         if validation.has_errors() {
             result

@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
-use crate::models::{EntryStatus, Project, TranslationEntry};
+use crate::models::{Engine, EntryStatus, Project, TranslationEntry};
+use crate::services::text_fit;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntegritySeverity {
@@ -44,8 +45,13 @@ pub fn validate_translation(
     entry: &TranslationEntry,
     translation: &str,
     mode: IntegrityMode,
+    engine: &Engine,
 ) -> IntegrityReport {
     let mut issues = Vec::new();
+    let structural_severity = match mode {
+        IntegrityMode::AutomatedApply => IntegritySeverity::Error,
+        IntegrityMode::Export => IntegritySeverity::Warning,
+    };
 
     if translation.trim().is_empty() {
         issues.push(IntegrityIssue {
@@ -83,20 +89,32 @@ pub fn validate_translation(
         });
     }
 
-    let original_line_count = line_count(&entry.original);
-    let translated_line_count = line_count(translation);
-    if original_line_count != translated_line_count {
-        let severity = match mode {
-            IntegrityMode::AutomatedApply => IntegritySeverity::Error,
-            IntegrityMode::Export => IntegritySeverity::Warning,
-        };
-        issues.push(IntegrityIssue {
-            severity,
-            message: format!(
-                "{} -> {} cambió la cantidad de líneas de {} a {}.",
-                file_path, entry.id, original_line_count, translated_line_count
-            ),
-        });
+    // The exporter rewraps messages, scrolling text and descriptions to the
+    // window, so their line count is free; elsewhere each line maps to a slot.
+    if text_fit::exporter_rewraps(engine, &entry.id) {
+        if let Some(label) = speaker_label_line(&entry.original) {
+            if !keeps_speaker_label(translation) {
+                issues.push(IntegrityIssue {
+                    severity: structural_severity,
+                    message: format!(
+                        "{} -> {} unió la línea del hablante «{}» con el diálogo.",
+                        file_path, entry.id, label
+                    ),
+                });
+            }
+        }
+    } else {
+        let original_line_count = line_count(&entry.original);
+        let translated_line_count = line_count(translation);
+        if original_line_count != translated_line_count {
+            issues.push(IntegrityIssue {
+                severity: structural_severity,
+                message: format!(
+                    "{} -> {} cambió la cantidad de líneas de {} a {}.",
+                    file_path, entry.id, original_line_count, translated_line_count
+                ),
+            });
+        }
     }
 
     if is_compact_ui_field(entry) {
@@ -142,6 +160,7 @@ pub fn validate_project_for_export(project: &Project) -> IntegrityReport {
                 entry,
                 &entry.translation,
                 IntegrityMode::Export,
+                &project.engine,
             );
             report.errors.extend(entry_report.errors);
             report.warnings.extend(entry_report.warnings);
@@ -183,6 +202,29 @@ fn line_count(text: &str) -> usize {
     } else {
         text.split('\n').count()
     }
+}
+
+/// First line of a multi-line message that only labels the speaker, such as
+/// `【Name】`, `[Name]` or `Name:`. The exporter keeps it on its own line.
+fn speaker_label_line(original: &str) -> Option<&str> {
+    let (first, rest) = original.split_once('\n')?;
+    let first = first.trim();
+    (!rest.trim().is_empty() && is_label(first, 24)).then_some(first)
+}
+
+/// The translated first line still stands alone as a label. Any bracket style
+/// counts, since models may swap `【】` for `[]`.
+fn keeps_speaker_label(translation: &str) -> bool {
+    translation
+        .split_once('\n')
+        .is_some_and(|(first, rest)| !rest.trim().is_empty() && is_label(first.trim(), 32))
+}
+
+fn is_label(line: &str, max_chars: usize) -> bool {
+    let enclosed = (line.starts_with('【') && line.ends_with('】'))
+        || (line.starts_with('［') && line.ends_with('］'))
+        || (line.starts_with('[') && line.ends_with(']'));
+    line.chars().count() <= max_chars && (enclosed || line.ends_with([':', '：']))
 }
 
 fn longest_line_width(text: &str) -> usize {
@@ -486,6 +528,7 @@ mod tests {
             &entry,
             "Heroe usa %1.",
             IntegrityMode::AutomatedApply,
+            &Engine::Mv,
         );
 
         assert!(report.has_errors());
@@ -503,6 +546,7 @@ mod tests {
             &entry,
             "si(s[211])Confesarlo",
             IntegrityMode::AutomatedApply,
+            &Engine::Mv,
         );
 
         assert!(report.has_errors());
@@ -510,32 +554,74 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_translation_blocks_line_break_drift_for_automated_apply() {
-        let entry = make_entry("Map001:1:0:text:0", "Line 1\nLine 2");
-        let report = validate_translation(
-            "data/Map001.json",
-            &entry,
-            "Linea 1 Linea 2",
-            IntegrityMode::AutomatedApply,
-        );
+    fn line_breaks_are_free_only_where_the_exporter_rewraps() {
+        let check = |id: &str, original: &str, translation: &str, mode, engine: &Engine| {
+            validate_translation(
+                "data/Map001.json",
+                &make_entry(id, original),
+                translation,
+                mode,
+                engine,
+            )
+        };
+        let apply = IntegrityMode::AutomatedApply;
 
-        assert!(report.has_errors());
-        assert!(report.errors[0].contains("cantidad de líneas"));
-    }
+        // Messages, scrolling text and database descriptions are rewrapped.
+        for id in [
+            "Map001:1:0:text:0",
+            "CommonEvents:3:scroll:12",
+            "Items:description:5",
+        ] {
+            let report = check(
+                id,
+                "Line 1\nLine 2\nLine 3",
+                "Linea 1 Linea 2 Linea 3",
+                apply,
+                &Engine::Mv,
+            );
+            assert_eq!(report, IntegrityReport::default(), "{id}");
+        }
 
-    #[test]
-    fn test_validate_translation_warns_line_break_drift_for_export() {
-        let entry = make_entry("Map001:1:0:text:0", "Line 1\nLine 2");
-        let report = validate_translation(
-            "data/Map001.json",
-            &entry,
-            "Linea 1\nLinea 2\nLinea 3",
-            IntegrityMode::Export,
-        );
+        // Plugin parameters (even nested `…:text:0` keys) and Unity keep each line.
+        for (id, engine) in [
+            ("Plugins:0:parameters:Messages:text:0", Engine::Mz),
+            ("Map001:1:0:text:0", Engine::Unity),
+        ] {
+            let report = check(id, "Line 1\nLine 2", "Linea 1 Linea 2", apply, &engine);
+            assert!(report.errors[0].contains("cantidad de líneas"), "{id}");
+            let report = check(
+                id,
+                "Line 1\nLine 2",
+                "Linea 1\nLinea 2\nLinea 3",
+                IntegrityMode::Export,
+                &engine,
+            );
+            assert!(report.errors.is_empty());
+            assert!(report.warnings[0].contains("cantidad de líneas"));
+        }
 
-        assert!(report.errors.is_empty());
-        assert_eq!(report.warnings.len(), 1);
-        assert!(report.warnings[0].contains("cantidad de líneas"));
+        // A speaker label must stay on its own line even where breaks are free
+        // (in any bracket style).
+        let id = "Map001:1:0:text:0";
+        for (original, kept, merged) in [
+            (
+                "【Harold】\nWe leave at dawn.\nBe ready.",
+                "[Harold]\nSalimos al alba. Prepárate.",
+                "【Harold】 Salimos al alba.\nPrepárate.",
+            ),
+            (
+                "\\N[1]:\nWe leave at dawn.",
+                "\\N[1]:\nSalimos al alba.",
+                "\\N[1]: Salimos al alba.",
+            ),
+        ] {
+            assert!(
+                !check(id, original, kept, apply, &Engine::Mv).has_errors(),
+                "{kept}"
+            );
+            let report = check(id, original, merged, apply, &Engine::Mv);
+            assert!(report.errors[0].contains("línea del hablante"), "{merged}");
+        }
     }
 
     #[test]
@@ -546,6 +632,7 @@ mod tests {
             &entry,
             "La Gran Aventura del Heroe Legendario",
             IntegrityMode::Export,
+            &Engine::Mv,
         );
 
         assert!(report.errors.is_empty());
@@ -638,6 +725,7 @@ mod tests {
             &entry,
             "\\C[14]\\N[4]\\C[0]\n\\N[1]-kun! \\N[2]¡La comida de -onee-chan está súper deliciosa!\n¡Mira, mira!",
             IntegrityMode::AutomatedApply,
+            &Engine::Mv,
         );
 
         assert!(report.has_errors());

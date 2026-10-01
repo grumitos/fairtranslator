@@ -42,6 +42,26 @@ pub enum TextSlotKind {
     Term,
 }
 
+/// Whether the exporter rewraps this entry to its window (messages, scrolling
+/// text, descriptions and profiles), so the translation's line breaks are
+/// free. Must mirror the `fit_message`/`fit_scroll`/`fit_description` calls in
+/// the exporter. Plugin parameters can nest keys such as `…:text:0` and are
+/// never rewrapped.
+pub fn exporter_rewraps(engine: &Engine, entry_id: &str) -> bool {
+    if *engine == Engine::Unity || entry_id.starts_with("Plugins:") {
+        return false;
+    }
+    let mut segments = entry_id.rsplit(':');
+    let (Some(index), Some(kind)) = (segments.next(), segments.next()) else {
+        return false;
+    };
+    index.parse::<usize>().is_ok()
+        && matches!(
+            kind,
+            "text" | "scroll" | "changeProfile" | "description" | "profile"
+        )
+}
+
 /// Entry whose translation still does not fit after fitting.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

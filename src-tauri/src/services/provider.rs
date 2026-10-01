@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 use crate::error::AppError;
-use crate::models::{GlossaryTerm, ProviderType};
+use crate::models::{Engine, GlossaryTerm, ProviderType};
 
 const PROVIDER_REQUEST_TIMEOUT: Duration = Duration::from_secs(180);
 
@@ -104,6 +104,9 @@ pub struct TranslationExample {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TranslationBatchContext {
     pub project_name: String,
+    /// Engine of the project, used to mark entries the exporter rewraps.
+    #[serde(default)]
+    pub engine: Option<Engine>,
     pub file_path: String,
     pub file_kind: String,
     pub chunk_index: usize,

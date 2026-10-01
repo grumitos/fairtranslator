@@ -946,6 +946,7 @@ fn build_context_for_chunk(
     let approximate_char_count = entries.iter().map(|entry| entry.text.chars().count()).sum();
     let mut context = TranslationBatchContext {
         project_name: project.name.clone(),
+        engine: Some(project.engine.clone()),
         file_path: file_path.to_string(),
         file_kind: file_kind.to_string(),
         chunk_index,

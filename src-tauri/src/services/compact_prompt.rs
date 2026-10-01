@@ -8,6 +8,7 @@ use serde_json::json;
 use crate::error::AppError;
 use crate::models::{AiBatchEntry, AiBatchResponseRef, AiBatchTranslation, GlossaryTerm, Project};
 use crate::services::provider::{TranslationBatchContext, TranslationRequest, TranslationResponse};
+use crate::services::text_fit;
 use crate::services::translation_integrity::collect_special_token_spans;
 use crate::services::translation_text::{is_japanese_language, is_spanish_language};
 
@@ -148,6 +149,9 @@ pub struct CompactPromptEntry {
     pub original_line_count: usize,
     #[serde(rename = "tb")]
     pub target_visible_budget: usize,
+    /// The exporter rewraps this entry to its window, so line breaks are free.
+    #[serde(rename = "rw", skip_serializing_if = "std::ops::Not::not")]
+    pub rewrapped: bool,
     #[serde(rename = "n", skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
     #[serde(rename = "ct", skip_serializing_if = "Option::is_none")]
@@ -232,6 +236,9 @@ pub fn build_provider_bundle(
                 current_translation: None,
                 instruction_candidate: None,
                 instruction_reason: None,
+                rewrapped: context.engine.as_ref().is_some_and(|engine| {
+                    text_fit::exporter_rewraps(engine, request.entry_id.as_str())
+                }),
             })
             .collect::<Vec<_>>()
             .as_slice(),
@@ -272,6 +279,7 @@ pub fn build_external_ai_bundle(
                 current_translation: Some(entry.current_translation.as_str()),
                 instruction_candidate: Some(entry.instruction_candidate),
                 instruction_reason: entry.instruction_reason.as_deref(),
+                rewrapped: text_fit::exporter_rewraps(&project.engine, entry.entry_id.as_str()),
             })
             .collect::<Vec<_>>()
             .as_slice(),
@@ -619,19 +627,21 @@ struct CompactEntrySource<'a> {
     current_translation: Option<&'a str>,
     instruction_candidate: Option<bool>,
     instruction_reason: Option<&'a str>,
+    rewrapped: bool,
 }
+
+/// Project ID, batch ID and engine echoed in an external AI envelope.
+type EnvelopeIds<'a> = (&'a str, &'a str, String);
 
 fn build_bundle(
     options: &ProviderBundleOptions,
-    glossary_and_ids: Option<(&[GlossaryTerm], Option<(&str, &str, String)>)>,
+    glossary_and_ids: Option<(&[GlossaryTerm], Option<EnvelopeIds<'_>>)>,
     project_name_override: Option<&str>,
     entries: &[CompactEntrySource<'_>],
     context: &TranslationBatchContext,
     provider_kind: ProviderKind,
 ) -> Result<CompactPromptBundle, AppError> {
-    let (glossary, envelope_ids) = glossary_and_ids
-        .map(|(glossary, envelope_ids)| (glossary, envelope_ids))
-        .unwrap_or((&[], None));
+    let (glossary, envelope_ids) = glossary_and_ids.unwrap_or((&[], None));
     let meta = CompactPromptMeta {
         source_lang: options.source_lang.clone(),
         target_lang: options.target_lang.clone(),
@@ -711,6 +721,7 @@ fn build_bundle(
             original_visible_chars: metrics.visible_chars,
             original_line_count: metrics.line_count,
             target_visible_budget: metrics.target_budget,
+            rewrapped: entry.rewrapped,
             notes: entry.notes.and_then(non_empty),
             current_translation: masked_current_translation,
             instruction_candidate: entry.instruction_candidate.filter(|flag| *flag),
@@ -781,7 +792,7 @@ fn build_system_prompt(
             "Preserve choice/plugin condition prefixes such as if(s[12]) and en(s[20]) exactly; translate only the visible label after them.\n",
             "Do not add, remove or rename engine script commands, tags, variables, internal keys, labels, event logic or decorative formatting; return translated text only.\n",
             "Each entry includes oc=original visible chars, ol=original line count and tb=target visible character budget with cushion. Stay near or below tb for dialogue/UI by adapting and condensing instead of literal expansion.\n",
-            "Keep line breaks only when they are structural or necessary; do not add extra dialogue lines, extra boxes or explanatory text.\n",
+            "Line breaks: entries with rw=true are rewrapped to the game window on export, so break or merge their lines wherever reads best. Every other multi-line entry must keep exactly ol lines. Never add extra dialogue lines, extra boxes or explanatory text.\n",
             "Use glossary/style/context when relevant, but do not add commentary or markdown.\n",
             "If an entry is a speaker/name/title line, translate only that label and keep it separate from following dialogue. Do not prepend speakers to dialogue, merge names with dialogue or duplicate speaker names.\n",
             "Keep character voice consistent across nearby lines. Rewrite literal or stiff phrasing into natural in-game dialogue while preserving meaning, intensity and relationship dynamics.\n",
@@ -1038,6 +1049,7 @@ mod tests {
     fn sample_context() -> TranslationBatchContext {
         TranslationBatchContext {
             project_name: "Buebito".into(),
+            engine: Some(Engine::Mz),
             file_path: "data/CommonEvents.json".into(),
             file_kind: "Events".into(),
             chunk_index: 2,

@@ -19,6 +19,7 @@ pub fn apply_provider_responses(
     file_path: &str,
     responses: &[TranslationResponse],
 ) -> Result<ProviderApplyResult, AppError> {
+    let engine = project.engine.clone();
     let file = project
         .files
         .iter_mut()
@@ -55,6 +56,7 @@ pub fn apply_provider_responses(
             entry,
             &normalized_translation,
             IntegrityMode::AutomatedApply,
+            &engine,
         );
         if validation.has_errors() {
             result.invalid_entries.push(response.entry_id.clone());
