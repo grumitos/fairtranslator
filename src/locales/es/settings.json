@@ -1,43 +1,31 @@
 {
-  "title": "Configuración",
-  "description": "Configura proveedores, apariencia e idioma de la aplicación.",
+  "title": "Ajustes",
+  "description": "Proveedores, idioma y ajuste de línea.",
   "apiKeys": {
     "title": "Proveedores",
     "openai": {
       "label": "OpenAI",
-      "description": "Modelos de OpenAI mediante una clave de API propia.",
       "placeholder": "sk-...",
       "organization": "Organización de OpenAI",
-      "organizationPlaceholder": "ID de organización de OpenAI (opcional)",
-      "project": "Proyecto de OpenAI",
-      "projectPlaceholder": "ID de proyecto de OpenAI (opcional)",
-      "authNote": "Usa claves de API, no sesiones de ChatGPT. Organización y proyecto son opcionales."
+      "project": "Proyecto de OpenAI"
     },
     "deepl": {
       "label": "DeepL",
-      "description": "Traducción automática de DeepL para lotes directos.",
       "placeholder": "Tu clave de API de DeepL"
     },
     "google": {
       "label": "Google Translate",
-      "description": "Google Cloud Translation para traducción automática directa.",
       "placeholder": "Tu clave de API de Google"
     },
     "opencode": {
       "label": "OpenCode Go",
-      "description": "Proveedor integrado de OpenCode Go con contexto completo y modelos dinámicos.",
       "placeholder": "Tu clave de API de OpenCode",
-      "endpointPlaceholder": "https://opencode.ai/zen/go/v1",
-      "authNote": "OpenCode usa la API key de OpenCode Go. Por ahora solo se aceptan endpoints Go."
+      "endpointPlaceholder": "https://opencode.ai/zen/go/v1"
     },
     "codex": {
       "label": "Codex CLI",
-      "description": "Runtime local administrado por la CLI de Codex, sin clave de API en FairTranslator.",
       "commandPath": "Ruta del ejecutable de Codex",
-      "commandPathPlaceholder": "Ruta al ejecutable de codex (opcional)",
       "profile": "Perfil de Codex",
-      "profilePlaceholder": "Nombre de perfil de Codex (opcional)",
-      "authNote": "Codex usa la CLI instalada. Deja la ruta vacía para usar PATH.",
       "login": "Iniciar sesión con Codex",
       "deviceLogin": "Usar código de dispositivo",
       "loginSuccess": "El inicio de sesión de Codex está listo",
@@ -48,11 +36,16 @@
       "statusNotInstalled": "No se encontró el CLI",
       "statusError": "Se detectó el CLI, pero falló la comprobación",
       "checkStatus": "Comprobar CLI",
-      "sourceSidecar": "Usando el entorno de Codex incluido con la app",
-      "sourcePath": "Usando `codex` desde PATH",
-      "sourceConfigured": "Usando una ruta personalizada del ejecutable",
       "resolvedPathLabel": "Ejecutable",
-      "versionLabel": "Versión"
+      "versionLabel": "Versión",
+      "source": "Origen",
+      "sourceShort": {
+        "sidecar": "Incluido en la app",
+        "configured": "Ruta propia",
+        "path": "PATH"
+      },
+      "modelDefault": "Predeterminado del CLI",
+      "profileDefault": "Predeterminado"
     },
     "save": "Guardar",
     "saved": "Configuración guardada",
@@ -62,18 +55,15 @@
     "removed": "Configuración eliminada",
     "removeFailed": "No se pudo limpiar el proveedor",
     "validate": "Validar",
-    "validating": "Validando…",
     "valid": "Proveedor listo",
     "invalid": "Falló la validación del proveedor",
     "apiKey": "Clave de API",
     "savedKeyPlaceholder": "Clave guardada; escribe para reemplazarla",
-    "savedKeyHint": "La clave permanece en el almacén seguro. Déjala vacía para conservarla.",
     "advanced": "Configuración avanzada",
-    "provider": "Proveedor",
     "providerNavigation": "Lista de proveedores",
     "connection": {
       "api": "API",
-      "cli": "CLI local"
+      "cli": "CLI"
     },
     "model": "Modelo",
     "modelPlaceholder": "Selecciona o escribe un modelo",
@@ -86,29 +76,44 @@
       "count_other": "{{count}} modelos disponibles"
     },
     "endpoint": "URL personalizada",
-    "endpointPlaceholder": "URL del endpoint (opcional)",
-    "noKey": "Sin clave configurada",
     "notConfigured": "Sin configurar",
-    "configured": "Listo"
-  },
-  "appearance": {
-    "title": "Apariencia",
-    "theme": "Tema",
-    "light": "Claro",
-    "dark": "Oscuro",
-    "system": "Sistema"
+    "configured": "Listo",
+    "status": "Estado",
+    "optional": "Opcional"
   },
   "language": {
     "title": "Idioma",
-    "select": "Seleccionar idioma",
-    "es": "Español",
-    "en": "Inglés"
+    "native": {
+      "es": "Español",
+      "en": "English"
+    }
   },
   "wordWrap": {
     "title": "Ajuste de línea",
-    "label": "Columna de ajuste",
-    "description": "Ajusta después de esta cantidad de caracteres. Usa 0 para desactivar.",
     "disabled": "Desactivado",
     "chars": "{{count}} caracteres"
+  },
+  "cli": {
+    "title": "CLI",
+    "autoUpdate": "Actualizar al iniciar",
+    "updatedToast": "{{name}} actualizado a {{version}}",
+    "names": {
+      "codex": "Codex CLI"
+    },
+    "states": {
+      "checking": "Comprobando…",
+      "up_to_date": "Al día",
+      "updating": "Actualizando…",
+      "updated": "Actualizado",
+      "failed": "Falló",
+      "offline": "Sin conexión",
+      "skipped": "Omitido"
+    },
+    "skip": {
+      "disabled": "Actualización desactivada",
+      "bundled": "Incluido en la app",
+      "custom": "Instalación propia",
+      "not_installed": "No instalado"
+    }
   }
 }

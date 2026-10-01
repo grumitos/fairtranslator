@@ -2,37 +2,20 @@ import { useCallback, useState } from "react";
 import { isTauri } from "@tauri-apps/api/core";
 import { useProjectStore } from "@/stores/projectStore";
 import * as ipc from "@/lib/ipc";
+import { trackEdit } from "@/lib/projectSync";
 import { areStyleGuideRulesEqual, normalizeStyleGuideRules } from "@/lib/styleGuideRules";
 
+const NO_RULES: string[] = [];
+
 export function useStyleGuide() {
-  const project = useProjectStore((s) => s.project);
-  const replaceProject = useProjectStore((s) => s.replaceProject);
+  const styleGuide = useProjectStore((s) => s.project?.styleGuide) ?? NO_RULES;
+  const patchProject = useProjectStore((s) => s.patchProject);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const styleGuide = project?.styleGuide ?? [];
-
-  const applyProjectUpdate = useCallback(
-    (items: string[], markDirty: boolean | "preserve") => {
-      if (!project) {
-        return items;
-      }
-
-      if (areStyleGuideRulesEqual(project.styleGuide, items)) {
-        return project.styleGuide;
-      }
-
-      replaceProject({
-        ...project,
-        styleGuide: items,
-      }, { markDirty });
-      return items;
-    },
-    [project, replaceProject],
-  );
-
   const refresh = useCallback(async () => {
-    if (!project) {
+    const current = useProjectStore.getState().project;
+    if (!current) {
       return [];
     }
 
@@ -40,12 +23,15 @@ export function useStyleGuide() {
     setError(null);
     try {
       if (!isTauri()) {
-        return styleGuide;
+        return current.styleGuide;
       }
 
-      const items = await ipc.styleGuideList();
-      const normalized = normalizeStyleGuideRules(items);
-      return applyProjectUpdate(normalized, "preserve");
+      const items = normalizeStyleGuideRules(await ipc.styleGuideList());
+      const latest = useProjectStore.getState().project;
+      if (latest && !areStyleGuideRulesEqual(latest.styleGuide, items)) {
+        patchProject({ styleGuide: items }, { markDirty: "preserve", projectId: current.id });
+      }
+      return items;
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       setError(message);
@@ -53,11 +39,12 @@ export function useStyleGuide() {
     } finally {
       setIsLoading(false);
     }
-  }, [applyProjectUpdate, project, styleGuide]);
+  }, [patchProject]);
 
   const replace = useCallback(
     async (items: string[]) => {
-      if (!project) {
+      const current = useProjectStore.getState().project;
+      if (!current) {
         throw new Error("No hay ningún proyecto abierto");
       }
 
@@ -66,16 +53,15 @@ export function useStyleGuide() {
       setError(null);
       try {
         if (!isTauri()) {
-          return applyProjectUpdate(normalized, true);
+          patchProject({ styleGuide: normalized }, { markDirty: true, projectId: current.id });
+          return normalized;
         }
 
-        await ipc.styleGuideReplace(normalized);
-        const refreshedProject = await ipc.projectGet();
-        if (refreshedProject) {
-          replaceProject(refreshedProject, { markDirty: false });
-          return refreshedProject.styleGuide;
-        }
-        return applyProjectUpdate(normalized, false);
+        // The backend rewrites only project.json (when the project exists on disk): pending entry
+        // edits stay unsaved, so the dirty flag is preserved rather than cleared.
+        const saved = await trackEdit(ipc.styleGuideReplace(normalized));
+        patchProject({ styleGuide: saved }, { markDirty: "preserve", projectId: current.id });
+        return saved;
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         setError(message);
@@ -84,7 +70,7 @@ export function useStyleGuide() {
         setIsLoading(false);
       }
     },
-    [applyProjectUpdate, project, replaceProject],
+    [patchProject],
   );
 
   return {

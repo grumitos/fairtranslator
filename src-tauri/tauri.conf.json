@@ -13,16 +13,20 @@
     "windows": [
       {
         "title": "FairTranslator",
-        "width": 1280,
-        "height": 800,
-        "minWidth": 900,
-        "minHeight": 600,
+        "width": 1360,
+        "height": 840,
+        "minWidth": 1116,
+        "minHeight": 689,
+        "center": true,
         "resizable": true,
-        "fullscreen": false
+        "fullscreen": false,
+        "decorations": false,
+        "shadow": true,
+        "backgroundColor": "#0e0e10"
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost data:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost https:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost data:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
     }
   },
   "bundle": {

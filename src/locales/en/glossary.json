@@ -1,19 +1,15 @@
 {
   "title": "Glossary",
-  "description": "Terms to keep consistent.",
   "source": "Original",
   "target": "Translation",
   "caseSensitive": "Match case",
-  "addTitle": "New term",
   "add": "Add",
   "edit": "Edit term",
   "remove": "Remove term",
   "update": "Update",
   "empty": "No terms yet",
-  "import": "Import",
   "export": "Export",
-  "actions": "Actions",
-  "confirmDelete": "Are you sure you want to delete the term \"{{term}}\"?",
+  "confirmDelete": "Delete the term “{{term}}”?",
   "addSuccess": "Term added",
   "addFailed": "Could not add term",
   "updateSuccess": "Term updated",
@@ -21,8 +17,7 @@
   "removeSuccess": "Term removed",
   "removeFailed": "Could not remove term",
   "duplicate": "This term already exists in the glossary",
-  "sourcePlaceholder": "Original (e.g. 勇者)",
-  "targetPlaceholder": "Translation (e.g. Hero)",
-  "totalTerms": "Terms: {{count}}",
-  "caseSensitiveBadge": "Aa"
+  "filter": "Filter",
+  "totalTerms_one": "{{count}} term",
+  "totalTerms_other": "{{count}} terms"
 }

@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import type { Row } from "@tanstack/react-table";
 import type { Virtualizer } from "@tanstack/react-virtual";
 import { useProject } from "@/hooks/useProject";
+import { statusAfterEdit } from "@/lib/translationState";
 import type { EntryStatus } from "@/types/domain";
 import type { EntryWithPath } from "@/components/editor/translation-grid/types";
 
@@ -15,7 +16,6 @@ export function useInlineEdit({ virtualizer }: UseInlineEditOptions) {
   const { t } = useTranslation("common");
   const { updateEntry } = useProject();
   const [inlineEditingEntryId, setInlineEditingEntryId] = useState<string | null>(null);
-  const [pendingEditRowIndex, setPendingEditRowIndex] = useState<number | null>(null);
 
   const startEdit = useCallback((entryId: string) => {
     setInlineEditingEntryId(entryId);
@@ -27,9 +27,7 @@ export function useInlineEdit({ virtualizer }: UseInlineEditOptions) {
     value: string,
     currentStatus: EntryStatus,
   ) => {
-    const newStatus = currentStatus === "untranslated" && value.trim()
-      ? "draft"
-      : currentStatus;
+    const newStatus = statusAfterEdit(currentStatus, value);
     setInlineEditingEntryId(null);
     try {
       await updateEntry(filePath, entryId, value, newStatus);
@@ -64,17 +62,13 @@ export function useInlineEdit({ virtualizer }: UseInlineEditOptions) {
     // Scroll to the target row and set it for editing
     virtualizer.scrollToIndex(nextIndex, { align: "auto" });
     setInlineEditingEntryId(targetEntry.id);
-    setPendingEditRowIndex(nextIndex);
   }, [virtualizer]);
 
   return {
     inlineEditingEntryId,
-    pendingEditRowIndex,
     startEdit,
     commitEdit,
     cancelEdit,
     navigateEdit,
-    setInlineEditingEntryId,
-    setPendingEditRowIndex,
   };
 }

@@ -1,9 +1,11 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import i18n from "@/lib/i18n";
 import { Toolbar } from "@/components/layout/Toolbar";
+import { usePanelStore } from "@/components/layout/panelStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useEditorStore } from "@/stores/editorStore";
-import type { Project, ProviderType } from "@/types/domain";
+import { useProjectStore } from "@/stores/projectStore";
+import type { Project, ProviderType, TextFitReport } from "@/types/domain";
 
 const mocks = vi.hoisted(() => ({
   project: null as Project | null,
@@ -26,6 +28,7 @@ vi.mock("@/hooks/useProject", () => ({
 }));
 
 vi.mock("@/components/layout/NewProjectDialog", () => ({ NewProjectDialog: () => null }));
+vi.mock("@/components/layout/ContextPanel", () => ({ ContextPanel: () => null }));
 vi.mock("@/components/layout/SettingsPanel", () => ({
   SettingsPanel: ({
     open,
@@ -44,8 +47,6 @@ vi.mock("@/components/layout/SettingsPanel", () => ({
       )
     : null,
 }));
-vi.mock("@/components/layout/GlossaryPanel", () => ({ GlossaryPanel: () => null }));
-vi.mock("@/components/layout/StyleGuidePanel", () => ({ StyleGuidePanel: () => null }));
 vi.mock("@/components/layout/BatchTranslatePanel", () => ({
   BatchTranslatePanel: ({
     open,
@@ -98,6 +99,19 @@ function makeProject(statuses: Array<"untranslated" | "draft" | "reviewed" | "fi
   };
 }
 
+function textFit(overrides: Partial<TextFitReport> = {}): TextFitReport {
+  return {
+    wrapPlugin: null,
+    calibration: [],
+    wrappedEntries: 0,
+    paginatedEntries: 0,
+    pagesAdded: 0,
+    overflowCount: 0,
+    overflow: [],
+    ...overrides,
+  };
+}
+
 function renderToolbar() {
   return render(
     <TooltipProvider>
@@ -106,10 +120,22 @@ function renderToolbar() {
   );
 }
 
-describe("Toolbar export readiness", () => {
+async function openExportPanel() {
+  fireEvent.click(screen.getByRole("button", { name: "Exportar" }));
+  return screen.findByRole("dialog", { name: "Exportar" });
+}
+
+// Cantidad mostrada en la fila de un estado del resumen de exportación.
+function statusCount(panel: HTMLElement, label: string) {
+  const row = within(panel).getByText(label).closest("div");
+  return row?.querySelector("dd")?.textContent;
+}
+
+describe("Title bar controller and export panel", () => {
   beforeEach(async () => {
     await i18n.changeLanguage("es");
     useEditorStore.getState().reset();
+    usePanelStore.getState().close();
     mocks.project = makeProject(["untranslated", "draft", "reviewed", "final"]);
     mocks.dialogOpen.mockReset();
     mocks.dialogOpen.mockResolvedValue("C:/Exports/Toolbar");
@@ -119,79 +145,129 @@ describe("Toolbar export readiness", () => {
       entriesApplied: 3,
       totalEntries: 4,
       warnings: ["Advertencia uno", "Advertencia dos", "Advertencia tres"],
+      textFit: textFit(),
     });
   });
 
   afterEach(() => {
     cleanup();
     useEditorStore.getState().reset();
+    useProjectStore.getState().reset();
+    usePanelStore.getState().close();
   });
 
-  it("cancela el preflight sin abrir carpeta ni exportar", async () => {
+  it("shows the translatable entries per status and closes without exporting", async () => {
     renderToolbar();
 
-    fireEvent.click(screen.getByRole("button", { name: "Exportar" }));
+    const panel = await openExportPanel();
+    // La entrada en blanco no cuenta: no es traducible.
+    expect(statusCount(panel, "Sin traducir")).toBe("1");
+    expect(statusCount(panel, "Borrador")).toBe("1");
+    expect(statusCount(panel, "Revisado")).toBe("1");
+    expect(statusCount(panel, "Final")).toBe("1");
+    expect(within(panel).getByText("La carpeta del juego no se modifica.")).toBeInTheDocument();
 
-    expect(await screen.findByRole("heading", { name: "Revisar antes de exportar" })).toBeInTheDocument();
-    expect(screen.getByText("Sin traducir: 1")).toBeInTheDocument();
-    expect(screen.getByText("Borradores: 1")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+    fireEvent.click(within(panel).getByRole("button", { name: "Cerrar" }));
 
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Exportar" })).not.toBeInTheDocument());
     expect(mocks.dialogOpen).not.toHaveBeenCalled();
     expect(mocks.exportProject).not.toHaveBeenCalled();
   });
 
-  it("filtra borradores desde el preflight sin exportar", async () => {
+  it("filters the grid to drafts from the export panel without exporting", async () => {
     renderToolbar();
 
-    fireEvent.click(screen.getByRole("button", { name: "Exportar" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Revisar borradores" }));
+    const panel = await openExportPanel();
+    fireEvent.click(within(panel).getByRole("button", { name: "Revisar borradores" }));
 
     expect(useEditorStore.getState().statusFilter).toBe("draft");
+    expect(usePanelStore.getState().panel).toBe("none");
     expect(mocks.dialogOpen).not.toHaveBeenCalled();
     expect(mocks.exportProject).not.toHaveBeenCalled();
   });
 
-  it("exporta bajo confirmación y conserva el informe completo hasta cerrarlo", async () => {
+  it("asks for the destination, exports and keeps the full report until closed", async () => {
     renderToolbar();
 
-    fireEvent.click(screen.getByRole("button", { name: "Exportar" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Exportar de todos modos" }));
+    const panel = await openExportPanel();
+    fireEvent.click(within(panel).getByRole("button", { name: "Exportar" }));
 
     await waitFor(() => {
       expect(mocks.dialogOpen).toHaveBeenCalledOnce();
       expect(mocks.exportProject).toHaveBeenCalledWith("C:/Exports/Toolbar");
     });
-    expect(await screen.findByRole("heading", { name: "Exportación completada con advertencias" })).toBeInTheDocument();
-    expect(screen.getByText("C:/Exports/Toolbar")).toBeInTheDocument();
-    expect(screen.getByText("Archivos exportados: 3. Traducciones aplicadas: 3/4.")).toBeInTheDocument();
-    expect(screen.getByText("Advertencia uno")).toBeInTheDocument();
-    expect(screen.getByText("Advertencia dos")).toBeInTheDocument();
-    expect(screen.getByText("Advertencia tres")).toBeInTheDocument();
+    const report = await screen.findByRole("dialog", { name: "Exportado con advertencias" });
+    expect(within(report).getByText("C:/Exports/Toolbar")).toBeInTheDocument();
+    expect(within(report).getByText("3 de 4")).toBeInTheDocument();
+    expect(within(report).getByText("Advertencia uno")).toBeInTheDocument();
+    expect(within(report).getByText("Advertencia dos")).toBeInTheDocument();
+    expect(within(report).getByText("Advertencia tres")).toBeInTheDocument();
   });
 
-  it("omite el preflight cuando todas las entradas traducibles están revisadas o finales", async () => {
+  it("offers no draft review when everything translatable is reviewed or final", async () => {
     mocks.project = makeProject(["reviewed", "final"]);
     mocks.exportProject.mockResolvedValue({
       filesExported: 1,
       entriesApplied: 2,
       totalEntries: 2,
       warnings: [],
+      textFit: textFit(),
     });
     renderToolbar();
 
-    fireEvent.click(screen.getByRole("button", { name: "Exportar" }));
+    const panel = await openExportPanel();
+    expect(within(panel).getByRole("button", { name: "Revisar borradores" })).toBeDisabled();
+    fireEvent.click(within(panel).getByRole("button", { name: "Exportar" }));
 
-    await waitFor(() => expect(mocks.dialogOpen).toHaveBeenCalledOnce());
-    expect(screen.queryByRole("heading", { name: "Revisar antes de exportar" })).not.toBeInTheDocument();
-    expect(mocks.exportProject).toHaveBeenCalledWith("C:/Exports/Toolbar");
-    expect(await screen.findByRole("heading", { name: "Exportación completada" })).toBeInTheDocument();
+    await waitFor(() => expect(mocks.exportProject).toHaveBeenCalledWith("C:/Exports/Toolbar"));
+    expect(await screen.findByRole("dialog", { name: "Exportado" })).toBeInTheDocument();
+  });
+
+  it("lists the entries that still do not fit and opens one in the grid", async () => {
+    mocks.exportProject.mockResolvedValue({
+      filesExported: 1,
+      entriesApplied: 3,
+      totalEntries: 4,
+      warnings: [],
+      textFit: textFit({
+        wrappedEntries: 2,
+        pagesAdded: 1,
+        overflowCount: 1,
+        overflow: [{
+          filePath: "data/Map001.json",
+          entryId: "entry-2",
+          kind: "choice",
+          width: 612,
+          maxWidth: 560,
+          lines: 1,
+          maxLines: null,
+        }],
+      }),
+    });
+    useProjectStore.getState().setProject(mocks.project!, { markDirty: false });
+    useEditorStore.getState().setStatusFilter("final");
+    renderToolbar();
+
+    const panel = await openExportPanel();
+    fireEvent.click(within(panel).getByRole("button", { name: "Exportar" }));
+
+    const list = await screen.findByRole("list", { name: "Entradas que no caben" });
+    const item = within(list).getByRole("button", { name: /Texto 2/ });
+    expect(item).toHaveTextContent("Elección");
+    expect(item).toHaveTextContent("612/560 px");
+
+    fireEvent.click(item);
+
+    expect(usePanelStore.getState().panel).toBe("none");
+    expect(useEditorStore.getState().statusFilter).toBeNull();
+    expect(useEditorStore.getState().scrollToEntryId).toBe("entry-2");
+    expect(useProjectStore.getState().activeFile?.relativePath).toBe("data/Map001.json");
   });
 
   it("closes batch translation and opens Settings from provider configuration", () => {
     renderToolbar();
 
-    fireEvent.click(screen.getByRole("button", { name: "Traducción por lotes" }));
+    fireEvent.click(screen.getByRole("button", { name: "Traducir" }));
     fireEvent.click(screen.getByRole("button", { name: "Configure provider mock" }));
 
     expect(screen.queryByRole("button", { name: "Configure provider mock" })).not.toBeInTheDocument();
@@ -201,12 +277,12 @@ describe("Toolbar export readiness", () => {
   it("resets the provider when Settings is reopened manually", () => {
     renderToolbar();
 
-    fireEvent.click(screen.getByRole("button", { name: "Traducción por lotes" }));
+    fireEvent.click(screen.getByRole("button", { name: "Traducir" }));
     fireEvent.click(screen.getByRole("button", { name: "Configure provider mock" }));
     expect(screen.getByRole("dialog", { name: "Settings panel mock" })).toHaveTextContent("google");
 
     fireEvent.click(screen.getByRole("button", { name: "Close settings mock" }));
-    fireEvent.click(screen.getByRole("button", { name: "Configuración" }));
+    fireEvent.click(screen.getByRole("button", { name: "Ajustes" }));
 
     expect(screen.getByRole("dialog", { name: "Settings panel mock" })).toHaveTextContent("opencode");
   });

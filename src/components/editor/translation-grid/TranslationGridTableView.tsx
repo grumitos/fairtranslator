@@ -1,5 +1,5 @@
 import { useCallback, useRef, type RefObject, type UIEvent } from "react";
-import { flexRender, type Row, type Table } from "@tanstack/react-table";
+import { flexRender, type Column, type Row, type Table } from "@tanstack/react-table";
 import { cn } from "@/lib/utils";
 import type { EntryWithPath, TranslationGridMeta } from "@/components/editor/translation-grid/types";
 
@@ -23,6 +23,18 @@ interface TranslationGridTableViewProps {
   totalEntriesText: string;
 }
 
+// Original y traducción reparten el ancho disponible (sin bajar de su mínimo); el resto es fijo.
+const FLEX_COLUMNS = new Set(["original", "translation"]);
+
+function columnStyle(column: Column<EntryWithPath>) {
+  const size = column.getSize();
+  if (FLEX_COLUMNS.has(column.id)) {
+    return { flex: `1 1 ${size}px`, minWidth: column.columnDef.minSize ?? 150 };
+  }
+  return { flex: "none", width: size, minWidth: size };
+}
+
+// Tabla densa del kit: cabecera baja, filas separadas por líneas suaves, sin cebra ni bordes verticales.
 export function TranslationGridTableView({
   table,
   rows,
@@ -38,7 +50,9 @@ export function TranslationGridTableView({
   const meta = table.options.meta as TranslationGridMeta | undefined;
   const headerInnerRef = useRef<HTMLDivElement>(null);
   const lastScrollLeftRef = useRef(0);
-  const totalGridWidth = table.getTotalSize();
+  const minGridWidth = table
+    .getVisibleLeafColumns()
+    .reduce((sum, column) => sum + (FLEX_COLUMNS.has(column.id) ? (column.columnDef.minSize ?? 150) : column.getSize()), 0);
 
   const handleRowsScroll = useCallback((event: UIEvent<HTMLDivElement>) => {
     const scrollLeft = event.currentTarget.scrollLeft;
@@ -54,13 +68,12 @@ export function TranslationGridTableView({
 
   return (
     <>
-      {/* Header with resize handles */}
-      <div className="sticky top-0 z-10 overflow-hidden border-b bg-card/95 shadow-xs" role="rowgroup">
+      <div className="sticky top-0 z-10 shrink-0 overflow-hidden border-b border-line bg-surface-0" role="rowgroup">
         <div
           ref={headerInnerRef}
           data-ft-grid-row="header"
-          className="flex h-9 text-[11px] font-semibold uppercase tracking-normal text-muted-foreground will-change-transform"
-          style={{ width: totalGridWidth, minWidth: "100%" }}
+          className="flex h-[34px] text-xs font-medium text-ink-3 will-change-transform"
+          style={{ width: "100%", minWidth: minGridWidth }}
           role="row"
         >
           {table.getHeaderGroups().map((headerGroup) =>
@@ -68,21 +81,20 @@ export function TranslationGridTableView({
               <div
                 key={header.id}
                 data-ft-grid-column={header.column.id}
-                className="relative flex items-center border-r px-3 last:border-r-0 select-none"
-                style={{ width: header.getSize(), minWidth: header.getSize() }}
+                className="relative flex items-center px-3 select-none first:pl-6 last:pr-6"
+                style={columnStyle(header.column)}
                 role="columnheader"
               >
                 {flexRender(header.column.columnDef.header, header.getContext())}
 
-                {/* Column resize handle */}
                 {header.column.getCanResize() && (
                   <div
                     onMouseDown={header.getResizeHandler()}
                     onTouchStart={header.getResizeHandler()}
                     className={cn(
-                      "absolute right-0 top-0 h-full w-1.5 cursor-col-resize select-none touch-none transition-colors duration-150",
-                      "hover:bg-primary/40 active:bg-primary/60",
-                      header.column.getIsResizing() && "bg-primary",
+                      "absolute top-1.5 right-0 bottom-1.5 w-1.5 cursor-col-resize touch-none select-none",
+                      "after:absolute after:top-0 after:right-0 after:h-full after:w-px after:bg-line after:transition-colors after:duration-(--motion-fast) hover:after:bg-line-chip",
+                      header.column.getIsResizing() && "after:bg-ink",
                     )}
                   />
                 )}
@@ -92,18 +104,16 @@ export function TranslationGridTableView({
         </div>
       </div>
 
-      {/* Virtualized rows */}
       <div
         ref={parentRef}
-        className="min-h-0 flex-1 overflow-auto bg-background/40"
+        className="min-h-0 flex-1 overflow-auto bg-surface-0"
         onScroll={handleRowsScroll}
         role="rowgroup"
       >
         {rows.length === 0 ? (
           <div className="flex h-full items-center justify-center p-6">
             <div className="ft-empty-state" role="status">
-              <p className="text-sm font-medium text-foreground">{emptyText}</p>
-              <p className="mt-1 text-xs text-muted-foreground">{totalEntriesText}</p>
+              <p className="text-sm text-ink-2">{emptyText}</p>
             </div>
           </div>
         ) : (
@@ -122,23 +132,21 @@ export function TranslationGridTableView({
                   data-ft-grid-row="body"
                   ref={measureElement}
                   className={cn(
-                    "absolute left-0 flex w-full cursor-pointer items-stretch border-b transition-[background-color,box-shadow] duration-150 hover:bg-accent/60",
-                    isMatch
-                      ? "bg-warning/10"
-                      : isSelected
-                        ? "bg-accent/55"
-                        : virtualRow.index % 2 === 0
-                          ? "bg-card"
-                          : "bg-muted/20",
-                    isSelected && "shadow-[inset_2px_0_0_var(--primary)]",
-                    isEditing && "shadow-[inset_2px_0_0_var(--primary),inset_0_0_0_1px_var(--primary)]",
+                    "absolute left-0 flex w-full cursor-default items-stretch border-b border-line-soft transition-colors duration-(--motion-fast)",
+                    isSelected
+                      ? "bg-surface-3"
+                      : isMatch
+                        ? "bg-[rgb(237_237_239/0.035)] hover:bg-surface-1"
+                        : "hover:bg-surface-1",
+                    isEditing && "bg-surface-2",
                   )}
                   style={{
-                    minHeight: "36px",
-                    minWidth: "100%",
-                    width: totalGridWidth,
+                    minHeight: "40px",
+                    width: "100%",
+                    minWidth: minGridWidth,
                     transform: `translateY(${virtualRow.start}px)`,
                   }}
+                  onClick={() => meta?.onSelectRow?.(virtualRow.index)}
                   onDoubleClick={() => onRowDoubleClick(row.original)}
                   role="row"
                   aria-rowindex={virtualRow.index + 2}
@@ -152,12 +160,14 @@ export function TranslationGridTableView({
                         key={cell.id}
                         data-ft-grid-column={cell.column.id}
                         className={cn(
-                          "flex items-center border-r px-3 py-1.5 last:border-r-0",
-                          isTranslationCol ? "overflow-visible" : "overflow-hidden",
+                          "flex items-start px-3 py-[11px] leading-5 first:pl-6 last:pr-6",
+                          isTranslationCol ? "cursor-text overflow-visible" : "overflow-hidden",
+                          isTranslationCol && isEditing && "py-[7px]",
                         )}
-                        style={{ width: cell.column.getSize(), minWidth: cell.column.getSize() }}
+                        style={columnStyle(cell.column)}
                         onClick={isTranslationCol && !isEditing ? (e) => {
                           e.stopPropagation();
+                          meta?.onSelectRow?.(virtualRow.index);
                           meta?.onStartInlineEdit?.(row.original.id);
                         } : undefined}
                         onDoubleClick={isTranslationCol ? (e) => {
@@ -177,8 +187,7 @@ export function TranslationGridTableView({
         )}
       </div>
 
-      {/* Footer */}
-      <div className="flex h-7 items-center border-t bg-card/95 px-3 text-xs text-muted-foreground" aria-live="polite">
+      <div className="sr-only" aria-live="polite">
         {totalEntriesText}
       </div>
     </>

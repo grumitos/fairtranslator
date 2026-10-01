@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { useEditorStore } from "@/stores/editorStore";
@@ -7,6 +7,8 @@ import { useProject } from "@/hooks/useProject";
 import { FindControlsRow } from "@/components/editor/find-replace/FindControlsRow";
 import { ReplaceControlsRow } from "@/components/editor/find-replace/ReplaceControlsRow";
 import { buildFindRegex, type FindMatch } from "@/components/editor/findReplaceUtils";
+import { isVisibleInGrid, toGridEntry } from "@/components/editor/gridEntries";
+import { statusAfterEdit } from "@/lib/translationState";
 import type { ProjectEntryUpdate } from "@/types/domain";
 
 export function FindReplaceBar() {
@@ -33,6 +35,9 @@ export function FindReplaceBar() {
   const setMatchCount = useEditorStore((s) => s.setMatchCount);
   const matchNavigationVersion = useEditorStore((s) => s.matchNavigationVersion);
   const setScrollToEntryId = useEditorStore((s) => s.setScrollToEntryId);
+  const statusFilter = useEditorStore((s) => s.statusFilter);
+  // Igual que la tabla (texto diferido): se cuenta y se reemplaza solo sobre las filas visibles.
+  const gridQuery = useDeferredValue(useEditorStore((s) => s.searchQuery)).trim().toLowerCase();
 
   useEffect(() => {
     findInputRef.current?.focus();
@@ -48,28 +53,21 @@ export function FindReplaceBar() {
     if (activeFile) return [activeFile];
     return projectFiles ?? [];
   }, [activeFile, projectFiles]);
-  const entryByKey = useMemo(() => {
-    const entries = new Map<string, (typeof searchableFiles)[number]["entries"][number]>();
-    for (const file of searchableFiles) {
-      for (const entry of file.entries) {
-        entries.set(`${file.relativePath}:${entry.id}`, entry);
-      }
-    }
-    return entries;
-  }, [searchableFiles]);
-
   const matches = useMemo<FindMatch[]>(() => {
     if (!regex) return [];
     const result: FindMatch[] = [];
     let dataIndex = 0;
 
     for (const file of searchableFiles) {
-      for (const entry of file.entries) {
+      for (const rawEntry of file.entries) {
+        const entry = toGridEntry(rawEntry, file.relativePath);
+        if (!isVisibleInGrid(entry, statusFilter, gridQuery)) continue;
         if (searchTarget === "original" || searchTarget === "both") {
           if (regex.test(entry.original)) {
             result.push({
               filePath: file.relativePath,
               entryId: entry.id,
+              entry: rawEntry,
               field: "original",
               dataIndex,
             });
@@ -81,6 +79,7 @@ export function FindReplaceBar() {
             result.push({
               filePath: file.relativePath,
               entryId: entry.id,
+              entry: rawEntry,
               field: "translation",
               dataIndex,
             });
@@ -91,7 +90,7 @@ export function FindReplaceBar() {
       }
     }
     return result;
-  }, [regex, searchableFiles, searchTarget]);
+  }, [regex, searchableFiles, searchTarget, statusFilter, gridQuery]);
 
   // Keep matchCount in store for global keyboard shortcuts
   useEffect(() => {
@@ -130,24 +129,26 @@ export function FindReplaceBar() {
       return;
     }
 
-    const entry = entryByKey.get(`${match.filePath}:${match.entryId}`);
-    if (!entry) return;
+    const entry = match.entry;
 
-    const updated = entry.translation.replace(regex, replaceText);
+    const updated = (useRegex
+      ? entry.translation.replace(regex, replaceText)
+      // Sin regex el reemplazo es literal: $& o $$ no deben interpretarse como patrones.
+      : entry.translation.replace(regex, () => replaceText));
     regex.lastIndex = 0;
     try {
       await updateEntry(
         match.filePath,
         match.entryId,
         updated,
-        entry.status === "untranslated" ? "draft" : entry.status,
+        statusAfterEdit(entry.status, updated),
       );
     } catch (error) {
       toast.error(t("findReplace.replaceFailed"), {
         description: error instanceof Error ? error.message : String(error),
       });
     }
-  }, [regex, matches, currentMatchIndex, entryByKey, replaceText, updateEntry, t]);
+  }, [regex, matches, currentMatchIndex, replaceText, useRegex, updateEntry, t]);
 
   const handleReplaceAll = useCallback(async () => {
     if (!regex || matches.length === 0) return;
@@ -163,17 +164,19 @@ export function FindReplaceBar() {
       const key = `${match.filePath}:${match.entryId}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      const entry = entryByKey.get(key);
-      if (!entry) continue;
+      const entry = match.entry;
 
-      const updated = entry.translation.replace(regex, replaceText);
+      const updated = (useRegex
+      ? entry.translation.replace(regex, replaceText)
+      // Sin regex el reemplazo es literal: $& o $$ no deben interpretarse como patrones.
+      : entry.translation.replace(regex, () => replaceText));
       regex.lastIndex = 0;
       if (updated !== entry.translation) {
         updates.push({
           filePath: match.filePath,
           entryId: match.entryId,
           translation: updated,
-          status: entry.status === "untranslated" ? "draft" : entry.status,
+          status: statusAfterEdit(entry.status, updated),
           notes: entry.notes,
         });
       }
@@ -190,17 +193,7 @@ export function FindReplaceBar() {
         description: error instanceof Error ? error.message : String(error),
       });
     }
-  }, [regex, matches, entryByKey, replaceText, updateEntriesBatch, t]);
-
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        handleClose();
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [handleClose]);
+  }, [regex, matches, replaceText, useRegex, updateEntriesBatch, t]);
 
   const matchInfoLabel = isInvalidRegex
     ? t("findReplace.invalidRegex")
@@ -209,14 +202,32 @@ export function FindReplaceBar() {
         ? t("findReplace.currentMatch", { current: currentMatchIndex + 1, total: matches.length })
         : t("findReplace.noMatches")
       : "";
+  const matchInfoShort = isInvalidRegex
+    ? t("findReplace.invalidRegexShort")
+    : findQuery
+      ? t("findReplace.currentMatchShort", {
+          current: matches.length > 0 ? currentMatchIndex + 1 : 0,
+          total: matches.length,
+        })
+      : "";
 
   return (
-    <div className="flex min-w-0 flex-col gap-1.5 border-b bg-muted/30 px-2 py-1.5">
+    <div
+      role="search"
+      aria-label={t("toolbar.findReplace")}
+      onKeyDown={(e) => {
+        // Escape cierra la barra solo con el foco dentro de ella; los menús en portal (Select) lo gestionan antes.
+        if (e.key !== "Escape" || e.defaultPrevented || !e.currentTarget.contains(e.target as Node)) return;
+        handleClose();
+      }}
+      className="flex h-12 min-w-0 shrink-0 items-center gap-1.5 border-b border-line bg-surface-0 px-6"
+    >
       <FindControlsRow
         findInputRef={findInputRef}
         findQuery={findQuery}
         isInvalidRegex={isInvalidRegex}
         matchInfoLabel={matchInfoLabel}
+        matchInfoShort={matchInfoShort}
         hasMatches={matches.length > 0}
         matchCase={matchCase}
         useRegex={useRegex}
@@ -230,6 +241,7 @@ export function FindReplaceBar() {
         onSearchTargetChange={(value) => setSearchTarget(value)}
         onClose={handleClose}
       />
+      <span aria-hidden="true" className="mx-1.5 h-5 w-px shrink-0 bg-line" />
       <ReplaceControlsRow
         replaceText={replaceText}
         disabled={matches.length === 0 || !findQuery}

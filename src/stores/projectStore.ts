@@ -8,6 +8,14 @@ interface ProjectReplaceOptions {
   markDirty?: DirtyMode;
 }
 
+/** Project fields that can be patched in place. `files` goes through replaceProject so activeFile stays valid. */
+type ProjectPatch = Partial<Omit<Project, "id" | "files">>;
+
+interface ProjectPatchOptions extends ProjectReplaceOptions {
+  /** Ignore the patch when a different project is open by the time an async call resolves */
+  projectId?: string;
+}
+
 interface ProjectState {
   /** Current open project, null if none */
   project: Project | null;
@@ -19,10 +27,19 @@ interface ProjectState {
   isLoading: boolean;
   /** Last error message */
   error: string | null;
+  /**
+   * Increments on every local change that dirties the project. Async flows that persist or
+   * refresh the whole project compare it before and after to detect edits made in the meantime.
+   */
+  editRevision: number;
 
   // Actions
   setProject: (project: Project | null, options?: ProjectReplaceOptions) => void;
   replaceProject: (project: Project | null, options?: ProjectReplaceOptions) => void;
+  /** Applies a partial change to the CURRENT project, so it never overwrites edits that landed while awaiting IPC */
+  patchProject: (patch: ProjectPatch, options?: ProjectPatchOptions) => void;
+  /** Flags the project as saved. Only valid when no local edit happened after the snapshot that reached the disk. */
+  markClean: () => void;
   setActiveFile: (file: TranslationFile | null) => void;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
@@ -35,6 +52,7 @@ const initialState = {
   isDirty: false,
   isLoading: false,
   error: null,
+  editRevision: 0,
 };
 
 function resolveDirty(current: boolean, next: DirtyMode | undefined, hasProject: boolean) {
@@ -56,6 +74,7 @@ export const useProjectStore = create<ProjectState>()(
         state.project = project;
         state.activeFile = null;
         state.isDirty = resolveDirty(state.isDirty, options?.markDirty, Boolean(project));
+        if (project && options?.markDirty === true) state.editRevision += 1;
         state.error = null;
       }),
 
@@ -68,7 +87,22 @@ export const useProjectStore = create<ProjectState>()(
             ? project.files.find((file) => file.relativePath === activePath) ?? null
             : null;
         state.isDirty = resolveDirty(state.isDirty, options?.markDirty, Boolean(project));
+        if (project && options?.markDirty === true) state.editRevision += 1;
         state.error = null;
+      }),
+
+    patchProject: (patch, options) =>
+      set((state) => {
+        if (!state.project) return;
+        if (options?.projectId !== undefined && state.project.id !== options.projectId) return;
+        Object.assign(state.project, patch);
+        state.isDirty = resolveDirty(state.isDirty, options?.markDirty, true);
+        if (options?.markDirty === true) state.editRevision += 1;
+      }),
+
+    markClean: () =>
+      set((state) => {
+        state.isDirty = false;
       }),
 
     setActiveFile: (file) =>
@@ -81,10 +115,10 @@ export const useProjectStore = create<ProjectState>()(
         state.isLoading = loading;
       }),
 
+    // Reporting an error must not end a loading state: callers clear it in their own finally block.
     setError: (error) =>
       set((state) => {
         state.error = error;
-        state.isLoading = false;
       }),
 
     reset: () => set(() => initialState),

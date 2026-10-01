@@ -148,6 +148,10 @@ export const useEditorStore = create<EditorState>()(
     setMatchCount: (count) =>
       set((state) => {
         state.matchCount = count;
+        // Replacing a match shrinks the list: keep the current match pointing inside it.
+        if (state.currentMatchIndex >= count) {
+          state.currentMatchIndex = Math.max(count - 1, 0);
+        }
       }),
 
     setScrollToEntryId: (id) =>

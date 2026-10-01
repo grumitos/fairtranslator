@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import i18n from "@/lib/i18n";
-import { StyleGuidePanel } from "@/components/layout/StyleGuidePanel";
+import { ContextPanel } from "@/components/layout/ContextPanel";
 import { useProjectStore } from "@/stores/projectStore";
 import type { Project } from "@/types/domain";
 
@@ -26,7 +26,7 @@ function makeProject(): Project {
   };
 }
 
-describe("StyleGuidePanel", () => {
+describe("Style guide tab of the context panel", () => {
   beforeEach(async () => {
     await i18n.changeLanguage("es");
     useProjectStore.getState().reset();
@@ -39,10 +39,11 @@ describe("StyleGuidePanel", () => {
   });
 
   it("opens with existing rules outside Tauri without render loops", async () => {
-    render(<StyleGuidePanel open onOpenChange={() => undefined} />);
+    render(<ContextPanel open onOpenChange={() => undefined} tab="styleGuide" onTabChange={() => undefined} />);
 
-    expect(await screen.findByText("Guía de estilo del proyecto")).toBeInTheDocument();
-    expect(screen.getByText("Reglas (2)")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Contexto del proyecto" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Guía de estilo/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("list", { name: "Reglas (2)" })).toBeInTheDocument();
     expect(screen.getByDisplayValue("Mantener nombres de menú cortos.")).toBeInTheDocument();
     expect(screen.getByDisplayValue("Conservar códigos de control.")).toBeInTheDocument();
   });
@@ -53,9 +54,9 @@ describe("StyleGuidePanel", () => {
       styleGuide: ["Regla A", "", "Regla A", "Regla B"],
     }, { markDirty: false });
 
-    render(<StyleGuidePanel open onOpenChange={() => undefined} />);
+    render(<ContextPanel open onOpenChange={() => undefined} tab="styleGuide" onTabChange={() => undefined} />);
 
-    expect(await screen.findByText("Reglas (2)")).toBeInTheDocument();
+    expect(await screen.findByRole("list", { name: "Reglas (2)" })).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("Regla 2"), { target: { value: "Regla C" } });
     expect(screen.queryByDisplayValue("Regla B")).not.toBeInTheDocument();
@@ -67,7 +68,7 @@ describe("StyleGuidePanel", () => {
   });
 
   it("keeps focus while typing multiple characters into a rule", async () => {
-    render(<StyleGuidePanel open onOpenChange={() => undefined} />);
+    render(<ContextPanel open onOpenChange={() => undefined} tab="styleGuide" onTabChange={() => undefined} />);
 
     const rule = await screen.findByLabelText("Regla 1");
     rule.focus();

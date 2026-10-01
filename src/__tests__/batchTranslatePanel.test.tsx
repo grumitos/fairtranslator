@@ -84,13 +84,9 @@ function makeProgress(overrides: Partial<BatchProgress> = {}): BatchProgress {
   };
 }
 
+// El selector de proveedor es una lista de radios cuyo nombre empieza por el del proveedor.
 async function selectProvider(name: string) {
-  fireEvent.pointerDown(screen.getByRole("combobox"), {
-    button: 0,
-    ctrlKey: false,
-    pointerType: "mouse",
-  });
-  const option = await screen.findByRole("option", { name });
+  const option = screen.getByRole("radio", { name: new RegExp(`^${name}`) });
   await act(async () => {
     fireEvent.click(option);
     await Promise.resolve();
@@ -142,7 +138,7 @@ describe("BatchTranslatePanel", () => {
   it("gives the provider selector an accessible name", () => {
     render(<BatchTranslatePanel open onOpenChange={() => undefined} onConfigureProvider={mocks.configureProvider} />);
 
-    expect(screen.getByRole("combobox", { name: "Proveedor" })).toBeInTheDocument();
+    expect(screen.getByRole("radiogroup", { name: "Proveedor" })).toBeInTheDocument();
   }, 10_000);
 
   it("offers provider configuration without starting when Google has no API key", async () => {
@@ -151,7 +147,7 @@ describe("BatchTranslatePanel", () => {
     await selectProvider("Google Translate");
 
     await waitFor(() => expect(mocks.apikeyLoad).toHaveBeenCalledWith("google"));
-    expect(screen.getByText("Sin configurar")).toBeInTheDocument();
+    expect(await screen.findByRole("status")).toHaveTextContent("Sin configurar");
     expect(screen.getByRole("button", { name: "Iniciar traducción" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Configurar proveedor" }));
     expect(mocks.configureProvider).toHaveBeenCalledWith("google");
@@ -159,7 +155,10 @@ describe("BatchTranslatePanel", () => {
   }, 10_000);
 
   it("surfaces provider configuration load failures with the same CTA", async () => {
-    mocks.apikeyLoad.mockRejectedValueOnce(new Error("credential store unavailable"));
+    mocks.apikeyLoad.mockImplementation(async (provider: ProviderType) => {
+      if (provider === "google") throw new Error("credential store unavailable");
+      return { provider, isConfigured: false };
+    });
     render(<BatchTranslatePanel open onOpenChange={() => undefined} onConfigureProvider={mocks.configureProvider} />);
 
     await selectProvider("Google Translate");
@@ -174,7 +173,7 @@ describe("BatchTranslatePanel", () => {
   it("identifies OpenCode as the integrated API and labels its single model field", async () => {
     render(<BatchTranslatePanel open onOpenChange={() => undefined} onConfigureProvider={mocks.configureProvider} />);
 
-    await selectProvider("OpenCode Go · API integrada");
+    await selectProvider("OpenCode");
 
     expect(screen.getByRole("textbox", { name: "Modelo para esta ejecución" })).toBeInTheDocument();
     expect(screen.getAllByRole("textbox", { name: "Modelo para esta ejecución" })).toHaveLength(1);
@@ -198,8 +197,7 @@ describe("BatchTranslatePanel", () => {
     });
     render(<BatchTranslatePanel open onOpenChange={() => undefined} onConfigureProvider={mocks.configureProvider} />);
 
-    expect(screen.getByText("Traducción cancelada")).toBeInTheDocument();
-    expect(screen.getByText("Traducidas antes de cancelar: 1/3")).toBeInTheDocument();
+    expect(screen.getByText(/Traducción cancelada/)).toHaveTextContent("Traducidas antes de cancelar: 1/3");
   }, 10_000);
 
   it("shows provider validation failures before any chunk starts", () => {

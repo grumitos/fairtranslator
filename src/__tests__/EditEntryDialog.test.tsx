@@ -5,11 +5,13 @@ import type { TranslationEntry } from "@/types/domain";
 
 const mocks = vi.hoisted(() => ({
   updateEntry: vi.fn(),
+  confirmAction: vi.fn(),
 }));
 
 vi.mock("@/hooks/useProject", () => ({
   useProject: () => ({ updateEntry: mocks.updateEntry }),
 }));
+vi.mock("@/components/common/ConfirmDialog", () => ({ confirmAction: mocks.confirmAction }));
 
 const entry: TranslationEntry = {
   id: "Map001:text:1",
@@ -39,7 +41,8 @@ describe("EditEntryDialog unsaved changes", () => {
     await i18n.changeLanguage("es");
     mocks.updateEntry.mockReset();
     mocks.updateEntry.mockResolvedValue(undefined);
-    vi.spyOn(window, "confirm").mockReturnValue(false);
+    mocks.confirmAction.mockReset();
+    mocks.confirmAction.mockResolvedValue(false);
   });
 
   afterEach(() => {
@@ -53,22 +56,28 @@ describe("EditEntryDialog unsaved changes", () => {
     ["Cancelar", () => fireEvent.click(screen.getByRole("button", { name: "Cancelar" }))],
     ["un clic exterior", async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
-      const overlay = document.querySelector('[data-slot="dialog-overlay"]');
-      if (!overlay) throw new Error("Dialog overlay not found");
-      fireEvent.pointerDown(overlay, { button: 0, pointerType: "mouse" });
+      // Radix 1.6+ defers outside dismissal until the click completes, so a bare pointerdown is not a gesture.
+      fireEvent.pointerDown(document.body, { button: 0, pointerType: "mouse" });
+      fireEvent.pointerUp(document.body, { button: 0, pointerType: "mouse" });
+      fireEvent.click(document.body, { button: 0 });
     }],
   ])("conserva el borrador cuando se rechaza cerrar con %s", async (_label, closeDialog) => {
     const { onOpenChange, translation } = renderDirtyDialog();
 
     await closeDialog();
 
-    await waitFor(() => expect(window.confirm).toHaveBeenCalledOnce());
+    await waitFor(() => expect(mocks.confirmAction).toHaveBeenCalledOnce());
+    expect(mocks.confirmAction).toHaveBeenCalledWith(expect.objectContaining({
+      message: "Hay cambios sin guardar en esta entrada. ¿Descartarlos?",
+      destructive: true,
+    }));
+    await Promise.resolve();
     expect(onOpenChange).not.toHaveBeenCalled();
     expect(translation).toHaveValue("Hola editada");
   });
 
   it("cierra cuando se confirma descartar los cambios", async () => {
-    vi.mocked(window.confirm).mockReturnValue(true);
+    mocks.confirmAction.mockResolvedValue(true);
     const { onOpenChange } = renderDirtyDialog();
 
     fireEvent.click(screen.getByRole("button", { name: "Cancelar" }));
@@ -91,6 +100,6 @@ describe("EditEntryDialog unsaved changes", () => {
       );
       expect(onOpenChange).toHaveBeenCalledWith(false);
     });
-    expect(window.confirm).not.toHaveBeenCalled();
+    expect(mocks.confirmAction).not.toHaveBeenCalled();
   });
 });

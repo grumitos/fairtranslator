@@ -1,19 +1,15 @@
 {
   "title": "Glosario",
-  "description": "Términos para mantener consistencia.",
   "source": "Original",
   "target": "Traducción",
   "caseSensitive": "Distinguir mayúsculas/minúsculas",
-  "addTitle": "Nuevo término",
   "add": "Agregar",
   "edit": "Editar término",
   "remove": "Eliminar término",
   "update": "Actualizar",
   "empty": "Aún no hay términos",
-  "import": "Importar",
   "export": "Exportar",
-  "actions": "Acciones",
-  "confirmDelete": "¿Seguro que quieres eliminar el término \"{{term}}\"?",
+  "confirmDelete": "¿Eliminar el término «{{term}}»?",
   "addSuccess": "Término agregado",
   "addFailed": "No se pudo agregar el término",
   "updateSuccess": "Término actualizado",
@@ -21,8 +17,7 @@
   "removeSuccess": "Término eliminado",
   "removeFailed": "No se pudo eliminar el término",
   "duplicate": "Este término ya existe en el glosario",
-  "sourcePlaceholder": "Original (p. ej., 勇者)",
-  "targetPlaceholder": "Traducción (p. ej., Héroe)",
-  "totalTerms": "Términos: {{count}}",
-  "caseSensitiveBadge": "Aa"
+  "filter": "Filtrar",
+  "totalTerms_one": "{{count}} término",
+  "totalTerms_other": "{{count}} términos"
 }

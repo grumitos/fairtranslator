@@ -1,0 +1,174 @@
+/*
+ * Design kit 0.1.1 - Tailwind 4 + shadcn bridge.
+ *
+ * For apps built with Tailwind CSS 4 and shadcn/ui (FairTranslator). It points the variables that
+ * shadcn components read at the kit tokens and exposes the tokens as Tailwind utilities
+ * (bg-surface-1, text-ink-3, border-line-strong, bg-brand...). Colors are always kit tokens; the
+ * only literals are the ones DESIGN.md section 13 asks for: radii, fonts and composite shadows.
+ *
+ * Import order in the app's entry CSS:
+ *   @import "tailwindcss";
+ *   @import "@fontsource-variable/geist";           each app imports its fonts
+ *   @import "@fontsource-variable/geist-mono";
+ *   @import "<kit>/tokens.css";                      unlayered and first
+ *   @import "<app>/brand.css";                       unlayered: --brand* and app-only tokens
+ *   @import "<kit>/tailwind.css";
+ *   @import "<kit>/base.css" layer(base);
+ *   @import "<kit>/components.css" layer(components);
+ *
+ * The app must not set scrollbar-color or scrollbar-width: base.css draws the scrollbars, and
+ * Chromium 121+ ignores ::-webkit-scrollbar once either is set.
+ */
+
+/* Dark only: shadcn's dark: variants always apply. */
+@custom-variant dark (&);
+
+/* shadcn/ui variables. `primary` is the ink-filled button; the brand has its own utilities and
+   is reserved for the closed list of uses in DESIGN.md. */
+:root {
+  --background: var(--bg-0);
+  --foreground: var(--ink);
+  --card: var(--bg-1);
+  --card-foreground: var(--ink);
+  --popover: var(--bg-2);
+  --popover-foreground: var(--ink);
+  --primary: var(--ink);
+  --primary-foreground: var(--bg-0);
+  --secondary: var(--bg-3);
+  --secondary-foreground: var(--ink);
+  --muted: var(--bg-2);
+  --muted-foreground: var(--ink-3);
+  --accent: var(--bg-3);
+  --accent-foreground: var(--ink);
+  --destructive: var(--danger);
+  --destructive-foreground: var(--bg-0);
+  --success-foreground: var(--bg-0);
+  --warning-foreground: var(--bg-0);
+  --info-foreground: var(--bg-0);
+  --border: var(--line);
+  --input: var(--line-field);
+  --ring: var(--focus-ring-color);
+  --chart-1: var(--brand);
+  --chart-2: var(--ink);
+  --chart-3: var(--ink-2);
+  --chart-4: var(--ink-3);
+  --chart-5: var(--ink-4);
+  --sidebar: var(--bg-1);
+  --sidebar-foreground: var(--ink);
+  --sidebar-primary: var(--ink);
+  --sidebar-primary-foreground: var(--bg-0);
+  --sidebar-accent: var(--bg-3);
+  --sidebar-accent-foreground: var(--ink);
+  --sidebar-border: var(--line);
+  --sidebar-ring: var(--focus-ring-color);
+}
+
+@theme inline {
+  /* shadcn color utilities */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-info-foreground: var(--info-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  /* Kit tokens as utilities. Surfaces are `surface-*` so `bg-surface-1` reads naturally. */
+  --color-surface-0: var(--bg-0);
+  --color-surface-1: var(--bg-1);
+  --color-surface-2: var(--bg-2);
+  --color-surface-3: var(--bg-3);
+  --color-surface-4: var(--bg-4);
+  --color-surface-field: var(--bg-field);
+  --color-scrim: var(--scrim);
+  --color-selection: var(--selection);
+  --color-line: var(--line);
+  --color-line-soft: var(--line-soft);
+  --color-line-field: var(--line-field);
+  --color-line-strong: var(--line-strong);
+  --color-line-chip: var(--line-chip);
+  --color-line-dim: var(--line-dim);
+  --color-line-track: var(--line-track);
+  --color-ink: var(--ink);
+  --color-ink-hover: var(--ink-hover);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-ink-4: var(--ink-4);
+  --color-brand: var(--brand);
+  --color-brand-ink: var(--brand-ink);
+  --color-brand-text: var(--brand-text);
+  --color-brand-soft: var(--brand-soft);
+  --color-brand-line: var(--brand-line);
+  --color-success: var(--success);
+  --color-success-bg: var(--success-bg);
+  --color-success-line: var(--success-line);
+  --color-danger: var(--danger);
+  --color-danger-bg: var(--danger-bg);
+  --color-danger-line: var(--danger-line);
+  --color-warning: var(--warning);
+  --color-warning-bg: var(--warning-bg);
+  --color-warning-line: var(--warning-line);
+  --color-info: var(--info);
+  --color-info-bg: var(--info-bg);
+  --color-info-line: var(--info-line);
+
+  /* Radii. The kit's --radius* are absolute and share names with Tailwind's theme, so the scale
+     is inlined here instead of derived: rounded-sm 4 (chips), rounded-md 6 (compact controls),
+     rounded-lg 7 (34px controls), rounded-xl 10 (menus, dialogs, toasts). */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 7px;
+  --radius-xl: 10px;
+
+  /* Motion: ease-enter for entrances, ease-exit for exits; durations use duration-(--motion-*). */
+  --ease-enter: var(--motion-ease-enter);
+  --ease-exit: var(--motion-ease-exit);
+
+  /* Composite shadows. The kit's --shadow-drawer is a color, so these use other names. */
+  --shadow-drawer-left: -24px 0 48px var(--shadow-drawer);
+  --shadow-drawer-right: 24px 0 48px var(--shadow-drawer);
+  --shadow-popover: 0 12px 32px rgb(0 0 0 / 0.45);
+}
+
+@theme {
+  /* Same stacks as the kit's --font-sans and --font-mono. Tailwind's font theme shares their
+     names, so they are repeated literally rather than referenced (a self-reference is invalid). */
+  --font-sans: "Geist Variable", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", "Cascadia Mono", Consolas, ui-monospace, monospace;
+
+  /* Dense tool scale: text-sm is the kit's 13px body. */
+  --text-xs: 0.75rem;
+  --text-xs--line-height: 1rem;
+  --text-sm: 0.8125rem;
+  --text-sm--line-height: 1.25rem;
+  --text-base: 0.875rem;
+  --text-base--line-height: 1.375rem;
+}

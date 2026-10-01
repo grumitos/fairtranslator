@@ -1,16 +1,18 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import i18n from "@/lib/i18n";
-import { GlossaryPanel } from "@/components/layout/GlossaryPanel";
+import { ContextPanel } from "@/components/layout/ContextPanel";
 import { useProjectStore } from "@/stores/projectStore";
 import type { Project } from "@/types/domain";
 
 const mocks = vi.hoisted(() => ({
+  confirmAction: vi.fn(),
   glossaryAdd: vi.fn(),
   glossaryUpdate: vi.fn(),
   glossaryRemove: vi.fn(),
   glossaryList: vi.fn(),
 }));
 
+vi.mock("@/components/common/ConfirmDialog", () => ({ confirmAction: mocks.confirmAction }));
 vi.mock("@/lib/ipc", () => mocks);
 vi.mock("@/components/ui/scroll-area", () => ({
   ScrollArea: ({ children, className }: { children: React.ReactNode; className?: string }) => (
@@ -32,12 +34,13 @@ const project: Project = {
   updatedAt: "2026-01-01T00:00:00.000Z",
 };
 
-describe("GlossaryPanel deletion", () => {
+describe("Glossary tab of the context panel", () => {
   beforeEach(async () => {
     await i18n.changeLanguage("es");
     useProjectStore.getState().reset();
     useProjectStore.getState().setProject(project, { markDirty: false });
     mocks.glossaryRemove.mockReset();
+    mocks.confirmAction.mockReset();
     mocks.glossaryRemove.mockResolvedValue([]);
   });
 
@@ -48,15 +51,16 @@ describe("GlossaryPanel deletion", () => {
   });
 
   it("conserva el término y no llama IPC cuando se cancela", async () => {
-    vi.spyOn(window, "confirm").mockReturnValue(false);
-    render(<GlossaryPanel open onOpenChange={() => undefined} />);
+    mocks.confirmAction.mockResolvedValue(false);
+    render(<ContextPanel open onOpenChange={() => undefined} tab="glossary" onTabChange={() => undefined} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Eliminar término: Hero" }));
 
     await waitFor(() => {
-      expect(window.confirm).toHaveBeenCalledWith(
-        "¿Seguro que quieres eliminar el término \"Hero\"?",
-      );
+      expect(mocks.confirmAction).toHaveBeenCalledWith(expect.objectContaining({
+        message: "¿Eliminar el término «Hero»?",
+        destructive: true,
+      }));
     });
     expect(mocks.glossaryRemove).not.toHaveBeenCalled();
     expect(screen.getByText("Hero")).toBeInTheDocument();
@@ -64,8 +68,8 @@ describe("GlossaryPanel deletion", () => {
   });
 
   it("elimina el término una sola vez cuando se confirma", async () => {
-    vi.spyOn(window, "confirm").mockReturnValue(true);
-    render(<GlossaryPanel open onOpenChange={() => undefined} />);
+    mocks.confirmAction.mockResolvedValue(true);
+    render(<ContextPanel open onOpenChange={() => undefined} tab="glossary" onTabChange={() => undefined} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Eliminar término: Hero" }));
 

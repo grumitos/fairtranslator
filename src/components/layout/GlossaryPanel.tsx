@@ -1,23 +1,13 @@
-import { type CSSProperties, useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Search } from "lucide-react";
 import { toast } from "sonner";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
+import { SheetBody } from "@/components/ui/sheet";
 import { useGlossary } from "@/hooks/useGlossary";
 import { GlossaryAddForm } from "@/components/layout/glossary/GlossaryAddForm";
 import { GlossaryTermRow } from "@/components/layout/glossary/GlossaryTermRow";
 import type { GlossaryTerm } from "@/types/domain";
-
-interface GlossaryPanelProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}
+import { confirmAction } from "@/components/common/ConfirmDialog";
 
 function getGlossaryErrorMessage(error: unknown, duplicateMessage: string) {
   const message = error instanceof Error ? error.message : String(error);
@@ -26,7 +16,8 @@ function getGlossaryErrorMessage(error: unknown, duplicateMessage: string) {
     : message;
 }
 
-export function GlossaryPanel({ open, onOpenChange }: GlossaryPanelProps) {
+// Pestaña «Glosario» del panel de contexto: alta en una fila, filtro y lista plana de términos.
+export function GlossaryEditor() {
   const { t } = useTranslation("glossary");
   const { glossary, add, remove, update, isLoading } = useGlossary();
   const [newSource, setNewSource] = useState("");
@@ -35,6 +26,15 @@ export function GlossaryPanel({ open, onOpenChange }: GlossaryPanelProps) {
   const [editingSource, setEditingSource] = useState<string | null>(null);
   const [editTarget, setEditTarget] = useState("");
   const [editCaseSensitive, setEditCaseSensitive] = useState(true);
+  const [filter, setFilter] = useState("");
+
+  const visibleTerms = useMemo(() => {
+    const query = filter.trim().toLowerCase();
+    if (!query) return glossary;
+    return glossary.filter(
+      (term) => term.source.toLowerCase().includes(query) || term.target.toLowerCase().includes(query),
+    );
+  }, [filter, glossary]);
 
   const handleAdd = useCallback(async () => {
     if (!newSource.trim() || !newTarget.trim()) {
@@ -56,9 +56,12 @@ export function GlossaryPanel({ open, onOpenChange }: GlossaryPanelProps) {
 
   const handleRemove = useCallback(
     async (source: string) => {
-      if (!window.confirm(t("confirmDelete", { term: source }))) {
-        return;
-      }
+      const confirmed = await confirmAction({
+        message: t("confirmDelete", { term: source }),
+        confirmLabel: t("remove"),
+        destructive: true,
+      });
+      if (!confirmed) return;
       try {
         await remove(source);
         toast.success(t("removeSuccess"));
@@ -94,57 +97,53 @@ export function GlossaryPanel({ open, onOpenChange }: GlossaryPanelProps) {
   }, [editingSource, editTarget, editCaseSensitive, update, t]);
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent style={{ "--sheet-width": "480px" } as CSSProperties}>
-        <SheetHeader>
-          <SheetTitle>{t("title")}</SheetTitle>
-          <SheetDescription className="sr-only">{t("description")}</SheetDescription>
-        </SheetHeader>
+    <SheetBody className="gap-3 pt-4">
+      <GlossaryAddForm
+        source={newSource}
+        target={newTarget}
+        caseSensitive={newCaseSensitive}
+        isLoading={isLoading}
+        onSourceChange={setNewSource}
+        onTargetChange={setNewTarget}
+        onCaseSensitiveChange={setNewCaseSensitive}
+        onAdd={handleAdd}
+      />
 
-        <div className="space-y-4 px-4 pb-4">
-          <GlossaryAddForm
-            source={newSource}
-            target={newTarget}
-            caseSensitive={newCaseSensitive}
-            isLoading={isLoading}
-            onSourceChange={setNewSource}
-            onTargetChange={setNewTarget}
-            onCaseSensitiveChange={setNewCaseSensitive}
-            onAdd={handleAdd}
-          />
+      <label className="flex h-8 items-center gap-2 border-b border-line px-1">
+        <Search aria-hidden="true" className="size-3.5 shrink-0 text-ink-3" strokeWidth={1.8} />
+        <input
+          type="search"
+          value={filter}
+          onChange={(event) => setFilter(event.target.value)}
+          placeholder={t("filter")}
+          aria-label={t("filter")}
+          className="h-7 min-w-0 flex-1 bg-transparent text-sm text-ink outline-none placeholder:text-ink-4"
+        />
+        <span className="font-mono text-xs text-ink-4">{t("totalTerms", { count: glossary.length })}</span>
+      </label>
 
-          <p className="text-xs text-muted-foreground">
-            {t("totalTerms", { count: glossary.length })}
-          </p>
-
-          <ScrollArea className="h-[calc(100vh-320px)]">
-            {glossary.length === 0 ? (
-              <p className="py-8 text-center text-sm text-muted-foreground">
-                {t("empty")}
-              </p>
-            ) : (
-              <div className="space-y-2">
-                {glossary.map((term) => (
-                  <GlossaryTermRow
-                    key={term.source}
-                    term={term}
-                    isEditing={editingSource === term.source}
-                    editTarget={editTarget}
-                    editCaseSensitive={editCaseSensitive}
-                    isLoading={isLoading}
-                    onEditTargetChange={setEditTarget}
-                    onEditCaseSensitiveChange={setEditCaseSensitive}
-                    onStartEdit={handleStartEdit}
-                    onCancelEdit={() => setEditingSource(null)}
-                    onUpdate={handleUpdate}
-                    onRemove={handleRemove}
-                  />
-                ))}
-              </div>
-            )}
-          </ScrollArea>
-        </div>
-      </SheetContent>
-    </Sheet>
+      {glossary.length === 0 ? (
+        <p className="ft-empty-state text-sm">{t("empty")}</p>
+      ) : (
+        <ul className="flex flex-col" aria-label={t("title")}>
+          {visibleTerms.map((term) => (
+            <GlossaryTermRow
+              key={term.source}
+              term={term}
+              isEditing={editingSource === term.source}
+              editTarget={editTarget}
+              editCaseSensitive={editCaseSensitive}
+              isLoading={isLoading}
+              onEditTargetChange={setEditTarget}
+              onEditCaseSensitiveChange={setEditCaseSensitive}
+              onStartEdit={handleStartEdit}
+              onCancelEdit={() => setEditingSource(null)}
+              onUpdate={handleUpdate}
+              onRemove={handleRemove}
+            />
+          ))}
+        </ul>
+      )}
+    </SheetBody>
   );
 }

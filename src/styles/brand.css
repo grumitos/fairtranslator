@@ -1,0 +1,16 @@
+/*
+ * FairTranslator sobre el kit compartido: solo el hueco de marca y los tokens propios de la app.
+ * Va después de kit/tokens.css. La marca se valida con `node <kit>/scripts/check.mjs`.
+ */
+:root {
+  /* Índigo «ventana RPG»: oklch(0.72 0.09 280). Solo en la acción principal, el progreso,
+     la pestaña activa y el estado final; nunca en el logo, el foco ni los estados. */
+  --brand: #999fdc;
+  --brand-ink: #111221;
+  --brand-text: #999fdc;
+  --brand-soft: rgba(153, 159, 220, 0.14);
+  --brand-line: rgba(153, 159, 220, 0.4);
+
+  /* Texto original de los juegos: Geist no trae CJK, así que cae en las fuentes del sistema. */
+  --font-cjk: "Geist Variable", "Yu Gothic UI", "Meiryo", "Microsoft YaHei UI", "Malgun Gothic", "Segoe UI", system-ui, sans-serif;
+}

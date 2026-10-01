@@ -4,26 +4,16 @@ import { RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { useApiKeys } from "@/hooks/useApiKeys";
 import type { ApiKeyInfo, CodexRuntimeStatus, ProviderModel, ProviderType } from "@/types/domain";
+import { confirmAction } from "@/components/common/ConfirmDialog";
 
 interface ApiKeySectionProps {
   provider: ProviderType;
 }
 
 function isConfigured(info: ApiKeyInfo): boolean {
-  return (
-    info.isConfigured ??
-    Boolean(
-      info.model ||
-        info.endpoint ||
-        info.organization ||
-        info.project ||
-        info.commandPath ||
-        info.profile,
-    )
-  );
+  return info.isConfigured;
 }
 
 export function ApiKeySection({ provider }: ApiKeySectionProps) {
@@ -252,9 +242,12 @@ export function ApiKeySection({ provider }: ApiKeySectionProps) {
   ]);
 
   const handleRemove = useCallback(async () => {
-    if (!window.confirm(t("apiKeys.removeConfirm"))) {
-      return;
-    }
+    const confirmed = await confirmAction({
+      message: t("apiKeys.removeConfirm"),
+      confirmLabel: t("apiKeys.remove"),
+      destructive: true,
+    });
+    if (!confirmed) return;
     try {
       await remove(provider);
       setApiKey("");
@@ -329,31 +322,51 @@ export function ApiKeySection({ provider }: ApiKeySectionProps) {
   const canSave = isCodex || hasConfig || Boolean(apiKey);
   const canRefreshModels = isCodex || hasConfig || Boolean(apiKey);
   const showValidate = isCodex || hasConfig;
+  const codexSourceKey = codexStatus
+    ? codexStatus.commandSource === "sidecar"
+      ? "apiKeys.codex.sourceShort.sidecar"
+      : codexStatus.commandSource === "configured"
+        ? "apiKeys.codex.sourceShort.configured"
+        : "apiKeys.codex.sourceShort.path"
+    : null;
 
   return (
-    <div className="space-y-5">
-      <div
-        className="flex items-center gap-2 rounded-md border bg-muted/35 px-3 py-2 text-xs"
-        role="status"
-      >
-        <span
-          aria-hidden="true"
-          className={`size-2 rounded-full ${hasConfig ? "bg-success" : "bg-muted-foreground/45"}`}
-        />
-        <span className={hasConfig ? "font-medium text-success" : "text-muted-foreground"}>
-          {t(
-            hasConfig
-              ? "apiKeys.configured"
-              : isCodex
-                ? "apiKeys.notConfigured"
-                : "apiKeys.noKey",
+    <div className="flex flex-col gap-3.5">
+      {isCodex && codexStatus && (
+        <dl className="grid grid-cols-[96px_minmax(0,1fr)] gap-y-2 text-xs" role="status">
+          <dt className="text-ink-3">{t("apiKeys.status")}</dt>
+          <dd className={`m-0 ${codexStatusTone}`}>{t(codexStatusLabelKey ?? "apiKeys.codex.statusError")}</dd>
+          {codexSourceKey && (
+            <>
+              <dt className="text-ink-3">{t("apiKeys.codex.source")}</dt>
+              <dd className="m-0 text-ink-2">{t(codexSourceKey)}</dd>
+            </>
           )}
-        </span>
-      </div>
+          {(codexStatus.resolvedCommandPath || codexStatus.commandSource !== "sidecar") && (
+            <>
+              <dt className="text-ink-3">{t("apiKeys.codex.resolvedPathLabel")}</dt>
+              <dd className="m-0 truncate font-mono text-ink-2" title={codexStatus.resolvedCommandPath ?? codexStatus.effectiveCommandPath}>
+                {codexStatus.resolvedCommandPath ?? codexStatus.effectiveCommandPath}
+              </dd>
+            </>
+          )}
+          {codexStatus.version && (
+            <>
+              <dt className="text-ink-3">{t("apiKeys.codex.versionLabel")}</dt>
+              <dd className="m-0 font-mono text-ink-2">{codexStatus.version}</dd>
+            </>
+          )}
+          {codexStatus.state === "error" && (
+            <dd className="col-span-2 m-0 text-danger">{codexStatus.message}</dd>
+          )}
+        </dl>
+      )}
 
       {!isCodex && (
-        <div className="space-y-1.5">
-          <Label htmlFor={`${providerKey}-api-key`}>{t("apiKeys.apiKey")}</Label>
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor={`${providerKey}-api-key`} className="text-xs text-ink-3">
+            {t("apiKeys.apiKey")}
+          </label>
           <Input
             id={`${providerKey}-api-key`}
             type="password"
@@ -363,54 +376,45 @@ export function ApiKeySection({ provider }: ApiKeySectionProps) {
             spellCheck={false}
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
-            placeholder={
-              hasConfig
-                ? t("apiKeys.savedKeyPlaceholder")
-                : t(`apiKeys.${providerKey}.placeholder`)
-            }
+            placeholder={hasConfig ? t("apiKeys.savedKeyPlaceholder") : t(`apiKeys.${providerKey}.placeholder`)}
+            className="font-mono text-[12.5px]"
           />
-          {hasConfig && (
-            <p className="text-xs text-muted-foreground">{t("apiKeys.savedKeyHint")}</p>
-          )}
-          {isOpenCode && (
-            <p className="text-xs leading-5 text-muted-foreground">
-              {t("apiKeys.opencode.authNote")}
-            </p>
-          )}
         </div>
       )}
 
       {supportsModel && (
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between gap-2">
-            <Label htmlFor={`${providerKey}-model`}>
-              {t("apiKeys.model")}
-            </Label>
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor={`${providerKey}-model`} className="text-xs text-ink-3">
+            {t("apiKeys.model")}
+          </label>
+          <div className="flex gap-2">
+            <Input
+              id={`${providerKey}-model`}
+              name={`${providerKey}-model`}
+              list={modelOptions.length > 0 ? `${providerKey}-models` : undefined}
+              autoComplete="off"
+              autoCapitalize="none"
+              spellCheck={false}
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              placeholder={isCodex ? t("apiKeys.codex.modelDefault") : t("apiKeys.modelPlaceholder")}
+              className="font-mono text-[12.5px]"
+            />
             {supportsModelRefresh && (
               <Button
                 type="button"
-                size="sm"
+                size="icon"
                 variant="outline"
+                className="size-8"
                 onClick={() => void handleRefreshModels()}
                 disabled={isLoading || isRefreshingModels || !canRefreshModels}
-                className="h-7 gap-1 px-2 text-xs"
+                aria-label={t("apiKeys.models.refresh")}
+                title={t("apiKeys.models.refresh")}
               >
-                <RefreshCw className={`size-3.5 ${isRefreshingModels ? "animate-spin" : ""}`} />
-                {t("apiKeys.models.refresh")}
+                <RefreshCw className={isRefreshingModels ? "animate-spin" : undefined} strokeWidth={1.7} />
               </Button>
             )}
           </div>
-          <Input
-            id={`${providerKey}-model`}
-            name={`${providerKey}-model`}
-            list={modelOptions.length > 0 ? `${providerKey}-models` : undefined}
-            autoComplete="off"
-            autoCapitalize="none"
-            spellCheck={false}
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-            placeholder={t("apiKeys.modelPlaceholder")}
-          />
           {modelOptions.length > 0 && (
             <datalist id={`${providerKey}-models`}>
               {modelOptions.map((option) => (
@@ -425,8 +429,10 @@ export function ApiKeySection({ provider }: ApiKeySectionProps) {
 
       {isCodex && (
         <>
-          <div className="space-y-1.5">
-            <Label htmlFor="codex-command-path">{t("apiKeys.codex.commandPath")}</Label>
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="codex-command-path" className="text-xs text-ink-3">
+              {t("apiKeys.codex.commandPath")}
+            </label>
             <Input
               id="codex-command-path"
               name="codex-command-path"
@@ -434,11 +440,14 @@ export function ApiKeySection({ provider }: ApiKeySectionProps) {
               spellCheck={false}
               value={commandPath}
               onChange={(e) => setCommandPath(e.target.value)}
-              placeholder={t("apiKeys.codex.commandPathPlaceholder")}
+              placeholder="PATH"
+              className="font-mono text-[12.5px]"
             />
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="codex-profile">{t("apiKeys.codex.profile")}</Label>
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="codex-profile" className="text-xs text-ink-3">
+              {t("apiKeys.codex.profile")}
+            </label>
             <Input
               id="codex-profile"
               name="codex-profile"
@@ -446,73 +455,42 @@ export function ApiKeySection({ provider }: ApiKeySectionProps) {
               spellCheck={false}
               value={profile}
               onChange={(e) => setProfile(e.target.value)}
-              placeholder={t("apiKeys.codex.profilePlaceholder")}
+              placeholder={t("apiKeys.codex.profileDefault")}
             />
           </div>
-          <p className="text-xs leading-5 text-muted-foreground">{t("apiKeys.codex.authNote")}</p>
           <div className="flex flex-wrap gap-2">
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={() => void handleCodexLogin(false)}
-              disabled={isLoading}
-              className="text-xs"
-            >
+            <Button size="sm" variant="outline" onClick={() => void handleCodexLogin(false)} disabled={isLoading}>
               {t("apiKeys.codex.login")}
             </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => void handleCodexLogin(true)}
-              disabled={isLoading}
-              className="text-xs"
-            >
+            <Button size="sm" variant="outline" onClick={() => void handleCodexLogin(true)} disabled={isLoading}>
               {t("apiKeys.codex.deviceLogin")}
             </Button>
           </div>
-          {codexStatus && (
-            <div className="rounded-md border bg-muted/30 p-3 text-xs">
-              <p className={`font-medium ${codexStatusTone}`}>
-                {t(codexStatusLabelKey ?? "apiKeys.codex.statusError")}
-              </p>
-              <p className="mt-1 text-muted-foreground">
-                {t(
-                  codexStatus.commandSource === "sidecar"
-                    ? "apiKeys.codex.sourceSidecar"
-                    : codexStatus.commandSource === "configured"
-                      ? "apiKeys.codex.sourceConfigured"
-                      : "apiKeys.codex.sourcePath",
-                )}
-              </p>
-              {(codexStatus.resolvedCommandPath || codexStatus.commandSource !== "sidecar") && (
-                <p className="text-muted-foreground">
-                  {t("apiKeys.codex.resolvedPathLabel")}:{" "}
-                  {codexStatus.resolvedCommandPath ?? codexStatus.effectiveCommandPath}
-                </p>
-              )}
-              {codexStatus.version && (
-                <p className="text-muted-foreground">
-                  {t("apiKeys.codex.versionLabel")}: {codexStatus.version}
-                </p>
-              )}
-              {codexStatus.state === "error" && (
-                <p className="text-muted-foreground">{codexStatus.message}</p>
-              )}
-            </div>
-          )}
         </>
       )}
 
       {supportsEndpoint && (
-        <details className="rounded-md border bg-muted/20 px-3 py-2">
-          <summary className="ft-focus -mx-1 cursor-pointer rounded px-1 text-sm font-medium text-foreground">
+        <details className="group">
+          <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded-sm text-xs text-ink-3 outline-none hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink [&::-webkit-details-marker]:hidden">
+            <svg
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+              className="size-3 fill-none stroke-current transition-transform duration-(--motion-fast) group-open:rotate-90"
+              strokeWidth={2}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M9 6l6 6-6 6" />
+            </svg>
             {t("apiKeys.advanced")}
           </summary>
-          <div className="mt-3 space-y-3 border-t pt-3">
+          <div className="mt-3 flex flex-col gap-3.5">
             {provider === "openai" && (
               <>
-                <div className="space-y-1.5">
-                  <Label htmlFor="openai-organization">{t("apiKeys.openai.organization")}</Label>
+                <div className="flex flex-col gap-1.5">
+                  <label htmlFor="openai-organization" className="text-xs text-ink-3">
+                    {t("apiKeys.openai.organization")}
+                  </label>
                   <Input
                     id="openai-organization"
                     name="openai-organization"
@@ -520,11 +498,14 @@ export function ApiKeySection({ provider }: ApiKeySectionProps) {
                     spellCheck={false}
                     value={organization}
                     onChange={(e) => setOrganization(e.target.value)}
-                    placeholder={t("apiKeys.openai.organizationPlaceholder")}
+                    placeholder={t("apiKeys.optional")}
+                    className="font-mono text-[12.5px]"
                   />
                 </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="openai-project">{t("apiKeys.openai.project")}</Label>
+                <div className="flex flex-col gap-1.5">
+                  <label htmlFor="openai-project" className="text-xs text-ink-3">
+                    {t("apiKeys.openai.project")}
+                  </label>
                   <Input
                     id="openai-project"
                     name="openai-project"
@@ -532,16 +513,16 @@ export function ApiKeySection({ provider }: ApiKeySectionProps) {
                     spellCheck={false}
                     value={project}
                     onChange={(e) => setProject(e.target.value)}
-                    placeholder={t("apiKeys.openai.projectPlaceholder")}
+                    placeholder={t("apiKeys.optional")}
+                    className="font-mono text-[12.5px]"
                   />
                 </div>
-                <p className="text-xs leading-5 text-muted-foreground">
-                  {t("apiKeys.openai.authNote")}
-                </p>
               </>
             )}
-            <div className="space-y-1.5">
-              <Label htmlFor={`${providerKey}-endpoint`}>{t("apiKeys.endpoint")}</Label>
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor={`${providerKey}-endpoint`} className="text-xs text-ink-3">
+                {t("apiKeys.endpoint")}
+              </label>
               <Input
                 id={`${providerKey}-endpoint`}
                 name={`${providerKey}-endpoint`}
@@ -552,43 +533,28 @@ export function ApiKeySection({ provider }: ApiKeySectionProps) {
                 spellCheck={false}
                 value={endpoint}
                 onChange={(e) => setEndpoint(e.target.value)}
-                placeholder={
-                  isOpenCode
-                    ? t("apiKeys.opencode.endpointPlaceholder")
-                    : t("apiKeys.endpointPlaceholder")
-                }
+                placeholder={isOpenCode ? t("apiKeys.opencode.endpointPlaceholder") : t("apiKeys.optional")}
+                className="font-mono text-[12.5px]"
               />
             </div>
           </div>
         </details>
       )}
 
-      <div className="flex flex-wrap gap-2 border-t pt-4">
-        <Button size="sm" onClick={handleSave} disabled={!canSave || isLoading} className="text-xs">
-          {t("apiKeys.save")}
-        </Button>
+      <div className="flex flex-wrap items-center gap-2 pt-1">
         {showValidate && (
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={handleValidate}
-            disabled={isLoading}
-            className="text-xs"
-          >
+          <Button size="sm" variant="outline" onClick={handleValidate} disabled={isLoading}>
             {isCodex ? t("apiKeys.codex.checkStatus") : t("apiKeys.validate")}
           </Button>
         )}
         {hasConfig && (
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={handleRemove}
-            disabled={isLoading}
-            className="text-xs text-destructive hover:text-destructive"
-          >
+          <Button size="sm" variant="destructive" onClick={handleRemove} disabled={isLoading}>
             {t("apiKeys.remove")}
           </Button>
         )}
+        <Button size="sm" onClick={handleSave} disabled={!canSave || isLoading} className="ml-auto">
+          {t("apiKeys.save")}
+        </Button>
       </div>
     </div>
   );

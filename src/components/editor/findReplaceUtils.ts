@@ -1,7 +1,11 @@
+import type { TranslationEntry } from "@/types/domain";
+
 /** Represents one match: which entry and which field */
 export interface FindMatch {
   filePath: string;
   entryId: string;
+  /** The entry when the match was computed; matches are recomputed on every project change. */
+  entry: TranslationEntry;
   field: "original" | "translation";
   /** Flat index in data array for scrolling */
   dataIndex: number;

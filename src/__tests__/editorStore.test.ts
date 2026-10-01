@@ -29,6 +29,17 @@ describe("editorStore", () => {
     expect(useEditorStore.getState().currentMatchIndex).toBe(2);
     expect(useEditorStore.getState().matchNavigationVersion).toBe(2);
 
+    // Replacing the last match shrinks the list: the current match must stay inside it.
+    act(() => {
+      useEditorStore.getState().setMatchCount(2);
+    });
+    expect(useEditorStore.getState().currentMatchIndex).toBe(1);
+
+    act(() => {
+      useEditorStore.getState().setMatchCount(0);
+    });
+    expect(useEditorStore.getState().currentMatchIndex).toBe(0);
+
     act(() => {
       useEditorStore.getState().setShowFindReplace(false);
     });

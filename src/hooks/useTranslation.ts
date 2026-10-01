@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { useProjectStore } from "@/stores/projectStore";
 import * as ipc from "@/lib/ipc";
+import { refreshProjectFromBackend } from "@/lib/projectSync";
 import type { BatchProgress, ProviderType } from "@/types/domain";
 
 function canListenToTauriEvents(): boolean {
@@ -35,7 +35,6 @@ export function useTranslation() {
   const [isTranslating, setIsTranslating] = useState(false);
   const [progress, setProgress] = useState<BatchProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const replaceProject = useProjectStore((s) => s.replaceProject);
 
   // Listen for progress and completion events
   useEffect(() => {
@@ -43,40 +42,45 @@ export function useTranslation() {
       return;
     }
 
+    // listen() resolves asynchronously: a listener that resolves after cleanup (StrictMode's
+    // double mount, fast unmount) must be released immediately or it would live forever.
+    let disposed = false;
     const unlisteners: UnlistenFn[] = [];
 
+    const register = async (
+      eventName: string,
+      handler: (payload: BatchProgress) => void,
+    ) => {
+      const unlisten = await listen<BatchProgress>(eventName, (event) => handler(event.payload));
+      if (disposed) {
+        unlisten();
+      } else {
+        unlisteners.push(unlisten);
+      }
+    };
+
     const setup = async () => {
-      const unProgress = await listen<BatchProgress>(
-        "translation:progress",
-        (event) => {
-          setProgress(event.payload);
-        },
-      );
-      unlisteners.push(unProgress);
+      await register("translation:progress", (payload) => {
+        setProgress(payload);
+      });
+      if (disposed) {
+        return;
+      }
+      await register("translation:complete", (payload) => {
+        setProgress(payload);
+        setIsTranslating(false);
 
-      const unComplete = await listen<BatchProgress>(
-        "translation:complete",
-        (event) => {
-          setProgress(event.payload);
-          setIsTranslating(false);
-
-          // Refresh project state from backend to get updated translations
-          void ipc.projectGet()
-            .then((proj) => {
-              if (proj) {
-                replaceProject(proj, { markDirty: true });
-              }
-            })
-            .catch((refreshError) => {
-              const msg =
-                refreshError instanceof Error
-                  ? refreshError.message
-                  : String(refreshError);
-              setError(msg);
-            });
-        },
-      );
-      unlisteners.push(unComplete);
+        // Refresh project state from backend to get updated translations. A run that translated
+        // nothing left the project as it was, so it must not turn a clean project dirty.
+        void refreshProjectFromBackend(payload.entriesTranslated > 0 ? true : "preserve")
+          .catch((refreshError) => {
+            const msg =
+              refreshError instanceof Error
+                ? refreshError.message
+                : String(refreshError);
+            setError(msg);
+          });
+      });
     };
 
     void setup().catch((listenError) => {
@@ -88,9 +92,10 @@ export function useTranslation() {
     });
 
     return () => {
+      disposed = true;
       unlisteners.forEach((u) => u());
     };
-  }, [replaceProject]);
+  }, []);
 
   const startBatch = useCallback(
     async (provider: ProviderType, filePaths: string[] = [], model?: string) => {

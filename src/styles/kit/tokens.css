@@ -1,0 +1,102 @@
+/*
+ * Design kit 0.1.0 - tokens. Dark theme only.
+ *
+ * Values come from ChronoRift (src/styles.css). Import this file first, then base.css and
+ * components.css. Apps override only the brand slot (--brand*), in their own CSS after this import.
+ * `node scripts/check.mjs` validates the brand rules and the contrast of every text color.
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* Surfaces, darkest to lightest. */
+  --bg-0: #0e0e10; /* Window and page background; also the Tauri window backgroundColor. */
+  --bg-1: #131315; /* Panels on the page: side column, drawer, card. */
+  --bg-2: #18181b; /* Hover fill of buttons and rows, segmented track, disabled button fill. */
+  --bg-3: #1e1e22; /* Selected row, icon-button hover, count pill, app-tile background. */
+  --bg-4: #2a2a30; /* Active segment, mini meter track, scrollbar thumb. */
+  --bg-field: var(--bg-2); /* Field surface: input, search, select, textarea. */
+  --tile: #202025; /* Image tile before its image paints (portrait, thumbnail). */
+  --tile-line: #2e2e34; /* Border of an image tile. */
+  --scrim: rgba(8, 8, 9, 0.62); /* Dims the content behind a drawer or dialog. */
+  --shadow-drawer: rgba(0, 0, 0, 0.45); /* Color of the drawer shadow (-24px 0 48px); a color, not a full shadow. */
+  --selection: rgba(237, 237, 239, 0.22); /* Text selection highlight: translucent ink. */
+
+  /* Lines: 1px borders and dividers. */
+  --line: #242428; /* Normal divider: bar and section edges, tab bar, table head, meter track. */
+  --line-soft: #1c1c20; /* Row separators inside lists, tables and step lists. */
+  --line-field: #2a2a30; /* Border of fields and of the drawer's edge. */
+  --line-strong: #33333a; /* Border of buttons; hover border of outlined pills; not-read-yet glyph. */
+  --line-chip: #55555d; /* Border of outline chips. */
+  --line-dim: #26262b; /* Border of what is off: disabled buttons, empty slots. */
+  --line-track: #3a3a42; /* Track of what is pending: pending step ring, spinner track. */
+
+  /* Inks: text and icons. */
+  --ink: #ededef; /* Primary text and icons, focus ring, logo, ink-filled button and chip. */
+  --ink-hover: #d9d9dc; /* Hover fill of the ink-filled button. */
+  --ink-2: #adadb4; /* Secondary text: values, icon buttons and window controls at rest. */
+  --ink-3: #8b8b93; /* Labels, captions, placeholders, inactive tabs; below 4.5:1 on --bg-4. */
+  --ink-4: #5c5c64; /* Disabled text and icons only: below 4.5:1 on purpose. */
+
+  /* Semantic states: the text color passes 4.5:1 on --bg-0 to --bg-3; -bg tints and -line outlines
+     a chip. Only for states, and always next to a word, letter or glyph: never the only signal. */
+  --success: #3dd68c; /* Done, ready, positive result. */
+  --success-bg: rgba(61, 214, 140, 0.12); /* Tint behind a success chip. */
+  --success-line: rgba(61, 214, 140, 0.35); /* Outline of a success chip. */
+  --danger: #ff8f8f; /* Error, failure, negative result. */
+  --danger-bg: rgba(229, 72, 77, 0.14); /* Tint behind a danger chip (from the deeper red #E5484D). */
+  --danger-line: rgba(229, 72, 77, 0.4); /* Outline of a danger chip. */
+  --warning: #ffc53d; /* Incomplete, blocked, unavailable: needs attention. */
+  --warning-bg: rgba(255, 197, 61, 0.12); /* Tint behind a warning chip. */
+  --warning-line: rgba(255, 197, 61, 0.35); /* Outline of a warning chip. */
+  --info: #70b8ff; /* In progress, neutral notice. */
+  --info-bg: rgba(112, 184, 255, 0.12); /* Tint behind an info element (new in the kit; ChronoRift has none). */
+  --info-line: rgba(112, 184, 255, 0.35); /* Outline of an info element (new in the kit). */
+
+  /* Brand slot. The kit's values are a neutral ink fallback so components work unbranded; each app
+     sets its own after importing this file. Closed list of uses: the one primary action of a view
+     (filled button), progress fills, the 2px active tab and nav indicator, the done step glyph.
+     Never logos, focus, states, links, hover or selection. */
+  --brand: var(--ink); /* Fill of the primary action, progress fills, active indicator, done glyph. */
+  --brand-ink: var(--bg-0); /* Text and icons on a --brand fill. */
+  --brand-text: var(--ink); /* Brand-colored text on --bg-0 to --bg-3; unused by kit components in 0.1.0. */
+  --brand-soft: rgba(237, 237, 239, 0.14); /* Brand tint behind content; unused by kit components in 0.1.0. */
+  --brand-line: rgba(237, 237, 239, 0.4); /* Brand outline; unused by kit components in 0.1.0. */
+
+  /* Radii: smaller controls take smaller radii; an outer radius is the inner one plus the padding. */
+  --radius-sm: 4px; /* Chips, slots, kbd, inline code. */
+  --radius-md: 6px; /* Compact controls, 24 to 32px: icon buttons, nav items, segments, selects. */
+  --radius: 7px; /* 34px controls and tiles: buttons, inputs, search, skip link. */
+  --radius-lg: 10px; /* Large surfaces: cards, menus, popovers, toasts. */
+  --radius-pill: 999px; /* Fully round ends: meters, count pills, switches. */
+
+  /* Spacing scale, named by its px value. Layout between components uses these steps. */
+  --space-2: 2px; /* Between segments, nav items and list rows. */
+  --space-4: 4px; /* Between tabs; label to value in tight stacks. */
+  --space-6: 6px; /* Icon to label in compact controls; between dots. */
+  --space-8: 8px; /* Between buttons of a group; list padding. */
+  --space-10: 10px; /* Between a heading and its tools. */
+  --space-12: 12px; /* Between rows of facts; inside a panel head. */
+  --space-16: 16px; /* Panel and bar padding; between groups. */
+  --space-20: 20px; /* Drawer body padding; between sections of a panel. */
+  --space-24: 24px; /* Page gutter; between regions of the title bar. */
+  --space-32: 32px; /* Between facts in a row; page top padding. */
+  --space-40: 40px; /* Between side-by-side panels. */
+
+  /* Fonts. Both are OFL-1.1 (see DESIGN.md) and are imported by each app. */
+  --font-sans: "Geist Variable", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; /* UI text. */
+  --font-mono: "Geist Mono Variable", "Cascadia Mono", Consolas, ui-monospace, monospace; /* Data: paths, builds, sizes, counts, ids. */
+
+  /* Motion. */
+  --motion-fast: 120ms; /* Hover and press color changes, image fade-in, reduced-motion fades. */
+  --motion-base: 180ms; /* Exits of large layers: drawer, scrim, splash. */
+  --motion-slow: 260ms; /* Entrances of large layers: drawer, scrim. */
+  --motion-ease: ease; /* Color and opacity changes. */
+  --motion-ease-enter: cubic-bezier(0.16, 1, 0.3, 1); /* Decelerates into place: entrances. */
+  --motion-ease-exit: cubic-bezier(0.4, 0, 1, 1); /* Accelerates away: exits. */
+
+  /* Focus. */
+  --focus-ring-width: 2px; /* Width of the :focus-visible outline. */
+  --focus-ring-color: var(--ink); /* Always ink, never brand. */
+  --focus-ring-offset: 2px; /* Outside the control; controls flush with an edge draw it inside. */
+}

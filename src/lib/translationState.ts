@@ -4,6 +4,11 @@ export function hasTranslationContent(translation: string): boolean {
   return translation.trim() !== "";
 }
 
+/** Estado tras editar el texto: una entrada sin traducir que recibe texto pasa a borrador; las demás lo conservan. */
+export function statusAfterEdit(current: EntryStatus, translation: string): EntryStatus {
+  return current === "untranslated" && hasTranslationContent(translation) ? "draft" : current;
+}
+
 export function normalizeEntryStatus(
   translation: string,
   status: EntryStatus,

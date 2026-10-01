@@ -1,29 +1,22 @@
 {
   "toolbar": {
-    "batchTranslate": "Traducción por lotes",
+    "translate": "Traducir",
     "findReplace": "Buscar y reemplazar",
     "findReplaceShortcut": "Ctrl+F / Ctrl+H",
-    "export": "Exportar",
-    "progress": "Progreso",
-    "save": "Guardar",
     "filter": "Filtrar",
-    "settings": "Configuración",
+    "settings": "Ajustes",
     "glossary": "Glosario",
-    "toggleTheme": "Cambiar tema",
     "styleGuide": "Guía de estilo"
   },
   "grid": {
     "original": "Original",
     "translation": "Traducción",
     "status": "Estado",
-    "file": "Archivo",
     "context": "Contexto",
     "notes": "Notas",
-    "notesPlaceholder": "Notas opcionales…",
     "label": "Tabla de traducciones",
     "noEntries": "No hay entradas para mostrar",
     "noFilteredEntries": "No hay resultados con estos filtros",
-    "selectFile": "Selecciona un archivo del panel lateral",
     "totalEntries": "{{count}} entradas",
     "totalEntries_one": "{{count}} entrada",
     "totalEntries_other": "{{count}} entradas",
@@ -45,17 +38,20 @@
     "replaceAll": "Reemplazar todas en Traducción",
     "previous": "Coincidencia anterior",
     "next": "Coincidencia siguiente",
-    "matches": "{{count}} coincidencias",
     "noMatches": "Sin coincidencias",
     "replaced": "{{count}} entradas actualizadas",
     "replaced_one": "{{count}} entrada actualizada",
     "replaced_other": "{{count}} entradas actualizadas",
     "invalidRegex": "Patrón no válido",
+    "invalidRegexShort": "No válido",
     "noReplaceMatches": "No hay coincidencias en Traducción",
     "noReplaceInOriginal": "La coincidencia actual está en Original; reemplazar solo aplica a Traducción.",
     "replaceFailed": "No se pudieron aplicar los reemplazos",
     "close": "Cerrar",
-    "currentMatch": "{{current}} de {{total}} coincidencias"
+    "currentMatch": "{{current}} de {{total}} coincidencias",
+    "currentMatchShort": "{{current}} de {{total}}",
+    "replaceShort": "Reemplazar",
+    "replaceAllShort": "Todas"
   },
   "status": {
     "untranslated": "Sin traducir",
@@ -68,9 +64,11 @@
     "files": "Archivos",
     "allEntries": "Todas las entradas",
     "filterByStatus": "Filtrar por estado",
-    "entries": "{{count}} entradas",
     "noFiles": "No hay archivos",
     "resize": "Redimensionar panel de archivos",
+    "progressOf": "{{translated}} de {{total}}",
+    "fileCount_one": "{{count}} archivo",
+    "fileCount_other": "{{count}} archivos",
     "groups": {
       "system": "Sistema",
       "database": "Base de datos",
@@ -78,51 +76,45 @@
       "maps": "Mapas"
     }
   },
+  "header": {
+    "entries": "Entradas",
+    "translated": "Traducidas",
+    "progress": "Progreso"
+  },
   "statusBar": {
-    "total": "Total: {{count}}",
-    "translated": "Traducidas: {{count}}",
-    "percentage": "{{percent}}% completado",
-    "percentageShort": "{{percent}}%",
-    "noProject": "Sin proyecto",
-    "engine": "Motor: {{engine}}"
+    "percentage": "{{percent}}% completado"
   },
   "batch": {
     "title": "Traducción por lotes",
-    "description": "Traduce entradas pendientes en lote.",
     "tabs": {
       "providers": "Proveedores",
       "externalAi": "IA externa"
     },
     "provider": "Proveedor",
-    "selectProvider": "Selecciona un proveedor",
     "providers": {
-      "modeTitle": "Proveedores integrados",
-      "modeDescription": "Traduce en FairTranslator y aplica los resultados a este proyecto.",
-      "modeFeatures": "El contexto varía por proveedor; revisa la nota antes de empezar.",
-      "capabilityTitle": "Nota del proveedor seleccionado",
       "configuration": {
         "notConfigured": "Sin configurar",
         "loadFailed": "No se pudo cargar la configuración",
         "action": "Configurar proveedor"
       },
-      "capabilities": {
-        "openai": "Usa todo el contexto del proyecto: guía de estilo, glosario, términos protegidos, memoria y lotes cercanos.",
-        "codex": "Usa el mismo contexto que OpenAI con el CLI local de Codex.",
-        "opencode": "Usa el contexto completo del proyecto mediante OpenCode Go y el modelo elegido para esta ejecución.",
-        "deepl": "Se ejecuta en la app. Usa glosario y guía de estilo limitados; no usa memoria del proyecto ni contexto por lote.",
-        "google": "Se ejecuta en la app. Protege términos del glosario y códigos de control; no usa memoria del proyecto."
+      "ready": "Listo",
+      "names": {
+        "codex": "Codex CLI",
+        "openai": "OpenAI",
+        "opencode": "OpenCode Go",
+        "deepl": "DeepL",
+        "google": "Google Translate"
       },
-      "openai": "OpenAI",
-      "deepl": "DeepL",
-      "google": "Google Translate",
-      "codex": "Codex CLI · local",
-      "opencode": "OpenCode Go · API integrada"
+      "context": {
+        "codex": "Guía de estilo · glosario · memoria · lotes vecinos",
+        "openai": "Guía de estilo · glosario · memoria · lotes vecinos",
+        "opencode": "Guía de estilo · glosario · memoria · lotes vecinos",
+        "deepl": "Glosario · guía de estilo (limitados)",
+        "google": "Glosario · códigos de control"
+      }
     },
     "models": {
       "title": "Modelo para esta ejecución",
-      "selected": "Seleccionado: {{model}}",
-      "codexDefault": "Codex usará el modelo predeterminado del CLI.",
-      "noneSelected": "Selecciona un modelo antes de traducir.",
       "manualPlaceholder": "Escribe un modelo o refresca la lista",
       "refresh": "Refrescar",
       "refreshed": "Modelos actualizados",
@@ -130,25 +122,15 @@
       "count": "{{count}} modelos disponibles",
       "count_one": "{{count}} modelo disponible",
       "count_other": "{{count}} modelos disponibles",
-      "required": "Selecciona un modelo para este proveedor."
+      "required": "Selecciona un modelo para este proveedor.",
+      "cliDefault": "Predeterminado del CLI"
     },
     "selectFiles": "Archivos a traducir",
-    "allFiles": "Todos los archivos",
-    "selectedFiles": "{{count}} archivos seleccionados",
-    "untranslatedOnly": "Solo entradas sin traducir",
     "start": "Iniciar traducción",
-    "starting": "Iniciando…",
-    "translating": "Traduciendo…",
-    "progress": "Entradas: {{completed}}/{{total}}",
-    "progressFiles": "Archivos: {{completed}}/{{total}}",
-    "progressChunks": "Lotes: {{completed}}/{{total}}",
-    "currentFile": "Archivo actual: {{file}}",
-    "currentChunk": "Lote {{current}}/{{total}} en este archivo",
     "complete": "Traducción completada",
     "completeDetail": "Traducidas: {{completed}}/{{total}}",
     "completeWithErrors": "Traducción completada con errores",
     "completeWithErrorsDetail": "Traducidas: {{completed}}/{{total}}. Fallidas: {{failed}}",
-    "errors": "Errores: {{count}}",
     "noProvider": "Configura un proveedor en Configuración.",
     "noEntries": "No hay entradas sin traducir",
     "cancel": "Cancelar",
@@ -158,15 +140,12 @@
     "cancelled": "Traducción cancelada",
     "cancelledDetail": "Traducidas antes de cancelar: {{completed}}/{{total}}",
     "ai": {
-      "description": "Exporta las entradas sin traducir, envía el prompt a una IA y pega el JSON con el mismo projectId y batchId.",
       "maxEntries": "Máx. entradas por lote para IA",
       "invalidMaxEntries": "El máximo de entradas debe ser un entero positivo.",
       "export": "Exportar lote para IA",
       "exported": "Lote para IA exportado",
       "exportedDetail": "Exportadas: {{exported}}/{{total}}",
-      "instructionCandidates": "Posibles instrucciones/ayuda: {{count}}",
       "prompt": "Prompt para IA externa",
-      "promptPlaceholder": "Genera un lote para obtener un prompt.",
       "copy": "Copiar prompt",
       "copied": "Prompt copiado al portapapeles",
       "copyFailed": "No se pudo copiar el prompt",
@@ -182,14 +161,24 @@
       "partialApply": "Respuesta de IA aplicada con incidencias",
       "partialApplyDetail": "Aplicadas: {{applied}}. Omitidas: {{skipped}}. Bloqueadas: {{invalid}}. Faltantes: {{missing}}. ID duplicados: {{duplicates}}",
       "exportFailed": "No se pudo exportar el lote para IA",
-      "applyFailed": "No se pudo aplicar la respuesta de IA"
-    }
+      "applyFailed": "No se pudo aplicar la respuesta de IA",
+      "batch": "Lote",
+      "exportedLabel": "Exportadas",
+      "instructionLabel": "Posibles instrucciones"
+    },
+    "summary": "{{project}} · {{count}} sin traducir",
+    "allFilesCount": "Todos · {{count}}",
+    "selection": "Selección",
+    "pending": "Entradas pendientes",
+    "context": "Contexto",
+    "progressOf": "{{completed}} de {{total}}",
+    "currentFileShort": "{{file}} · lote {{current}} de {{total}}",
+    "chunks": "Lotes",
+    "filesLabel": "Archivos",
+    "failed": "Fallidas"
   },
   "styleGuide": {
-    "title": "Guía de estilo del proyecto",
-    "description": "Reglas para la traducción con IA.",
     "addTitle": "Nueva regla",
-    "addPlaceholder": "Ej.: Mantén los textos de menú cortos y naturales",
     "add": "Agregar",
     "rulesLabel": "Reglas ({{count}})",
     "ruleInputLabel": "Regla {{index}}",
@@ -199,5 +188,12 @@
     "saved": "Guía de estilo guardada",
     "saveFailed": "No se pudo guardar la guía de estilo",
     "empty": "Aún no hay reglas"
+  },
+  "context": {
+    "title": "Contexto del proyecto"
+  },
+  "entry": {
+    "codes": "Códigos",
+    "characters": "Caracteres"
   }
 }

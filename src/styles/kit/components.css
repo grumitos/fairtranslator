@@ -1,0 +1,1012 @@
+/*
+ * Design kit 0.1.0 - components. Vanilla classes with ChronoRift's names; import after base.css.
+ *
+ * Colors come only from tokens.css. Outer margins and placement belong to each app. The file is
+ * unlayered; a Tailwind app imports it into the components layer
+ * (`@import "./components.css" layer(components);`). Measurements are in DESIGN.md.
+ */
+
+/* Utilities ------------------------------------------------------------------------------------ */
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* First focusable element of the page: "Ir al contenido". Hidden above the window until focused. */
+.skip-link {
+  position: fixed;
+  z-index: 20;
+  top: 8px;
+  left: 8px;
+  padding: 7px 10px;
+  border-radius: var(--radius);
+  background: var(--ink);
+  color: var(--bg-0);
+  transform: translateY(-150%);
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
+/* Data: paths, builds, sizes, counts and ids. Figures keep their width. */
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.num {
+  text-align: right;
+}
+
+.muted {
+  color: var(--ink-3);
+}
+
+.ellipsis {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Inline SVG icon on the 24 grid: 16px, 1.5 stroke, round caps and joins. */
+.icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.icon--sm {
+  width: 15px;
+  height: 15px;
+}
+
+/* Filled glyphs (play, stop, the logo): no stroke. */
+.icon--filled {
+  fill: currentColor;
+  stroke: none;
+}
+
+/* Hover and selection changes fade instead of jumping. */
+.button,
+.icon-button,
+.nav-item,
+.tab,
+.segmented button,
+.window-control {
+  transition:
+    background-color var(--motion-fast) var(--motion-ease),
+    border-color var(--motion-fast) var(--motion-ease),
+    color var(--motion-fast) var(--motion-ease);
+}
+
+/* Button ---------------------------------------------------------------------------------------- */
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.button:hover:not(:disabled) {
+  background: var(--bg-2);
+}
+
+.button:disabled {
+  border-color: var(--line-dim);
+  background: var(--bg-2);
+  color: var(--ink-4);
+}
+
+/* Ink fill: a strong neutral action on a screen whose brand action is not shown (a first-run
+   question, an empty state). Same size, padding, font and weight as the normal button. */
+.button--primary {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--bg-0);
+}
+
+.button--primary:hover:not(:disabled) {
+  border-color: var(--ink-hover);
+  background: var(--ink-hover);
+}
+
+/* The primary action of the view, one per view: brand fill. Disabled, it looks like any disabled
+   button. */
+.button--brand {
+  border-color: var(--brand);
+  background: var(--brand);
+  color: var(--brand-ink);
+}
+
+.button--brand:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.button--sm {
+  height: 28px;
+  padding: 0 9px;
+  font-size: 12px;
+}
+
+/* Slot for an icon that changes with the action. */
+.button__icon {
+  display: flex;
+}
+
+.button--square {
+  justify-content: center;
+  width: 34px;
+  padding: 0;
+  color: var(--ink-2);
+}
+
+/* Icon button --------------------------------------------------------------------------------- */
+
+.icon-button {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--ink-2);
+}
+
+.icon-button:hover:not(:disabled) {
+  background: var(--bg-3);
+  color: var(--ink);
+}
+
+.icon-button:disabled {
+  color: var(--ink-4);
+}
+
+.icon-button--sm {
+  width: 26px;
+  height: 26px;
+  color: var(--ink-3);
+}
+
+/* Inline with an 18px data line: the negative margin keeps the line from growing. */
+.icon-button--xs {
+  width: 24px;
+  height: 24px;
+  margin: -3px 0;
+  color: var(--ink-3);
+}
+
+/* Chip ------------------------------------------------------------------------------------------ */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.chip--solid {
+  background: var(--ink);
+  color: var(--bg-0);
+}
+
+.chip--outline {
+  border: 1px solid var(--line-chip);
+  color: var(--ink-2);
+}
+
+.chip--sm {
+  height: 18px;
+  padding: 0 6px;
+  font-size: 10px;
+}
+
+/* Tone of a state. The script sets the class from the state, never from the text, and the text
+   still says it. ChronoRift's names (is-win, is-loss, is-warn) and the generic ones are synonyms. */
+.chip.is-win,
+.chip.is-success {
+  border: 1px solid var(--success-line);
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.chip.is-loss,
+.chip.is-danger {
+  border: 1px solid var(--danger-line);
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.chip.is-warn,
+.chip.is-warning {
+  border: 1px solid var(--warning-line);
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.chip.is-info {
+  color: var(--info);
+}
+
+/* Segmented control: neutral, never brand. The track's radius is the segment's plus its padding. */
+.segmented {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: calc(var(--radius-md) + 2px);
+  background: var(--bg-2);
+}
+
+.segmented button {
+  display: inline-flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+/* Count beside the label. */
+.segmented button span {
+  color: var(--ink-3);
+  font-size: 11.5px;
+}
+
+.segmented button:hover,
+.segmented button[aria-pressed="true"] {
+  color: var(--ink);
+}
+
+.segmented button[aria-pressed="true"] {
+  background: var(--bg-4);
+}
+
+/* On the active segment --ink-3 falls below 4.5:1. */
+.segmented button[aria-pressed="true"] span {
+  color: var(--ink-2);
+}
+
+/* Fields ---------------------------------------------------------------------------------------- */
+
+/* The native arrow sits against the edge: the field draws its own chevron with the same 10px inset
+   as the text, like the search icon on the left. */
+.select-field {
+  position: relative;
+}
+
+.select {
+  width: 100%;
+  height: 32px;
+  padding: 0 34px 0 10px;
+  border: 1px solid var(--line-field);
+  border-radius: var(--radius-md);
+  background: var(--bg-field);
+  font-size: 12.5px;
+  appearance: none;
+}
+
+.select:disabled {
+  color: var(--ink-3);
+  cursor: not-allowed;
+}
+
+.select-field__icon {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  width: 14px;
+  height: 14px;
+  margin-top: -7px;
+  color: var(--ink-3);
+  pointer-events: none;
+}
+
+.select:disabled + .select-field__icon {
+  color: var(--ink-4);
+}
+
+.input {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--line-field);
+  border-radius: var(--radius);
+  background: var(--bg-field);
+  font-size: 13.5px;
+}
+
+/* Search: an input with a leading 15px icon. */
+.search {
+  position: relative;
+  display: block;
+}
+
+.search__icon {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  width: 15px;
+  height: 15px;
+  color: var(--ink-3);
+  pointer-events: none;
+}
+
+.search input {
+  width: 100%;
+  height: 35px;
+  padding: 0 10px 0 33px;
+  border: 1px solid var(--line-field);
+  border-radius: var(--radius);
+  background: var(--bg-field);
+}
+
+.search input::placeholder,
+.input::placeholder {
+  color: var(--ink-3);
+}
+
+/* Tabs ------------------------------------------------------------------------------------------ */
+
+.tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 40px;
+  border-bottom: 1px solid var(--line);
+}
+
+.tab {
+  height: 40px;
+  padding: 0 12px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-3);
+  font-weight: 500;
+}
+
+.tab:hover {
+  color: var(--ink);
+}
+
+/* Active tab: a 2px brand line on the bar's bottom edge. */
+.tab[aria-pressed="true"],
+.tab[aria-selected="true"] {
+  color: var(--ink);
+  box-shadow: inset 0 -2px 0 var(--brand);
+}
+
+/* Title bar (frameless window) ----------------------------------------------------------------- */
+
+/* The top bar is the window's title bar: mark it and the .brand block with data-tauri-drag-region. */
+.appbar {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  height: 48px;
+  padding: 0 0 0 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-0);
+  user-select: none;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+/* The window only drags when the press lands on the marked element itself. */
+.brand * {
+  pointer-events: none;
+}
+
+/* The logo: monochrome ink, never brand. */
+.brand__mark {
+  width: 20px;
+  height: 20px;
+}
+
+.brand__name {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.appbar__nav {
+  display: flex;
+  gap: 2px;
+}
+
+.nav-item {
+  position: relative;
+  height: 30px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--ink-3);
+  font-weight: 500;
+}
+
+.nav-item:hover,
+.nav-item[aria-current="page"] {
+  color: var(--ink);
+}
+
+/* Active section: the same 2px brand line as the active tab, on the bar's bottom edge (9px below
+   the 30px item in the 48px bar). */
+.nav-item[aria-current="page"]::after {
+  content: "";
+  position: absolute;
+  right: 12px;
+  bottom: -9px;
+  left: 12px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--brand);
+}
+
+.appbar__end {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-left: auto;
+}
+
+/* Above the splash: the window can be minimized, maximized or closed while it loads. */
+.window-controls {
+  position: relative;
+  z-index: 31;
+  display: flex;
+  align-self: stretch;
+}
+
+.window-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink-2);
+}
+
+/* Thinner than the 1.5 rule, like the native caption glyphs. */
+.window-control .icon {
+  width: 14px;
+  height: 14px;
+  stroke-width: 1.4;
+}
+
+.window-control:hover {
+  background: var(--bg-3);
+  color: var(--ink);
+}
+
+/* The buttons touch the window edge: the ring goes inside so it is not clipped. */
+.window-control:focus-visible {
+  outline-offset: calc(-1 * var(--focus-ring-width));
+}
+
+.window-control--close:hover {
+  background: var(--ink);
+  color: var(--bg-0);
+}
+
+/* Drawer (dialog) ------------------------------------------------------------------------------ */
+
+/* The drawer covers its positioned container (position: relative; overflow: clip), not the whole
+   window. Without `is-open` it sits outside the view: entrances start there and exits end there,
+   after which the script sets `hidden`. The exit is shorter than the entrance. */
+.drawer-scrim {
+  position: absolute;
+  z-index: 5;
+  inset: 0;
+  background: var(--scrim);
+  opacity: 0;
+  transition: opacity var(--motion-base) ease-in;
+}
+
+.drawer-scrim.is-open {
+  opacity: 1;
+  transition: opacity var(--motion-slow) ease-out;
+}
+
+.drawer {
+  position: absolute;
+  z-index: 6;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  width: min(440px, 100%);
+  border-left: 1px solid var(--line-field);
+  background: var(--bg-1);
+  box-shadow: -24px 0 48px var(--shadow-drawer);
+  outline: none;
+  transform: translateX(100%);
+  transition: transform var(--motion-base) var(--motion-ease-exit);
+}
+
+.drawer.is-open {
+  transform: none;
+  transition: transform var(--motion-slow) var(--motion-ease-enter);
+}
+
+/* Reduced motion: the drawer does not slide; it fades in and out. */
+@media (prefers-reduced-motion: reduce) {
+  .drawer {
+    opacity: 0;
+    transform: none;
+    transition: opacity var(--motion-fast) var(--motion-ease);
+  }
+
+  .drawer.is-open {
+    opacity: 1;
+    transition: opacity var(--motion-fast) var(--motion-ease);
+  }
+}
+
+.drawer__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px 20px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.drawer__heading {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.drawer__heading h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* A long subtitle (a file name) is cut instead of growing the head. */
+.drawer__heading .muted {
+  overflow: hidden;
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* The close button centers on the title and its glyph lines up with the content edge. */
+.drawer__head > .icon-button {
+  margin: -6px -7px 0 auto;
+}
+
+.drawer__body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 0;
+  padding: 20px;
+  overflow-y: auto;
+}
+
+.drawer__foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 16px 20px;
+  border-top: 1px solid var(--line);
+}
+
+/* Meter ----------------------------------------------------------------------------------------- */
+
+/* Progress: a neutral track with a brand fill. The script sets the fill's width. */
+.meter {
+  display: block;
+  height: 6px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--line);
+}
+
+.meter__fill {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
+  background: var(--brand);
+}
+
+.meter--mini {
+  width: 64px;
+  height: 4px;
+  background: var(--bg-4);
+}
+
+/* Tile and image fade-in ----------------------------------------------------------------------- */
+
+.tile {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  overflow: hidden;
+  border: 1px solid var(--tile-line);
+  border-radius: var(--radius);
+  background: var(--tile);
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* The tile already has its size. An image that was not decoded yet gets `is-pending` and fades in
+   when it loads; one that was paints in the same frame. No loader. */
+.tile img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: opacity var(--motion-fast) var(--motion-ease);
+}
+
+.tile img.is-pending {
+  opacity: 0;
+}
+
+/* Glyph ----------------------------------------------------------------------------------------- */
+
+/* State glyph, 8px. Each state keeps its own shape as well as its color. */
+.glyph {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.glyph[data-state="ready"] {
+  background: var(--success);
+}
+
+.glyph[data-state="partial"] {
+  border: 1.5px solid var(--warning);
+  background: linear-gradient(90deg, var(--warning) 50%, transparent 50%);
+}
+
+.glyph[data-state="missing"] {
+  border: 1.5px solid var(--ink-3);
+}
+
+.glyph[data-state="blocked"] {
+  border: 1.5px solid var(--warning);
+  background: linear-gradient(45deg, transparent 40%, var(--warning) 40% 60%, transparent 60%);
+}
+
+.glyph[data-state="busy"] {
+  border: 2px solid var(--info);
+  border-right-color: var(--line-track);
+  animation: spin 1s linear infinite;
+}
+
+/* Not read yet: a faint dot, neither ready nor missing. */
+.glyph[data-state="unknown"] {
+  background: var(--line-strong);
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .glyph[data-state="busy"] {
+    animation: none;
+  }
+}
+
+/* Step list ------------------------------------------------------------------------------------- */
+
+/* Steps: pending (ring), active (ink ring and dot), done (brand disc with a check). */
+.stages {
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--line);
+  list-style: none;
+}
+
+.stages li {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 36px;
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--ink-3);
+}
+
+.stages li::before {
+  content: "";
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid var(--line-track);
+  border-radius: 50%;
+  box-sizing: border-box;
+}
+
+.stages li[data-status="active"],
+.stages li[data-status="done"] {
+  color: var(--ink);
+}
+
+.stages li[data-status="active"]::before {
+  border: 2px solid var(--ink);
+  background: radial-gradient(circle, var(--ink) 0 3px, transparent 3.5px);
+}
+
+.stages li[data-status="done"]::before {
+  border-color: var(--brand);
+  background: var(--brand);
+}
+
+/* The check is a mask painted with --brand-ink, so it follows each app's brand. The mask only uses
+   the alpha of its SVG; the stroke color inside it is irrelevant. */
+.stages li[data-status="done"]::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 16px;
+  height: 16px;
+  margin-top: -8px;
+  background: var(--brand-ink);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12.5l4.5 4.5L19 7.5'/%3E%3C/svg%3E")
+    center / 11px no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12.5l4.5 4.5L19 7.5'/%3E%3C/svg%3E")
+    center / 11px no-repeat;
+}
+
+/* Facts ----------------------------------------------------------------------------------------- */
+
+/* Label over value, in one row that wraps when space runs out. Values keep an 18px line, so data
+   that arrives late does not move anything. */
+.facts {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 12px 32px;
+  min-width: 0;
+  margin: 0;
+}
+
+.facts > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.facts dt {
+  color: var(--ink-3);
+  font-size: 11.5px;
+}
+
+.facts dd {
+  height: 18px;
+  margin: 0;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+/* Key-value rows: label left, value right, separated by lines. */
+.kv {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  border-top: 1px solid var(--line);
+}
+
+.kv__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.kv__row dt {
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.kv__row dd {
+  min-width: 0;
+  margin: 0;
+  font-size: 12.5px;
+  text-align: right;
+}
+
+/* Label over value: long values and fields. */
+.kv__row--stack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  padding: 12px 0;
+}
+
+.kv__row--stack dd {
+  text-align: left;
+}
+
+/* A value with its action on the same line (a path and "Cambiar…"). */
+.kv__inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.kv__inline .mono {
+  flex: 1;
+  font-size: 13px;
+}
+
+.kv--compact .kv__row {
+  padding: 8px 0;
+}
+
+/* Empty state ----------------------------------------------------------------------------------- */
+
+/* A centered label, an optional detail and at most one action. */
+.empty {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+  color: var(--ink-3);
+  text-align: center;
+}
+
+.empty p {
+  margin: 0;
+}
+
+.empty__detail {
+  max-width: 560px;
+  font-size: 12px;
+}
+
+/* Splash ---------------------------------------------------------------------------------------- */
+
+/* Paints before the app. index.html inlines the same rules, with fallback values, so they apply
+   before any stylesheet loads (see DESIGN.md). */
+.splash {
+  position: fixed;
+  z-index: 30;
+  inset: 0;
+  background: var(--bg-0);
+  color: var(--ink);
+  transition: opacity var(--motion-base) var(--motion-ease);
+}
+
+.splash.is-leaving {
+  opacity: 0;
+}
+
+/* The logo keeps its place when what is below it changes. */
+.splash__logo {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 44px;
+  height: 44px;
+  margin: -68px 0 0 -22px;
+  fill: currentColor;
+}
+
+.splash__body {
+  position: absolute;
+  top: calc(50% + 4px);
+  right: 16px;
+  left: 16px;
+  display: flex;
+  justify-content: center;
+}
+
+/* Three-dot loader: 6px dots that brighten in turn. */
+.dots {
+  display: inline-flex;
+  gap: 6px;
+  padding: 8px 0;
+  color: var(--ink-3);
+}
+
+.dots > span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.25;
+  animation: dots 1.2s ease-in-out infinite;
+}
+
+.dots > span:nth-child(2) {
+  animation-delay: 0.16s;
+}
+
+.dots > span:nth-child(3) {
+  animation-delay: 0.32s;
+}
+
+@keyframes dots {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+  }
+
+  40% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dots > span {
+    animation: none;
+    opacity: 0.6;
+  }
+}

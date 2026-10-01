@@ -1,8 +1,8 @@
 import { Pencil, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
 import type { GlossaryTerm } from "@/types/domain";
 
 interface GlossaryTermRowProps {
@@ -19,6 +19,7 @@ interface GlossaryTermRowProps {
   onRemove: (source: string) => void;
 }
 
+// Fila plana del glosario: original, traducción y acciones que aparecen al pasar o enfocar.
 export function GlossaryTermRow({
   term,
   isEditing,
@@ -34,88 +35,86 @@ export function GlossaryTermRow({
 }: GlossaryTermRowProps) {
   const { t } = useTranslation(["glossary", "common"]);
 
-  return (
-    <div className="flex items-center gap-2 rounded-lg border p-2">
-      {isEditing ? (
-        <div className="min-w-0 flex-1 space-y-2">
-          <div className="flex gap-2">
-            <Input
-              aria-label={t("glossary:source")}
-              value={term.source}
-              disabled
-              className="min-w-0 flex-1 text-xs opacity-60"
-            />
-            <Input
-              aria-label={t("glossary:target")}
-              value={editTarget}
-              onChange={(e) => onEditTargetChange(e.target.value)}
-              className="min-w-0 flex-1 text-xs"
-            />
-          </div>
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Checkbox
-                id="glossary-edit-case-sensitive"
-                checked={editCaseSensitive}
-                onCheckedChange={(v) => onEditCaseSensitiveChange(v === true)}
-              />
-              <label htmlFor="glossary-edit-case-sensitive" className="text-xs">
-                {t("glossary:caseSensitive")}
-              </label>
-            </div>
-            <div className="flex gap-1">
-              <Button size="sm" onClick={onUpdate} disabled={isLoading} className="h-6 text-xs">
-                {t("glossary:update")}
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={onCancelEdit}
-                className="h-6 text-xs"
-              >
-                {t("common:cancel")}
-              </Button>
-            </div>
-          </div>
-        </div>
-      ) : (
-        <>
-          <div className="min-w-0 flex-1">
-            <div className="flex gap-2 text-xs">
-              <span className="min-w-0 flex-1 truncate font-medium">{term.source}</span>
-              <span className="text-muted-foreground">→</span>
-              <span className="min-w-0 flex-1 truncate">{term.target}</span>
-            </div>
-            {term.caseSensitive && (
-              <span
-                className="text-[10px] text-muted-foreground"
-                aria-label={t("glossary:caseSensitive")}
-                title={t("glossary:caseSensitive")}
-              >
-                {t("glossary:caseSensitiveBadge")}
-              </span>
+  if (isEditing) {
+    return (
+      <li className="flex flex-col gap-2 border-b border-line-soft py-2.5">
+        <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-center gap-2">
+          <span className="ft-cjk truncate px-0.5 text-sm text-ink-2">{term.source}</span>
+          <Input
+            aria-label={t("glossary:target")}
+            value={editTarget}
+            onChange={(e) => onEditTargetChange(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") onUpdate();
+              if (e.key === "Escape") onCancelEdit();
+            }}
+            autoFocus
+          />
+          <button
+            type="button"
+            aria-label={t("glossary:caseSensitive")}
+            aria-pressed={editCaseSensitive}
+            title={t("glossary:caseSensitive")}
+            onClick={() => onEditCaseSensitiveChange(!editCaseSensitive)}
+            className={cn(
+              "h-8 min-w-8 rounded-md border px-1.5 font-mono text-xs outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink",
+              editCaseSensitive ? "border-line-chip bg-surface-3 text-ink" : "border-line-field text-ink-3",
             )}
-          </div>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => onStartEdit(term)}
-            aria-label={`${t("glossary:edit")}: ${term.source}`}
-            title={t("glossary:edit")}
           >
-            <Pencil className="size-3" />
+            Aa
+          </button>
+        </div>
+        <div className="flex justify-end gap-2">
+          <Button size="sm" variant="ghost" onClick={onCancelEdit}>
+            {t("common:cancel")}
           </Button>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => onRemove(term.source)}
-            aria-label={`${t("glossary:remove")}: ${term.source}`}
-            title={t("glossary:remove")}
+          <Button size="sm" onClick={onUpdate} disabled={isLoading}>
+            {t("glossary:update")}
+          </Button>
+        </div>
+      </li>
+    );
+  }
+
+  return (
+    <li className="group grid min-h-10 grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)_auto] items-center gap-3 rounded-sm border-b border-line-soft px-1 hover:bg-surface-2">
+      <span className="ft-cjk truncate text-sm text-ink-2" title={term.source}>
+        {term.source}
+      </span>
+      <span className="flex min-w-0 items-center gap-2">
+        <span className="truncate text-sm" title={term.target}>
+          {term.target}
+        </span>
+        {term.caseSensitive && (
+          <span
+            className="shrink-0 font-mono text-[10.5px] text-ink-4"
+            aria-label={t("glossary:caseSensitive")}
+            title={t("glossary:caseSensitive")}
           >
-            <Trash2 className="size-3" />
-          </Button>
-        </>
-      )}
-    </div>
+            Aa
+          </span>
+        )}
+      </span>
+      <span className="flex opacity-0 transition-opacity duration-(--motion-fast) group-focus-within:opacity-100 group-hover:opacity-100">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={() => onStartEdit(term)}
+          aria-label={`${t("glossary:edit")}: ${term.source}`}
+          title={t("glossary:edit")}
+        >
+          <Pencil strokeWidth={1.6} />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={() => onRemove(term.source)}
+          aria-label={`${t("glossary:remove")}: ${term.source}`}
+          title={t("glossary:remove")}
+        >
+          <Trash2 strokeWidth={1.6} />
+        </Button>
+      </span>
+    </li>
   );
 }

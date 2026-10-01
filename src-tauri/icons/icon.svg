@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- FairTranslator · «Dos ventanas» sobre la loseta del kit: chaflán del 18 %, fondo #1E1E22, relleno del 19 %. -->
+  <defs>
+    <mask id="cut" maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24">
+      <rect x="0" y="0" width="24" height="24" fill="#fff"/>
+      <path d="M10.2 10.8H19.4L22 13.4V19.4L19.4 22H10.2L7.6 19.4V13.4Z" fill="#000" stroke="#000" stroke-width="2.6"/>
+    </mask>
+  </defs>
+  <path d="M184.3 0H839.7L1024 184.3V839.7L839.7 1024H184.3L0 839.7V184.3Z" fill="#1e1e22"/>
+  <g transform="translate(194.56 194.56) scale(26.4533)" fill="#ededef">
+    <path fill-rule="evenodd" mask="url(#cut)" d="M4.6 2H13.8L16.4 4.6V10.6L13.8 13.2H4.6L2 10.6V4.6Z M5.68 4.6L4.6 5.68V9.52L5.68 10.6H12.72L13.8 9.52V5.68L12.72 4.6Z"/>
+    <path fill-rule="evenodd" d="M10.2 10.8H19.4L22 13.4V19.4L19.4 22H10.2L7.6 19.4V13.4Z M12.2 14.8H17.4L14.8 18Z"/>
+  </g>
+</svg>

@@ -1,103 +1,89 @@
-import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { open as dialogOpen } from "@tauri-apps/plugin-dialog";
-import { toast } from "sonner";
+import { FolderOpen, Plus, X } from "lucide-react";
+import { BrandMark } from "@/components/brand/BrandMark";
+import { Kbd } from "@/components/common/Kbd";
 import { Button } from "@/components/ui/button";
-import { useProject } from "@/hooks/useProject";
-import { NewProjectDialog } from "@/components/layout/NewProjectDialog";
-import { SettingsPanel } from "@/components/layout/SettingsPanel";
-import { useSettingsStore } from "@/stores/settingsStore";
-import { FilePlus, FolderOpen, Moon, Settings, Sun } from "lucide-react";
+import { usePanelStore } from "@/components/layout/panelStore";
+import { useProjectCommands } from "@/components/layout/useProjectCommands";
+import { useSettingsStore, type RecentProject } from "@/stores/settingsStore";
 
+// Sin proyecto abierto: marca, motores compatibles, las dos acciones de entrada y los recientes.
 export function WelcomeScreen() {
-  const { t } = useTranslation("common");
-  const { open } = useProject();
-  const [showNewDialog, setShowNewDialog] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
-  const theme = useSettingsStore((state) => state.theme);
-  const setTheme = useSettingsStore((state) => state.setTheme);
-
-  const handleOpen = useCallback(async () => {
-    const selected = await dialogOpen({
-      directory: true,
-      title: t("openProjectFolder"),
-      filters: [],
-    });
-    if (selected && typeof selected === "string") {
-      try {
-        await open(selected);
-      } catch (error) {
-        toast.error(t("error"), {
-          description: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-  }, [open, t]);
-
-  const handleThemeToggle = useCallback(() => {
-    setTheme(theme === "dark" ? "light" : "dark");
-  }, [setTheme, theme]);
+  const { t, i18n } = useTranslation("common");
+  const openPanel = usePanelStore((s) => s.open);
+  const { openProject, openRecentProject } = useProjectCommands();
+  const recentProjects = useSettingsStore((s) => s.recentProjects);
+  const forgetProject = useSettingsStore((s) => s.forgetProject);
 
   return (
-    <div className="relative flex min-h-dvh w-full min-w-0 flex-col items-center justify-center overflow-hidden bg-background p-4 text-foreground">
-      <div className="absolute top-3 right-3 flex items-center gap-1">
-        <Button
-          type="button"
-          size="icon"
-          variant="ghost"
-          onClick={handleThemeToggle}
-          aria-label={t("welcome.toggleTheme")}
-          title={t("welcome.toggleTheme")}
-        >
-          {theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}
-        </Button>
-        <Button
-          type="button"
-          size="icon"
-          variant="ghost"
-          onClick={() => setShowSettings(true)}
-          aria-label={t("welcome.settings")}
-          title={t("welcome.settings")}
-        >
-          <Settings className="size-4" />
-        </Button>
-      </div>
-      <div className="w-full max-w-sm min-w-0 rounded-lg border bg-card p-5 text-center shadow-sm">
-        <div className="border-b pb-5">
-          <h1 className="text-2xl font-semibold tracking-normal break-words">{t("welcome.title")}</h1>
-          <p className="mt-2 text-sm leading-6 text-muted-foreground">{t("welcome.subtitle")}</p>
+    <main className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto p-6">
+      <div className="flex w-[440px] max-w-full flex-col items-center gap-7">
+        <BrandMark className="size-14 text-ink" />
+        <div className="flex flex-col items-center gap-2 text-center">
+          <h1 translate="no" className="text-2xl font-semibold tracking-[-0.02em]">
+            {t("appName")}
+          </h1>
+          <p className="font-mono text-xs text-ink-3">{t("welcome.engines")}</p>
         </div>
-
-        <div className="mx-auto mt-5 flex w-full max-w-xs min-w-0 flex-col gap-3">
-          <Button
-            size="lg"
-            onClick={() => setShowNewDialog(true)}
-            className="w-full gap-2"
-          >
-            <FilePlus className="size-5" />
+        <div className="flex flex-wrap justify-center gap-2.5">
+          <Button variant="brand" className="h-9 px-4" onClick={() => openPanel("newProject")}>
+            <Plus strokeWidth={1.9} />
             {t("welcome.newProject")}
+            <Kbd className="border-brand-ink/25 text-brand-ink/70">Ctrl N</Kbd>
           </Button>
-          <p className="text-xs text-muted-foreground">
-            {t("welcome.newProjectDesc")}
-          </p>
-
-          <Button
-            variant="outline"
-            size="lg"
-            onClick={handleOpen}
-            className="w-full gap-2"
-          >
-            <FolderOpen className="size-5" />
+          <Button variant="outline" className="h-9 px-4" onClick={() => void openProject()}>
+            <FolderOpen strokeWidth={1.7} />
             {t("welcome.openProject")}
+            <Kbd>Ctrl O</Kbd>
           </Button>
-          <p className="text-xs text-muted-foreground">
-            {t("welcome.openProjectDesc")}
-          </p>
         </div>
-      </div>
 
-      <NewProjectDialog open={showNewDialog} onOpenChange={setShowNewDialog} />
-      <SettingsPanel open={showSettings} onOpenChange={setShowSettings} />
-    </div>
+        {recentProjects.length > 0 && (
+          <section aria-labelledby="welcome-recent-title" className="mt-3 flex w-full flex-col">
+            <h2 id="welcome-recent-title" className="m-0 mb-1.5 text-xs font-medium text-ink-3">
+              {t("welcome.recent")}
+            </h2>
+            <ul className="m-0 flex list-none flex-col p-0">
+              {recentProjects.map((recent) => (
+                <li key={recent.path} className="group relative">
+                  <button
+                    type="button"
+                    onClick={() => void openRecentProject(recent.path)}
+                    className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-0.5 rounded-sm border-b border-line-soft px-2 py-[9px] pr-9 text-left outline-none transition-colors duration-(--motion-fast) hover:bg-surface-1 focus-visible:outline-2 focus-visible:outline-ink"
+                  >
+                    <span className="truncate text-[13px] font-medium">{recent.name}</span>
+                    <span className="justify-self-end font-mono text-xs text-ink-2">{recent.percent}&nbsp;%</span>
+                    <span className="truncate font-mono text-[11.5px] text-ink-4" title={recent.path}>
+                      {recent.path}
+                    </span>
+                    <span className="justify-self-end text-[11.5px] text-ink-4">{formatWhen(recent, i18n.language, t)}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => forgetProject(recent.path)}
+                    aria-label={t("welcome.forgetRecent", { name: recent.name })}
+                    title={t("welcome.forgetRecent", { name: recent.name })}
+                    className="absolute top-1/2 right-1.5 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded-sm text-ink-3 opacity-0 transition-opacity duration-(--motion-fast) outline-none group-hover:opacity-100 hover:bg-surface-3 hover:text-ink focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-ink"
+                  >
+                    <X className="size-3.5" strokeWidth={1.8} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+      </div>
+    </main>
   );
+}
+
+// "Hoy", "Ayer" o la fecha corta ("12 sept").
+function formatWhen(recent: RecentProject, language: string, t: (key: string) => string) {
+  const opened = new Date(recent.openedAt);
+  if (Number.isNaN(opened.getTime())) return "";
+  const startOfDay = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const days = Math.round((startOfDay(new Date()) - startOfDay(opened)) / 86_400_000);
+  if (days <= 0) return t("welcome.today");
+  if (days === 1) return t("welcome.yesterday");
+  return new Intl.DateTimeFormat(language, { day: "numeric", month: "short" }).format(opened);
 }

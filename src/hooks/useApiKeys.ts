@@ -77,13 +77,13 @@ export function useApiKeys() {
   const listModels = useCallback(
     async (
       provider: ProviderType,
-      apiKey?: string,
-      model?: string,
-      endpoint?: string,
-      organization?: string,
-      project?: string,
-      commandPath?: string,
-      profile?: string,
+      apiKey?: string | null,
+      model?: string | null,
+      endpoint?: string | null,
+      organization?: string | null,
+      project?: string | null,
+      commandPath?: string | null,
+      profile?: string | null,
     ): Promise<ProviderModel[]> => {
       setIsLoading(true);
       try {
@@ -106,9 +106,9 @@ export function useApiKeys() {
 
   const inspectCodex = useCallback(
     async (
-      commandPath?: string,
-      model?: string,
-      profile?: string,
+      commandPath?: string | null,
+      model?: string | null,
+      profile?: string | null,
     ): Promise<CodexRuntimeStatus> => {
       setIsLoading(true);
       try {
@@ -122,9 +122,9 @@ export function useApiKeys() {
 
   const loginCodex = useCallback(
     async (
-      commandPath?: string,
-      model?: string,
-      profile?: string,
+      commandPath?: string | null,
+      model?: string | null,
+      profile?: string | null,
       deviceAuth?: boolean,
     ): Promise<CodexRuntimeStatus> => {
       setIsLoading(true);

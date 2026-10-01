@@ -1,20 +1,24 @@
 import { useEffect, useRef, useState } from "react";
-import { confirm as dialogConfirm } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isTauri } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
-import { Files, TableProperties } from "lucide-react";
 import { Sidebar } from "./Sidebar";
 import { Toolbar } from "./Toolbar";
-import { StatusBar } from "./StatusBar";
 import { useProjectStore } from "@/stores/projectStore";
 import { useEditorStore } from "@/stores/editorStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { WelcomeScreen } from "./WelcomeScreen";
+import { EditorHeader } from "@/components/editor/EditorHeader";
 import { TranslationGrid } from "@/components/editor/TranslationGrid";
 import { FindReplaceBar } from "@/components/editor/FindReplaceBar";
 import { cn } from "@/lib/utils";
+import { confirmAction } from "@/components/common/ConfirmDialog";
+
+const SIDEBAR_MIN = 220;
+const SIDEBAR_MAX = 420;
+
+const clampSidebar = (width: number) => Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, width));
 
 export function AppShell() {
   const { t } = useTranslation(["common", "editor"]);
@@ -24,9 +28,8 @@ export function AppShell() {
   const sidebarWidth = useSettingsStore((s) => s.sidebarWidth);
   const setSidebarWidth = useSettingsStore((s) => s.setSidebarWidth);
   const [isResizingSidebar, setIsResizingSidebar] = useState(false);
-  const [draftSidebarWidth, setDraftSidebarWidth] = useState(sidebarWidth);
-  const [mobilePane, setMobilePane] = useState<"files" | "editor">("editor");
-  const draftSidebarWidthRef = useRef(sidebarWidth);
+  const [draftSidebarWidth, setDraftSidebarWidth] = useState(() => clampSidebar(sidebarWidth));
+  const draftSidebarWidthRef = useRef(draftSidebarWidth);
   draftSidebarWidthRef.current = draftSidebarWidth;
 
   useKeyboardShortcuts();
@@ -37,10 +40,17 @@ export function AppShell() {
     }
 
     let disposed = false;
-    void import("@/dev/visualDemoProject").then(({ createVisualDemoProject }) => {
-      if (!disposed && !useProjectStore.getState().project) {
-        useProjectStore.getState().setProject(createVisualDemoProject(), { markDirty: false });
+    void import("@/dev/visualDemoProject").then((demo) => {
+      if (disposed || useProjectStore.getState().project) return;
+      demo.installVisualDemoBackend();
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("screen") === "welcome") {
+        demo.seedVisualDemoRecents();
+        return;
       }
+      useProjectStore.getState().setProject(demo.createVisualDemoProject(), { markDirty: false });
+      void import("@/lib/projectLocation").then(({ refreshProjectLocation }) => refreshProjectLocation());
+      demo.openVisualDemoPanel(params);
     });
 
     return () => {
@@ -60,7 +70,7 @@ export function AppShell() {
 
   useEffect(() => {
     if (!isResizingSidebar) {
-      setDraftSidebarWidth(sidebarWidth);
+      setDraftSidebarWidth(clampSidebar(sidebarWidth));
     }
   }, [sidebarWidth, isResizingSidebar]);
 
@@ -98,11 +108,10 @@ export function AppShell() {
           return;
         }
 
-        const shouldClose = await dialogConfirm(t("common:unsavedChanges.closeApp"), {
-          title: t("common:appName"),
-          kind: "warning",
-          okLabel: t("common:close"),
-          cancelLabel: t("common:cancel"),
+        const shouldClose = await confirmAction({
+          message: t("common:unsavedChanges.closeApp"),
+          confirmLabel: t("common:discard"),
+          destructive: true,
         });
 
         if (!shouldClose) {
@@ -130,8 +139,7 @@ export function AppShell() {
     if (!isResizingSidebar) return;
 
     const handleMouseMove = (e: MouseEvent) => {
-      const newWidth = Math.min(400, Math.max(150, e.clientX));
-      setDraftSidebarWidth(newWidth);
+      setDraftSidebarWidth(clampSidebar(e.clientX));
     };
     const handleMouseUp = () => {
       setIsResizingSidebar(false);
@@ -151,89 +159,54 @@ export function AppShell() {
     };
   }, [isResizingSidebar, setSidebarWidth]);
 
-  if (!project) {
-    return <WelcomeScreen />;
-  }
-
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-background">
+    <div className="flex h-screen min-w-0 flex-col overflow-hidden bg-surface-0 text-ink">
       <Toolbar />
 
-      {showFindReplace && <FindReplaceBar />}
+      {!project ? (
+        <WelcomeScreen />
+      ) : (
+        <div className="flex min-h-0 flex-1 overflow-hidden">
+          <div className="relative h-full shrink-0 overflow-hidden" style={{ width: draftSidebarWidth }}>
+            <Sidebar />
+            <div
+              onMouseDown={(e) => {
+                e.preventDefault();
+                setIsResizingSidebar(true);
+              }}
+              onKeyDown={(e) => {
+                if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") {
+                  return;
+                }
+                e.preventDefault();
+                const delta = e.key === "ArrowLeft" ? -24 : 24;
+                setSidebarWidth(clampSidebar(draftSidebarWidth + delta));
+              }}
+              className={cn(
+                "absolute top-0 right-0 z-10 h-full w-1.5 cursor-col-resize outline-none",
+                "after:absolute after:top-0 after:right-0 after:h-full after:w-px after:bg-transparent after:transition-colors after:duration-(--motion-fast)",
+                "hover:after:bg-line-chip focus-visible:after:bg-ink",
+                isResizingSidebar && "after:bg-line-chip",
+              )}
+              role="separator"
+              tabIndex={0}
+              aria-label={t("editor:sidebar.resize")}
+              aria-orientation="vertical"
+              aria-valuemin={SIDEBAR_MIN}
+              aria-valuemax={SIDEBAR_MAX}
+              aria-valuenow={draftSidebarWidth}
+            />
+          </div>
 
-      <div className="flex min-h-0 flex-1 overflow-hidden p-1.5 pt-1">
-        <div
-          className={cn(
-            "min-h-0 flex-shrink-0 overflow-hidden rounded-md border bg-sidebar shadow-sm md:block",
-            mobilePane === "files" ? "block w-full" : "hidden",
-          )}
-          style={{ width: mobilePane === "files" ? undefined : draftSidebarWidth }}
-        >
-          <Sidebar />
+          <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+            <EditorHeader />
+            {showFindReplace && <FindReplaceBar />}
+            <div className="min-h-0 flex-1">
+              <TranslationGrid />
+            </div>
+          </main>
         </div>
-
-        <div
-          onMouseDown={(e) => { e.preventDefault(); setIsResizingSidebar(true); }}
-          onKeyDown={(e) => {
-            if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") {
-              return;
-            }
-            e.preventDefault();
-            const delta = e.key === "ArrowLeft" ? -24 : 24;
-            setSidebarWidth(Math.min(400, Math.max(150, sidebarWidth + delta)));
-          }}
-          className={cn(
-            "ft-focus mx-1 hidden w-1 flex-shrink-0 cursor-col-resize rounded-full transition-colors duration-150 md:block",
-            "hover:bg-primary/30",
-            isResizingSidebar && "bg-primary/50",
-          )}
-          role="separator"
-          tabIndex={0}
-          aria-label={t("editor:sidebar.resize")}
-          aria-orientation="vertical"
-          aria-valuemin={150}
-          aria-valuemax={400}
-          aria-valuenow={sidebarWidth}
-        />
-
-        <main
-          className={cn(
-            "min-w-0 flex-1 overflow-hidden rounded-md border bg-card shadow-sm md:block",
-            mobilePane === "editor" ? "block" : "hidden",
-          )}
-        >
-          <TranslationGrid />
-        </main>
-      </div>
-
-      <nav className="grid h-11 grid-cols-2 gap-1 border-t bg-card/95 p-1 md:hidden">
-        <button
-          type="button"
-          onClick={() => setMobilePane("files")}
-          className={cn(
-            "ft-focus inline-flex items-center justify-center gap-2 rounded-md text-xs font-medium transition-colors duration-150",
-            mobilePane === "files" ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/70",
-          )}
-          aria-pressed={mobilePane === "files"}
-        >
-          <Files className="size-3.5" />
-          {t("editor:sidebar.files")}
-        </button>
-        <button
-          type="button"
-          onClick={() => setMobilePane("editor")}
-          className={cn(
-            "ft-focus inline-flex items-center justify-center gap-2 rounded-md text-xs font-medium transition-colors duration-150",
-            mobilePane === "editor" ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/70",
-          )}
-          aria-pressed={mobilePane === "editor"}
-        >
-          <TableProperties className="size-3.5" />
-          {t("editor:grid.translation")}
-        </button>
-      </nav>
-
-      <StatusBar />
+      )}
     </div>
   );
 }

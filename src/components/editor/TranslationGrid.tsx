@@ -7,23 +7,13 @@ import { useEditorStore } from "@/stores/editorStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { EditEntryDialog } from "@/components/editor/EditEntryDialog";
 import { buildFindRegex } from "@/components/editor/findReplaceUtils";
+import { isVisibleInGrid, toGridEntry } from "@/components/editor/gridEntries";
 import { useTranslationGridColumns } from "@/components/editor/translation-grid/useTranslationGridColumns";
 import { TranslationGridTableView } from "@/components/editor/translation-grid/TranslationGridTableView";
 import { useInlineEdit } from "@/components/editor/translation-grid/useInlineEdit";
 import type { EntryWithPath } from "@/components/editor/translation-grid/types";
 
 const ROW_HEIGHT_ESTIMATE = 52;
-
-function buildSearchText(entry: Omit<EntryWithPath, "_filePath" | "_searchText">): string {
-  return [entry.original, entry.translation, entry.fileContext, entry.id].join("\n").toLowerCase();
-}
-
-function toGridEntry(
-  entry: Omit<EntryWithPath, "_filePath" | "_searchText">,
-  filePath: string,
-): EntryWithPath {
-  return { ...entry, _filePath: filePath, _searchText: buildSearchText(entry) };
-}
 
 export function TranslationGrid() {
   const { t } = useTranslation("editor");
@@ -76,15 +66,9 @@ export function TranslationGrid() {
   );
 
   const filteredData = useMemo(() => {
-    let result = data;
-    if (statusFilter) {
-      result = result.filter((entry) => entry.status === statusFilter);
-    }
-    if (deferredSearchQuery.trim()) {
-      const q = deferredSearchQuery.toLowerCase();
-      result = result.filter((entry) => (entry._searchText ?? buildSearchText(entry)).includes(q));
-    }
-    return result;
+    const q = deferredSearchQuery.trim().toLowerCase();
+    if (!statusFilter && !q) return data;
+    return data.filter((entry) => isVisibleInGrid(entry, statusFilter, q));
   }, [data, statusFilter, deferredSearchQuery]);
 
   filteredDataRef.current = filteredData;
@@ -186,12 +170,16 @@ export function TranslationGrid() {
       onCancelInlineEdit: cancelEdit,
       onNavigateInlineEdit: handleNavigateInlineEdit,
       onOpenDialog: handleOpenDialog,
+      onSelectRow: setSelectedRowIndex,
     },
   });
   const rows = table.getRowModel().rows;
   rowsRef.current = rows;
+  // Solo apunta a filas montadas: una fila virtualizada fuera de vista no existe en el DOM.
   const activeRowId =
-    selectedRowIndex !== null && rows[selectedRowIndex]
+    selectedRowIndex !== null &&
+    rows[selectedRowIndex] &&
+    virtualizer.getVirtualItems().some((item) => item.index === selectedRowIndex)
       ? `translation-grid-row-${rows[selectedRowIndex].id}`
       : undefined;
 
@@ -213,6 +201,9 @@ export function TranslationGrid() {
 
   // Keyboard navigation in grid
   const handleGridKeyDown = useCallback((e: React.KeyboardEvent) => {
+    // El panel de edición es un portal: sus teclas suben por el árbol de React hasta aquí aunque su DOM
+    // esté fuera del grid. Solo se atienden las teclas dirigidas al propio grid.
+    if (!e.currentTarget.contains(e.target as Node)) return;
     if (inlineEditingEntryId) return;
     if (rows.length === 0) {
       if (e.key === "Escape") {

@@ -1,30 +1,20 @@
-import { type CSSProperties, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { ChevronRight } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import {
   Sheet,
+  SheetBody,
   SheetContent,
-  SheetHeader,
   SheetDescription,
+  SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from "@/components/ui/tabs";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { useSettingsStore } from "@/stores/settingsStore";
+import * as ipc from "@/lib/ipc";
 import type { ProviderType } from "@/types/domain";
 import { ApiKeySection } from "@/components/layout/settings/ApiKeySection";
+import { CliUpdatesSection } from "@/components/layout/settings/CliUpdatesSection";
 import { cn } from "@/lib/utils";
 
 interface SettingsPanelProps {
@@ -33,192 +23,162 @@ interface SettingsPanelProps {
   initialProvider?: ProviderType;
 }
 
-const PROVIDERS: {
-  id: ProviderType;
-  labelKey: string;
-  descriptionKey: string;
-  connection: "api" | "cli";
-}[] = [
-  {
-    id: "opencode",
-    labelKey: "settings:apiKeys.opencode.label",
-    descriptionKey: "settings:apiKeys.opencode.description",
-    connection: "api",
-  },
-  {
-    id: "openai",
-    labelKey: "settings:apiKeys.openai.label",
-    descriptionKey: "settings:apiKeys.openai.description",
-    connection: "api",
-  },
-  {
-    id: "deepl",
-    labelKey: "settings:apiKeys.deepl.label",
-    descriptionKey: "settings:apiKeys.deepl.description",
-    connection: "api",
-  },
-  {
-    id: "google",
-    labelKey: "settings:apiKeys.google.label",
-    descriptionKey: "settings:apiKeys.google.description",
-    connection: "api",
-  },
-  {
-    id: "codex",
-    labelKey: "settings:apiKeys.codex.label",
-    descriptionKey: "settings:apiKeys.codex.description",
-    connection: "cli",
-  },
+const PROVIDERS: { id: ProviderType; labelKey: string; connection: "api" | "cli" }[] = [
+  { id: "codex", labelKey: "settings:apiKeys.codex.label", connection: "cli" },
+  { id: "openai", labelKey: "settings:apiKeys.openai.label", connection: "api" },
+  { id: "opencode", labelKey: "settings:apiKeys.opencode.label", connection: "api" },
+  { id: "deepl", labelKey: "settings:apiKeys.deepl.label", connection: "api" },
+  { id: "google", labelKey: "settings:apiKeys.google.label", connection: "api" },
 ];
 
+const LANGUAGES: { value: "es" | "en"; lang: string }[] = [
+  { value: "es", lang: "es" },
+  { value: "en", lang: "en" },
+];
+
+/*
+ * Ajustes en el panel lateral del kit: proveedores como filas desplegables (una abierta a la vez),
+ * actualización de los CLI, idioma de la interfaz y ajuste de línea. Solo etiquetas y datos.
+ */
 export function SettingsPanel({ open, onOpenChange, initialProvider }: SettingsPanelProps) {
   const { t } = useTranslation(["settings", "common"]);
-  const theme = useSettingsStore((s) => s.theme);
   const language = useSettingsStore((s) => s.language);
   const wordWrapColumn = useSettingsStore((s) => s.wordWrapColumn);
-  const setTheme = useSettingsStore((s) => s.setTheme);
   const setLanguage = useSettingsStore((s) => s.setLanguage);
   const setWordWrapColumn = useSettingsStore((s) => s.setWordWrapColumn);
-  const [selectedProvider, setSelectedProvider] = useState<ProviderType>(initialProvider ?? "opencode");
-  const selectedProviderConfig =
-    PROVIDERS.find((provider) => provider.id === selectedProvider) ?? PROVIDERS[0];
+  const [expanded, setExpanded] = useState<ProviderType | null>(initialProvider ?? null);
+  const [configured, setConfigured] = useState<Partial<Record<ProviderType, boolean>>>({});
 
   useEffect(() => {
     if (open) {
-      setSelectedProvider(initialProvider ?? "opencode");
+      setExpanded(initialProvider ?? null);
     }
   }, [initialProvider, open]);
 
+  // Estado de cada proveedor para su fila; se vuelve a leer al cerrar una fila por si se guardó.
+  useEffect(() => {
+    if (!open) return;
+    let isActive = true;
+    void Promise.allSettled(
+      PROVIDERS.filter((provider) => provider.id !== "codex").map((provider) =>
+        ipc.apikeyLoad(provider.id).then((info) => [provider.id, info.isConfigured] as const),
+      ),
+    ).then((results) => {
+      if (!isActive) return;
+      const next: Partial<Record<ProviderType, boolean>> = {};
+      for (const result of results) {
+        if (result.status === "fulfilled") next[result.value[0]] = result.value[1];
+      }
+      setConfigured(next);
+    });
+    return () => {
+      isActive = false;
+    };
+  }, [open, expanded]);
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent
-        className="overflow-hidden"
-        style={{ "--sheet-width": "680px" } as CSSProperties}
-      >
-        <SheetHeader className="shrink-0 border-b pr-12">
+      <SheetContent>
+        <SheetHeader>
           <SheetTitle>{t("settings:title")}</SheetTitle>
-          <SheetDescription>{t("settings:description")}</SheetDescription>
+          <SheetDescription className="sr-only">{t("settings:description")}</SheetDescription>
         </SheetHeader>
 
-        <Tabs defaultValue="apikeys" className="min-h-0 flex-1 px-4 pb-4">
-          <TabsList className="w-full shrink-0">
-            <TabsTrigger value="apikeys" className="flex-1">
+        <SheetBody className="gap-[26px]">
+          <section aria-labelledby="settings-providers-title" className="flex flex-col">
+            <h3 id="settings-providers-title" className="mb-1.5 text-xs font-medium text-ink-3">
               {t("settings:apiKeys.title")}
-            </TabsTrigger>
-            <TabsTrigger value="appearance" className="flex-1">
-              {t("settings:appearance.title")}
-            </TabsTrigger>
-          </TabsList>
-
-          <TabsContent value="apikeys" className="mt-2 min-h-0 overflow-hidden">
-            <div className="flex h-full min-h-0 flex-col gap-3">
-              <div className="space-y-1.5 sm:hidden">
-                <Label id="settings-provider-label">{t("settings:apiKeys.provider")}</Label>
-                <Select
-                  value={selectedProvider}
-                  onValueChange={(value) => setSelectedProvider(value as ProviderType)}
-                >
-                  <SelectTrigger
-                    className="w-full"
-                    aria-labelledby="settings-provider-label"
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {PROVIDERS.map((provider) => (
-                      <SelectItem key={provider.id} value={provider.id}>
-                        {t(provider.labelKey)} · {t(`settings:apiKeys.connection.${provider.connection}`)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="grid min-h-0 flex-1 sm:grid-cols-[190px_minmax(0,1fr)] sm:gap-4">
-                <nav
-                  className="hidden min-h-0 flex-col gap-1 overflow-y-auto border-r pr-3 sm:flex"
-                  aria-label={t("settings:apiKeys.providerNavigation")}
-                >
-                  {PROVIDERS.map((provider) => {
-                    const isSelected = provider.id === selectedProvider;
-                    return (
-                      <button
-                        key={provider.id}
-                        type="button"
-                        onClick={() => setSelectedProvider(provider.id)}
-                        aria-pressed={isSelected}
+            </h3>
+            <nav aria-label={t("settings:apiKeys.providerNavigation")} className="flex flex-col">
+              {PROVIDERS.map((provider) => {
+                const isExpanded = expanded === provider.id;
+                const state = provider.id === "codex" ? undefined : configured[provider.id];
+                return (
+                  <div key={provider.id} className="flex flex-col border-b border-line">
+                    <button
+                      type="button"
+                      aria-expanded={isExpanded}
+                      aria-controls={`settings-provider-${provider.id}`}
+                      onClick={() => setExpanded(isExpanded ? null : provider.id)}
+                      className="flex h-[42px] items-center gap-2.5 px-0.5 text-left text-sm outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ink"
+                    >
+                      <ChevronRight
+                        aria-hidden="true"
                         className={cn(
-                          "ft-focus flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-sm transition-colors",
-                          isSelected
-                            ? "bg-accent text-foreground"
-                            : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+                          "size-3.5 shrink-0 text-ink-3 transition-transform duration-(--motion-fast)",
+                          isExpanded && "rotate-90",
                         )}
-                      >
-                        <span className="truncate font-medium">{t(provider.labelKey)}</span>
-                        <span className="shrink-0 rounded border bg-background/60 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-foreground/75">
-                          {t(`settings:apiKeys.connection.${provider.connection}`)}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </nav>
-
-                <section className="min-h-0 overflow-y-auto pr-1" aria-labelledby="selected-provider-title">
-                  <div className="mb-4 border-b pb-4">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h2 id="selected-provider-title" className="text-base font-semibold">
-                        {t(selectedProviderConfig.labelKey)}
-                      </h2>
-                      <span className="rounded border bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-foreground/75">
-                        {t(`settings:apiKeys.connection.${selectedProviderConfig.connection}`)}
+                        strokeWidth={1.8}
+                      />
+                      <span className="font-medium">{t(provider.labelKey)}</span>
+                      <span className="font-mono text-[11px] text-ink-4 uppercase">
+                        {t(`settings:apiKeys.connection.${provider.connection}`)}
                       </span>
-                    </div>
-                    <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                      {t(selectedProviderConfig.descriptionKey)}
-                    </p>
+                      {state !== undefined && (
+                        <span
+                          className={cn(
+                            "ml-auto inline-flex items-center gap-1.5 text-xs",
+                            state ? "text-ink-2" : "text-ink-4",
+                          )}
+                        >
+                          <span
+                            aria-hidden="true"
+                            className={cn("size-1.5 rounded-full", state ? "bg-success" : "bg-line-track")}
+                          />
+                          {t(state ? "settings:apiKeys.configured" : "settings:apiKeys.notConfigured")}
+                        </span>
+                      )}
+                    </button>
+                    {isExpanded && (
+                      <div id={`settings-provider-${provider.id}`} className="pt-1 pr-0.5 pb-[18px] pl-6">
+                        <ApiKeySection key={provider.id} provider={provider.id} />
+                      </div>
+                    )}
                   </div>
-                  <ApiKeySection key={selectedProvider} provider={selectedProvider} />
-                </section>
-              </div>
-            </div>
-          </TabsContent>
+                );
+              })}
+            </nav>
+          </section>
 
-          <TabsContent value="appearance" className="mt-4 min-h-0 space-y-6 overflow-y-auto pr-1">
-            <div className="space-y-2">
-              <Label id="settings-theme-label">{t("settings:appearance.theme")}</Label>
-              <Select value={theme} onValueChange={(v) => setTheme(v as "light" | "dark" | "system")}>
-                <SelectTrigger aria-labelledby="settings-theme-label" className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="light">{t("settings:appearance.light")}</SelectItem>
-                  <SelectItem value="dark">{t("settings:appearance.dark")}</SelectItem>
-                  <SelectItem value="system">{t("settings:appearance.system")}</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+          <CliUpdatesSection open={open} />
 
-            <div className="space-y-2">
-              <Label id="settings-language-label">{t("settings:language.title")}</Label>
-              <Select
-                value={language}
-                onValueChange={(v) => setLanguage(v as "es" | "en")}
-              >
-                <SelectTrigger aria-labelledby="settings-language-label" className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="es">{t("settings:language.es")}</SelectItem>
-                  <SelectItem value="en">{t("settings:language.en")}</SelectItem>
-                </SelectContent>
-              </Select>
+          <section aria-labelledby="settings-language-title" className="flex flex-col gap-2">
+            <h3 id="settings-language-title" className="text-xs font-medium text-ink-3">
+              {t("settings:language.title")}
+            </h3>
+            <div
+              role="radiogroup"
+              aria-labelledby="settings-language-title"
+              className="flex w-56 gap-0.5 rounded-[8px] border border-line-field bg-surface-0 p-0.5"
+            >
+              {LANGUAGES.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  role="radio"
+                  lang={option.lang}
+                  aria-checked={language === option.value}
+                  onClick={() => setLanguage(option.value)}
+                  className={cn(
+                    "h-[26px] flex-1 rounded-md text-[12.5px] outline-none transition-colors duration-(--motion-fast) focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink",
+                    language === option.value ? "bg-surface-3 text-ink" : "text-ink-3 hover:text-ink",
+                  )}
+                >
+                  {t(`settings:language.native.${option.value}`)}
+                </button>
+              ))}
             </div>
+          </section>
 
-            <div className="space-y-2">
-              <Label htmlFor="settings-word-wrap-column">{t("settings:wordWrap.title")}</Label>
+          <section aria-labelledby="settings-wrap-title" className="flex flex-col gap-2">
+            <h3 id="settings-wrap-title" className="text-xs font-medium text-ink-3">
+              {t("settings:wordWrap.title")}
+            </h3>
+            <div className="flex items-center gap-2.5">
               <Input
                 id="settings-word-wrap-column"
                 name="word-wrap-column"
+                aria-labelledby="settings-wrap-title"
                 type="number"
                 inputMode="numeric"
                 autoComplete="off"
@@ -227,14 +187,16 @@ export function SettingsPanel({ open, onOpenChange, initialProvider }: SettingsP
                 value={wordWrapColumn}
                 onChange={(e) => setWordWrapColumn(Number(e.target.value))}
                 placeholder="0"
-                className="w-full"
+                className="w-20 font-mono"
               />
-              <p className="text-xs text-muted-foreground">
-                {t("settings:wordWrap.description")}
-              </p>
+              <span className="text-[12.5px] text-ink-3">
+                {wordWrapColumn > 0
+                  ? t("settings:wordWrap.chars", { count: wordWrapColumn })
+                  : t("settings:wordWrap.disabled")}
+              </span>
             </div>
-          </TabsContent>
-        </Tabs>
+          </section>
+        </SheetBody>
       </SheetContent>
     </Sheet>
   );

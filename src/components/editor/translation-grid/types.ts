@@ -10,4 +10,5 @@ export interface TranslationGridMeta {
   onCancelInlineEdit: () => void;
   onNavigateInlineEdit: (direction: "next" | "prev", currentRowIndex: number) => void;
   onOpenDialog: (entry: EntryWithPath) => void;
+  onSelectRow: (rowIndex: number) => void;
 }

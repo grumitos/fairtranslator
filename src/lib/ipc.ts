@@ -5,14 +5,18 @@ import type {
   AiBatchResponseRef,
   ApiKeyInfo,
   BatchProgress,
+  CliUpdateStatus,
   CodexRuntimeStatus,
   EntryStatus,
   ExportResult,
+  GameInspection,
   GlossaryTerm,
   ProjectEntryUpdate,
+  ProjectLocation,
   Project,
   ProviderModel,
   ProviderType,
+  TextFitReport,
 } from "@/types/domain";
 
 type Nullable<T> = T | null;
@@ -30,6 +34,8 @@ type IpcCommands = {
   project_open: IpcCommand<{ path: string }, Project>;
   project_save: IpcCommand<{ path: Nullable<string> }, void>;
   project_get: IpcCommand<undefined, Project | null>;
+  game_inspect: IpcCommand<{ gameDir: string }, GameInspection>;
+  project_location: IpcCommand<undefined, ProjectLocation | null>;
   project_update_entry: IpcCommand<
     {
       filePath: string;
@@ -42,6 +48,10 @@ type IpcCommands = {
   >;
   project_update_entries: IpcCommand<{ updates: ProjectEntryUpdate[] }, void>;
   export_project: IpcCommand<{ outputDir: string }, ExportResult>;
+  text_fit_analyze: IpcCommand<undefined, TextFitReport>;
+  cli_update_status: IpcCommand<undefined, CliUpdateStatus[]>;
+  cli_auto_update_get: IpcCommand<undefined, boolean>;
+  cli_auto_update_set: IpcCommand<{ enabled: boolean }, void>;
   apikey_load: IpcCommand<{ provider: ProviderType }, ApiKeyInfo>;
   apikey_save: IpcCommand<
     {
@@ -202,6 +212,14 @@ export const projectSave = (path?: string) =>
 export const projectGet = () =>
   safeInvoke("project_get");
 
+/** Path of the open project; null when there is no save path yet (use "save as"). */
+export const projectLocation = () =>
+  safeInvoke("project_location");
+
+/** Read-only preview of what project_create would import from a folder. */
+export const gameInspect = (gameDir: string) =>
+  safeInvoke("game_inspect", { gameDir });
+
 export const projectUpdateEntry = (
   filePath: string,
   entryId: string,
@@ -226,6 +244,25 @@ export const projectUpdateEntries = (
 
 export const exportProject = (outputDir: string) =>
   safeInvoke("export_project", { outputDir });
+
+/** Dry run of the export's text fitting: reads the source game, never writes. */
+export const textFitAnalyze = () =>
+  safeInvoke("text_fit_analyze");
+
+// ── External CLI updates ────────────────────────────────────────────
+
+/** Event emitted by the backend on every CLI update status change. */
+export const CLI_UPDATE_EVENT = "cli-update:status";
+
+export const cliUpdateStatus = () =>
+  safeInvoke("cli_update_status");
+
+export const cliAutoUpdateGet = () =>
+  safeInvoke("cli_auto_update_get");
+
+/** Takes effect on the next start. */
+export const cliAutoUpdateSet = (enabled: boolean) =>
+  safeInvoke("cli_auto_update_set", { enabled });
 
 // ── API key commands ────────────────────────────────────────────────
 
@@ -261,15 +298,16 @@ export const apikeyDelete = (provider: ProviderType) =>
 export const apikeyValidate = (provider: ProviderType) =>
   safeInvoke("apikey_validate", { provider });
 
+// Settings read back from apikey_load are `string | null`, so these calls accept null as "not set".
 export const apikeyModels = (
   provider: ProviderType,
-  apiKey?: string,
-  model?: string,
-  endpoint?: string,
-  organization?: string,
-  project?: string,
-  commandPath?: string,
-  profile?: string,
+  apiKey?: Nullable<string>,
+  model?: Nullable<string>,
+  endpoint?: Nullable<string>,
+  organization?: Nullable<string>,
+  project?: Nullable<string>,
+  commandPath?: Nullable<string>,
+  profile?: Nullable<string>,
 ) =>
   safeInvoke("apikey_models", {
     provider,
@@ -283,9 +321,9 @@ export const apikeyModels = (
   });
 
 export const codexStatus = (
-  commandPath?: string,
-  model?: string,
-  profile?: string,
+  commandPath?: Nullable<string>,
+  model?: Nullable<string>,
+  profile?: Nullable<string>,
 ) =>
   safeInvoke("codex_status", {
     commandPath: commandPath ?? null,
@@ -294,9 +332,9 @@ export const codexStatus = (
   });
 
 export const codexLogin = (
-  commandPath?: string,
-  model?: string,
-  profile?: string,
+  commandPath?: Nullable<string>,
+  model?: Nullable<string>,
+  profile?: Nullable<string>,
   deviceAuth?: boolean,
 ) =>
   safeInvoke("codex_login", {

@@ -1,8 +1,9 @@
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { vi } from "vitest";
 import i18n from "@/lib/i18n";
 import { Sidebar } from "@/components/layout/Sidebar";
-import { StatusBar } from "@/components/layout/StatusBar";
+import { EditorHeader } from "@/components/editor/EditorHeader";
+import { useEditorStore } from "@/stores/editorStore";
 import { useProjectStore } from "@/stores/projectStore";
 import type { Project } from "@/types/domain";
 
@@ -14,12 +15,12 @@ vi.mock("@/components/ui/scroll-area", () => ({
 
 function makeProject(): Project {
   return {
-    id: "layout-hook-order",
-    name: "Hook Order Project",
+    id: "layout-flow",
+    name: "Layout Flow Project",
     sourceLang: "ja",
     targetLang: "en",
     engine: "mv",
-    gameDir: "C:/Games/HookOrder",
+    gameDir: "C:/Games/LayoutFlow",
     files: [
       {
         relativePath: "data/Actors.json",
@@ -27,9 +28,30 @@ function makeProject(): Project {
           {
             id: "Actors:name:1",
             fileContext: "Actors > #1 > name",
-            original: "Harold",
+            original: "ハロルド",
             translation: "Harold",
             status: "reviewed",
+            notes: "",
+          },
+        ],
+      },
+      {
+        relativePath: "data/Map001.json",
+        entries: [
+          {
+            id: "Map001:EV001:1",
+            fileContext: "Map001 > EV001 > 1",
+            original: "こんにちは、\\N[1]。",
+            translation: "",
+            status: "untranslated",
+            notes: "",
+          },
+          {
+            id: "Map001:EV002:1",
+            fileContext: "Map001 > EV002 > 1",
+            original: "宿屋へようこそ。",
+            translation: "Welcome to the inn.",
+            status: "final",
             notes: "",
           },
         ],
@@ -42,52 +64,49 @@ function makeProject(): Project {
   };
 }
 
-describe("layout project transitions", () => {
+describe("editor layout", () => {
   beforeEach(async () => {
     await i18n.changeLanguage("en");
     useProjectStore.getState().reset();
+    useEditorStore.getState().reset();
   });
 
   afterEach(() => {
     cleanup();
     useProjectStore.getState().reset();
+    useEditorStore.getState().reset();
   });
 
-  it("keeps StatusBar hook order stable when a project opens", async () => {
-    render(<StatusBar />);
-    expect(screen.getByText("No project")).toBeInTheDocument();
-
-    await act(async () => {
-      useProjectStore.getState().setProject(makeProject(), { markDirty: false });
-    });
-
-    expect(screen.getByText("Engine: MV")).toBeInTheDocument();
-    expect(screen.getByRole("progressbar", { name: "100% complete" })).toBeInTheDocument();
-    expect(screen.getByText("100%")).toBeInTheDocument();
-  });
-
-  it("labels the narrow Unity engine profile", async () => {
-    render(<StatusBar />);
-
-    await act(async () => {
-      useProjectStore.getState().setProject(
-        { ...makeProject(), engine: "unity" },
-        { markDirty: false },
-      );
-    });
-
-    expect(screen.getByText("Engine: Unity (Loose JSON v0)")).toBeInTheDocument();
-  });
-
-  it("keeps Sidebar hook order stable when a project opens", async () => {
-    const { container } = render(<Sidebar />);
+  it("follows the open project: global progress, file switching and status filtering", async () => {
+    const { container } = render(
+      <>
+        <Sidebar />
+        <EditorHeader />
+      </>,
+    );
     expect(container).toBeEmptyDOMElement();
 
     await act(async () => {
       useProjectStore.getState().setProject(makeProject(), { markDirty: false });
     });
 
-    expect(screen.getByText("Hook Order Project")).toBeInTheDocument();
-    expect(screen.getByText("All entries")).toBeInTheDocument();
+    // Avance global en la barra lateral y alcance «todas las entradas» en la cabecera.
+    const sidebar = screen.getByRole("complementary", { name: "Files" });
+    expect(within(sidebar).getByRole("progressbar", { name: "67% complete" })).toBeInTheDocument();
+    expect(within(sidebar).getByText("2 of 3")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "All entries" })).toBeInTheDocument();
+
+    // Al elegir un archivo, la cabecera muestra su nombre, su ruta y sus cifras por estado.
+    fireEvent.click(within(sidebar).getByRole("button", { name: /Map001/ }));
+    expect(screen.getByRole("heading", { level: 1, name: "Map001" })).toBeInTheDocument();
+    expect(screen.getByText("data/Map001.json")).toBeInTheDocument();
+    const filters = screen.getByRole("radiogroup", { name: "Filter by status" });
+    expect(within(filters).getByRole("radio", { name: /All\s*2/ })).toHaveAttribute("aria-checked", "true");
+    expect(within(filters).getByRole("radio", { name: /Untranslated\s*1/ })).toBeInTheDocument();
+
+    // El filtro por estado va a la tienda del editor, que es la que filtra el grid.
+    fireEvent.click(within(filters).getByRole("radio", { name: /Final\s*1/ }));
+    expect(useEditorStore.getState().statusFilter).toBe("final");
+    expect(within(filters).getByRole("radio", { name: /Final\s*1/ })).toHaveAttribute("aria-checked", "true");
   });
 });

@@ -1,32 +1,35 @@
 import { useCallback, useState } from "react";
 import { useProjectStore } from "@/stores/projectStore";
 import * as ipc from "@/lib/ipc";
+import type { GlossaryTerm } from "@/types/domain";
+
+const NO_TERMS: GlossaryTerm[] = [];
 
 /**
  * Hook for glossary CRUD operations.
  * Wraps IPC calls and updates the local project store.
  */
 export function useGlossary() {
-  const project = useProjectStore((s) => s.project);
-  const replaceProject = useProjectStore((s) => s.replaceProject);
+  const glossary = useProjectStore((s) => s.project?.glossary) ?? NO_TERMS;
+  const patchProject = useProjectStore((s) => s.patchProject);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const glossary = project?.glossary ?? [];
-
-  const add = useCallback(
-    async (source: string, target: string, caseSensitive: boolean) => {
+  /**
+   * Runs a glossary IPC call and stores the returned term list on the project that was open when
+   * it started, patching the CURRENT store state so edits made while awaiting are not overwritten.
+   */
+  const mutate = useCallback(
+    async (request: () => Promise<GlossaryTerm[]>) => {
       setIsLoading(true);
       setError(null);
+      const projectId = useProjectStore.getState().project?.id;
       try {
-        const updated = await ipc.glossaryAdd(source, target, caseSensitive);
-        if (project) {
-          replaceProject({
-            ...project,
-            glossary: updated,
-            updatedAt: new Date().toISOString(),
-          }, { markDirty: true });
-        }
+        const updated = await request();
+        patchProject(
+          { glossary: updated, updatedAt: new Date().toISOString() },
+          { markDirty: true, projectId },
+        );
         return updated;
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -36,75 +39,38 @@ export function useGlossary() {
         setIsLoading(false);
       }
     },
-    [project, replaceProject],
+    [patchProject],
+  );
+
+  const add = useCallback(
+    (source: string, target: string, caseSensitive: boolean) =>
+      mutate(() => ipc.glossaryAdd(source, target, caseSensitive)),
+    [mutate],
   );
 
   const update = useCallback(
-    async (source: string, target: string, caseSensitive: boolean) => {
-      setIsLoading(true);
-      setError(null);
-      try {
-        const updated = await ipc.glossaryUpdate(source, target, caseSensitive);
-        if (project) {
-          replaceProject({
-            ...project,
-            glossary: updated,
-            updatedAt: new Date().toISOString(),
-          }, { markDirty: true });
-        }
-        return updated;
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        setError(msg);
-        throw e;
-      } finally {
-        setIsLoading(false);
-      }
-    },
-    [project, replaceProject],
+    (source: string, target: string, caseSensitive: boolean) =>
+      mutate(() => ipc.glossaryUpdate(source, target, caseSensitive)),
+    [mutate],
   );
 
   const remove = useCallback(
-    async (source: string) => {
-      setIsLoading(true);
-      setError(null);
-      try {
-        const updated = await ipc.glossaryRemove(source);
-        if (project) {
-          replaceProject({
-            ...project,
-            glossary: updated,
-            updatedAt: new Date().toISOString(),
-          }, { markDirty: true });
-        }
-        return updated;
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        setError(msg);
-        throw e;
-      } finally {
-        setIsLoading(false);
-      }
-    },
-    [project, replaceProject],
+    (source: string) => mutate(() => ipc.glossaryRemove(source)),
+    [mutate],
   );
 
   const refresh = useCallback(async () => {
+    const projectId = useProjectStore.getState().project?.id;
     try {
       const terms = await ipc.glossaryList();
-      if (project) {
-        replaceProject({
-          ...project,
-          glossary: terms,
-        }, { markDirty: "preserve" });
-      }
+      patchProject({ glossary: terms }, { markDirty: "preserve", projectId });
       return terms;
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setError(msg);
       throw e;
     }
-  }, [project, replaceProject]);
+  }, [patchProject]);
 
   return {
     glossary,

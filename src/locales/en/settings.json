@@ -1,43 +1,31 @@
 {
   "title": "Settings",
-  "description": "Configure providers, appearance, and application language.",
+  "description": "Providers, language, and line wrapping.",
   "apiKeys": {
     "title": "Providers",
     "openai": {
       "label": "OpenAI",
-      "description": "OpenAI models using your own API key.",
       "placeholder": "sk-...",
       "organization": "OpenAI organization",
-      "organizationPlaceholder": "OpenAI organization ID (optional)",
-      "project": "OpenAI project",
-      "projectPlaceholder": "OpenAI project ID (optional)",
-      "authNote": "Use API keys, not ChatGPT sessions. Organization and project are optional."
+      "project": "OpenAI project"
     },
     "deepl": {
       "label": "DeepL",
-      "description": "DeepL machine translation for direct batches.",
       "placeholder": "Your DeepL API key"
     },
     "google": {
       "label": "Google Translate",
-      "description": "Google Cloud Translation for direct machine translation.",
       "placeholder": "Your Google API key"
     },
     "opencode": {
       "label": "OpenCode Go",
-      "description": "Integrated OpenCode Go provider with full context and dynamic models.",
       "placeholder": "Your OpenCode API key",
-      "endpointPlaceholder": "https://opencode.ai/zen/go/v1",
-      "authNote": "OpenCode uses your OpenCode Go API key. Only Go endpoints are accepted for now."
+      "endpointPlaceholder": "https://opencode.ai/zen/go/v1"
     },
     "codex": {
       "label": "Codex CLI",
-      "description": "Local runtime managed by the Codex CLI, with no API key stored in FairTranslator.",
       "commandPath": "Codex executable path",
-      "commandPathPlaceholder": "codex executable path (optional)",
       "profile": "Codex profile",
-      "profilePlaceholder": "Codex profile name (optional)",
-      "authNote": "Codex uses the installed CLI. Leave the path empty to use PATH.",
       "login": "Sign in with Codex",
       "deviceLogin": "Use device code",
       "loginSuccess": "Codex sign-in is ready",
@@ -48,11 +36,16 @@
       "statusNotInstalled": "CLI not found",
       "statusError": "CLI detected, but status check failed",
       "checkStatus": "Check CLI",
-      "sourceSidecar": "Using the Codex runtime bundled with the app",
-      "sourcePath": "Using `codex` from PATH",
-      "sourceConfigured": "Using a custom executable path",
       "resolvedPathLabel": "Executable",
-      "versionLabel": "Version"
+      "versionLabel": "Version",
+      "source": "Source",
+      "sourceShort": {
+        "sidecar": "Bundled with the app",
+        "configured": "Custom path",
+        "path": "PATH"
+      },
+      "modelDefault": "CLI default",
+      "profileDefault": "Default"
     },
     "save": "Save",
     "saved": "Settings saved",
@@ -62,18 +55,15 @@
     "removed": "Settings cleared",
     "removeFailed": "Could not clear provider",
     "validate": "Validate",
-    "validating": "Validating…",
     "valid": "Provider is ready",
     "invalid": "Provider validation failed",
     "apiKey": "API key",
     "savedKeyPlaceholder": "Key saved; type to replace it",
-    "savedKeyHint": "The key remains in secure storage. Leave this empty to keep it.",
     "advanced": "Advanced settings",
-    "provider": "Provider",
     "providerNavigation": "Provider list",
     "connection": {
       "api": "API",
-      "cli": "Local CLI"
+      "cli": "CLI"
     },
     "model": "Model",
     "modelPlaceholder": "Select or type a model",
@@ -86,29 +76,44 @@
       "count_other": "{{count}} models available"
     },
     "endpoint": "Custom URL",
-    "endpointPlaceholder": "Endpoint URL (optional)",
-    "noKey": "No key configured",
     "notConfigured": "Not configured",
-    "configured": "Configured"
-  },
-  "appearance": {
-    "title": "Appearance",
-    "theme": "Theme",
-    "light": "Light",
-    "dark": "Dark",
-    "system": "System"
+    "configured": "Configured",
+    "status": "Status",
+    "optional": "Optional"
   },
   "language": {
     "title": "Language",
-    "select": "Select language",
-    "es": "Spanish",
-    "en": "English"
+    "native": {
+      "es": "Español",
+      "en": "English"
+    }
   },
   "wordWrap": {
     "title": "Word wrap",
-    "label": "Wrap column",
-    "description": "Wrap after this many characters. Use 0 to disable.",
     "disabled": "Disabled",
     "chars": "{{count}} characters"
+  },
+  "cli": {
+    "title": "CLI",
+    "autoUpdate": "Update on startup",
+    "updatedToast": "{{name}} updated to {{version}}",
+    "names": {
+      "codex": "Codex CLI"
+    },
+    "states": {
+      "checking": "Checking…",
+      "up_to_date": "Up to date",
+      "updating": "Updating…",
+      "updated": "Updated",
+      "failed": "Failed",
+      "offline": "Offline",
+      "skipped": "Skipped"
+    },
+    "skip": {
+      "disabled": "Updates off",
+      "bundled": "Bundled with the app",
+      "custom": "Custom install",
+      "not_installed": "Not installed"
+    }
   }
 }

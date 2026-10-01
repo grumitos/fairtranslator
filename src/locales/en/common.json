@@ -1,18 +1,13 @@
 {
   "appName": "FairTranslator",
-  "loading": "Loading…",
   "error": "Error",
   "save": "Save",
-  "saveAs": "Save As",
-  "open": "Open",
+  "saveAs": "Save as…",
   "cancel": "Cancel",
   "confirm": "Confirm",
-  "delete": "Delete",
+  "discard": "Discard",
   "close": "Close",
   "search": "Search",
-  "noResults": "No results",
-  "actions": "Actions",
-  "new": "New",
   "newProject": "New Project",
   "openProject": "Open Project",
   "openProjectFolder": "Select .fairtl project",
@@ -23,6 +18,12 @@
     "badge": "Unsaved"
   },
   "project": "Project",
+  "window": {
+    "minimize": "Minimize",
+    "maximize": "Maximize",
+    "restore": "Restore",
+    "close": "Close"
+  },
   "errorBoundary": {
     "title": "Something went wrong",
     "unexpected": "An unexpected error occurred.",
@@ -41,14 +42,13 @@
     "it": "Italian"
   },
   "welcome": {
-    "title": "Welcome to FairTranslator",
-    "subtitle": "Translator for supported RPG Maker games · experimental Unity Loose JSON",
-    "newProject": "Create new project",
-    "openProject": "Open existing project",
-    "settings": "Settings",
-    "toggleTheme": "Toggle theme",
-    "newProjectDesc": "Select a supported game folder (Unity Loose JSON is experimental)",
-    "openProjectDesc": "Open a saved .fairtl project"
+    "newProject": "New project",
+    "openProject": "Open project",
+    "engines": "RPG Maker MZ · MV · VX Ace · VX · XP",
+    "recent": "Recent",
+    "today": "Today",
+    "yesterday": "Yesterday",
+    "forgetRecent": "Remove {{name}} from recent"
   },
   "newProjectDialog": {
     "title": "New Project",
@@ -56,40 +56,69 @@
     "name": "Project name",
     "namePlaceholder": "My translation",
     "gameDir": "Game folder",
-    "gameDirPlaceholder": "Select game folder…",
-    "browse": "Browse",
     "sourceLang": "Source language",
     "targetLang": "Target language",
     "languagesMustDiffer": "Source and target languages must be different.",
     "create": "Create project",
     "creating": "Creating project…",
-    "selectFolder": "Select folder"
+    "selectFolder": "Select folder",
+    "engine": "Engine",
+    "content": "Content",
+    "packedArchive": "Encrypted archive",
+    "files_one": "{{count}} file",
+    "files_other": "{{count}} files",
+    "entries_one": "{{count}} entry",
+    "entries_other": "{{count}} entries",
+    "blocked": {
+      "packed_archive": "Packed game ({{archive}}): choose a copy with unpacked data.",
+      "no_game": "No supported game in this folder.",
+      "multiple_games": "Several games in this folder: choose one game folder."
+    }
   },
   "export": {
-    "title": "Export translations",
     "button": "Export",
     "selectFolder": "Select empty output folder",
     "exporting": "Exporting…",
-    "success": "Export completed",
-    "successDetail": "Files exported: {{files}}. Translations applied: {{applied}}/{{total}}.",
-    "warning": "Export completed with warnings",
-    "warningDetail": "Checks needing review: {{count}}.",
-    "noTranslations": "No translations to export",
-    "errorNoProject": "No project open",
     "readiness": {
-      "title": "Review before export",
-      "description": "The project still contains pending entries or drafts. Review them now or export the copy anyway.",
-      "untranslated": "Untranslated: {{count}}",
-      "draft": "Drafts: {{count}}",
-      "reviewed": "Reviewed: {{count}}",
-      "final": "Final: {{count}}",
-      "reviewDrafts": "Review drafts",
-      "exportAnyway": "Export anyway"
+      "reviewDrafts": "Review drafts"
     },
     "result": {
       "destination": "Destination folder",
-      "warnings": "Warnings: {{count}}",
-      "noWarnings": "The export produced no warnings."
+      "warnings": "Warnings: {{count}}"
+    },
+    "run": "Export",
+    "done": "Exported",
+    "doneWithWarnings": "Exported with warnings",
+    "destination": "Destination",
+    "gameFolder": "Original game",
+    "choose": "Choose…",
+    "change": "Change…",
+    "noDestination": "Not chosen",
+    "untouched": "The game folder is never modified.",
+    "filesWritten": "Files written",
+    "applied": "Translations applied",
+    "warningsLabel": "Warnings",
+    "fit": {
+      "title": "Text fitting",
+      "analyze": "Analyze",
+      "analyzing": "Analyzing…",
+      "wrapped": "Entries rewrapped",
+      "pagesAdded": "Pages added",
+      "overflow": "Still too long",
+      "plugin": "Game wrapping",
+      "list": "Entries that do not fit",
+      "rows": "{{lines}}/{{max}} rows",
+      "width": "{{width}}/{{max}} px",
+      "more_one": "+{{count}} more entry",
+      "more_other": "+{{count}} more entries",
+      "kinds": {
+        "message": "Message",
+        "scroll": "Scrolling text",
+        "choice": "Choice",
+        "description": "Description",
+        "name": "Name",
+        "term": "Term"
+      }
     }
   }
 }

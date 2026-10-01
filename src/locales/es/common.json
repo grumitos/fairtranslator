@@ -1,18 +1,13 @@
 {
   "appName": "FairTranslator",
-  "loading": "Cargando…",
   "error": "Error",
   "save": "Guardar",
-  "saveAs": "Guardar como",
-  "open": "Abrir",
+  "saveAs": "Guardar como…",
   "cancel": "Cancelar",
   "confirm": "Confirmar",
-  "delete": "Eliminar",
+  "discard": "Descartar",
   "close": "Cerrar",
   "search": "Buscar",
-  "noResults": "Sin resultados",
-  "actions": "Acciones",
-  "new": "Nuevo",
   "newProject": "Nuevo proyecto",
   "openProject": "Abrir proyecto",
   "openProjectFolder": "Seleccionar proyecto .fairtl",
@@ -23,6 +18,12 @@
     "badge": "Sin guardar"
   },
   "project": "Proyecto",
+  "window": {
+    "minimize": "Minimizar",
+    "maximize": "Maximizar",
+    "restore": "Restaurar",
+    "close": "Cerrar"
+  },
   "errorBoundary": {
     "title": "Algo salió mal",
     "unexpected": "Ocurrió un error inesperado.",
@@ -41,14 +42,13 @@
     "it": "Italiano"
   },
   "welcome": {
-    "title": "Bienvenido a FairTranslator",
-    "subtitle": "Traductor para juegos RPG Maker compatibles · Unity Loose JSON experimental",
-    "newProject": "Crear nuevo proyecto",
-    "openProject": "Abrir proyecto existente",
-    "settings": "Configuración",
-    "toggleTheme": "Cambiar tema",
-    "newProjectDesc": "Selecciona la carpeta de un juego compatible (Unity Loose JSON es experimental)",
-    "openProjectDesc": "Abre un proyecto .fairtl guardado"
+    "newProject": "Nuevo proyecto",
+    "openProject": "Abrir proyecto",
+    "engines": "RPG Maker MZ · MV · VX Ace · VX · XP",
+    "recent": "Recientes",
+    "today": "Hoy",
+    "yesterday": "Ayer",
+    "forgetRecent": "Quitar {{name}} de recientes"
   },
   "newProjectDialog": {
     "title": "Nuevo proyecto",
@@ -56,40 +56,69 @@
     "name": "Nombre del proyecto",
     "namePlaceholder": "Mi traducción",
     "gameDir": "Carpeta del juego",
-    "gameDirPlaceholder": "Selecciona la carpeta del juego…",
-    "browse": "Examinar",
     "sourceLang": "Idioma de origen",
     "targetLang": "Idioma de destino",
     "languagesMustDiffer": "El idioma de origen y el de destino deben ser distintos.",
     "create": "Crear proyecto",
     "creating": "Creando proyecto…",
-    "selectFolder": "Seleccionar carpeta"
+    "selectFolder": "Seleccionar carpeta",
+    "engine": "Motor",
+    "content": "Contenido",
+    "packedArchive": "Archivo cifrado",
+    "files_one": "{{count}} archivo",
+    "files_other": "{{count}} archivos",
+    "entries_one": "{{count}} entrada",
+    "entries_other": "{{count}} entradas",
+    "blocked": {
+      "packed_archive": "Juego empaquetado ({{archive}}): elige una copia con los datos sin empaquetar.",
+      "no_game": "No hay un juego compatible en esta carpeta.",
+      "multiple_games": "Hay varios juegos en esta carpeta: elige la carpeta de uno."
+    }
   },
   "export": {
-    "title": "Exportar traducciones",
     "button": "Exportar",
     "selectFolder": "Seleccionar carpeta de salida vacía",
     "exporting": "Exportando…",
-    "success": "Exportación completada",
-    "successDetail": "Archivos exportados: {{files}}. Traducciones aplicadas: {{applied}}/{{total}}.",
-    "warning": "Exportación completada con advertencias",
-    "warningDetail": "Revisiones pendientes: {{count}}.",
-    "noTranslations": "No hay traducciones para exportar",
-    "errorNoProject": "No hay proyecto abierto",
     "readiness": {
-      "title": "Revisar antes de exportar",
-      "description": "El proyecto todavía contiene entradas pendientes o borradores. Puedes revisarlos o exportar la copia de todos modos.",
-      "untranslated": "Sin traducir: {{count}}",
-      "draft": "Borradores: {{count}}",
-      "reviewed": "Revisadas: {{count}}",
-      "final": "Finales: {{count}}",
-      "reviewDrafts": "Revisar borradores",
-      "exportAnyway": "Exportar de todos modos"
+      "reviewDrafts": "Revisar borradores"
     },
     "result": {
       "destination": "Carpeta de destino",
-      "warnings": "Advertencias: {{count}}",
-      "noWarnings": "La exportación no produjo advertencias."
+      "warnings": "Advertencias: {{count}}"
+    },
+    "run": "Exportar",
+    "done": "Exportado",
+    "doneWithWarnings": "Exportado con advertencias",
+    "destination": "Destino",
+    "gameFolder": "Juego original",
+    "choose": "Elegir…",
+    "change": "Cambiar…",
+    "noDestination": "Sin elegir",
+    "untouched": "La carpeta del juego no se modifica.",
+    "filesWritten": "Archivos escritos",
+    "applied": "Traducciones aplicadas",
+    "warningsLabel": "Advertencias",
+    "fit": {
+      "title": "Ajuste de texto",
+      "analyze": "Analizar",
+      "analyzing": "Analizando…",
+      "wrapped": "Entradas ajustadas",
+      "pagesAdded": "Páginas añadidas",
+      "overflow": "No caben",
+      "plugin": "Ajuste del juego",
+      "list": "Entradas que no caben",
+      "rows": "{{lines}}/{{max}} filas",
+      "width": "{{width}}/{{max}} px",
+      "more_one": "+{{count}} entrada más",
+      "more_other": "+{{count}} entradas más",
+      "kinds": {
+        "message": "Mensaje",
+        "scroll": "Texto desplazable",
+        "choice": "Elección",
+        "description": "Descripción",
+        "name": "Nombre",
+        "term": "Término"
+      }
     }
   }
 }

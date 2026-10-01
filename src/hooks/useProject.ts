@@ -1,6 +1,13 @@
 import { useCallback } from "react";
 import { useProjectStore } from "@/stores/projectStore";
 import * as ipc from "@/lib/ipc";
+import {
+  flushPendingEdits,
+  persistProject,
+  refreshProjectFromBackend,
+  trackEdit,
+} from "@/lib/projectSync";
+import { refreshProjectLocation } from "@/lib/projectLocation";
 import { normalizeProjectEntryUpdate } from "@/lib/translationState";
 import type {
   Project,
@@ -51,6 +58,19 @@ function applyEntryUpdates(project: Project, updates: ProjectEntryUpdate[]): Pro
 }
 
 /**
+ * The backend rejected an edit that the UI already shows. Adopt the backend copy instead of
+ * restoring an older snapshot, which would also discard newer edits that were accepted.
+ */
+async function resyncAfterFailedEdit(previousDirty: boolean, revisionAfterEdit: number) {
+  const editedSince = useProjectStore.getState().editRevision !== revisionAfterEdit;
+  try {
+    await refreshProjectFromBackend(previousDirty || editedSince);
+  } catch {
+    // The rejection that brought us here is the error worth reporting; keep the UI state if the backend cannot answer.
+  }
+}
+
+/**
  * Hook that combines project store state with IPC operations.
  * Components use this hook — never raw invoke() or store directly.
  */
@@ -73,6 +93,7 @@ export function useProject() {
       try {
         const proj = await ipc.projectCreate(gameDir, name, sourceLang, targetLang);
         setProject(proj, { markDirty: true });
+        void refreshProjectLocation();
         return proj;
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -92,6 +113,7 @@ export function useProject() {
       try {
         const proj = await ipc.projectOpen(path);
         setProject(proj, { markDirty: false });
+        void refreshProjectLocation();
         return proj;
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -109,9 +131,8 @@ export function useProject() {
       setLoading(true);
       setError(null);
       try {
-        await ipc.projectSave(path);
-        const refreshedProject = await ipc.projectGet();
-        replaceProject(refreshedProject, { markDirty: false });
+        await persistProject(() => ipc.projectSave(path));
+        void refreshProjectLocation();
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         setError(msg);
@@ -120,7 +141,7 @@ export function useProject() {
         setLoading(false);
       }
     },
-    [replaceProject, setLoading, setError],
+    [setLoading, setError],
   );
 
   const updateEntry = useCallback(
@@ -132,32 +153,31 @@ export function useProject() {
       notes?: string,
     ) => {
       const store = useProjectStore.getState();
-      const currentProject = store.project;
       const previousDirty = store.isDirty;
-      const update: ProjectEntryUpdate = {
+      const normalizedUpdate = normalizeProjectEntryUpdate({
         filePath,
         entryId,
         translation,
         status,
         notes,
-      };
-      const normalizedUpdate = normalizeProjectEntryUpdate(update);
-      if (currentProject) {
-        replaceProject(applyEntryUpdates(currentProject, [normalizedUpdate]), { markDirty: true });
+      });
+      if (store.project) {
+        replaceProject(applyEntryUpdates(store.project, [normalizedUpdate]), { markDirty: true });
       }
+      const revisionAfterEdit = useProjectStore.getState().editRevision;
 
       try {
-        await ipc.projectUpdateEntry(
-          normalizedUpdate.filePath,
-          normalizedUpdate.entryId,
-          normalizedUpdate.translation,
-          normalizedUpdate.status,
-          normalizedUpdate.notes,
+        await trackEdit(
+          ipc.projectUpdateEntry(
+            normalizedUpdate.filePath,
+            normalizedUpdate.entryId,
+            normalizedUpdate.translation,
+            normalizedUpdate.status,
+            normalizedUpdate.notes,
+          ),
         );
       } catch (e) {
-        if (currentProject) {
-          replaceProject(currentProject, { markDirty: previousDirty });
-        }
+        await resyncAfterFailedEdit(previousDirty, revisionAfterEdit);
         const msg = e instanceof Error ? e.message : String(e);
         setError(msg);
         throw e;
@@ -173,19 +193,17 @@ export function useProject() {
       }
 
       const store = useProjectStore.getState();
-      const currentProject = store.project;
       const previousDirty = store.isDirty;
       const normalizedUpdates = updates.map(normalizeProjectEntryUpdate);
-      if (currentProject) {
-        replaceProject(applyEntryUpdates(currentProject, normalizedUpdates), { markDirty: true });
+      if (store.project) {
+        replaceProject(applyEntryUpdates(store.project, normalizedUpdates), { markDirty: true });
       }
+      const revisionAfterEdit = useProjectStore.getState().editRevision;
 
       try {
-        await ipc.projectUpdateEntries(normalizedUpdates);
+        await trackEdit(ipc.projectUpdateEntries(normalizedUpdates));
       } catch (e) {
-        if (currentProject) {
-          replaceProject(currentProject, { markDirty: previousDirty });
-        }
+        await resyncAfterFailedEdit(previousDirty, revisionAfterEdit);
         const msg = e instanceof Error ? e.message : String(e);
         setError(msg);
         throw e;
@@ -199,6 +217,8 @@ export function useProject() {
       setLoading(true);
       setError(null);
       try {
+        // The exporter reads the backend copy: make sure every edit shown in the grid has reached it.
+        await flushPendingEdits();
         const result = await ipc.exportProject(outputDir);
         return result;
       } catch (e) {

@@ -3,9 +3,8 @@ import {
   normalizeProjectEntryUpdate,
 } from "@/lib/translationState";
 import {
-  countPendingTranslationEntries,
-  countTranslationProgress,
-  isPendingTranslationEntry,
+  fileStats,
+  projectStats,
   isTranslatedEntry,
 } from "@/lib/translationMetrics";
 import type { TranslationEntry } from "@/types/domain";
@@ -37,14 +36,13 @@ describe("translation state normalization", () => {
     });
   });
 
-  it("treats blank translations as pending even if status drifted", () => {
+  it("does not count blank translations as translated even if status drifted", () => {
     const driftedEntry: TranslationEntry = {
       ...baseEntry,
       status: "reviewed",
       translation: "   ",
     };
 
-    expect(isPendingTranslationEntry(driftedEntry)).toBe(true);
     expect(isTranslatedEntry(driftedEntry)).toBe(false);
   });
 
@@ -55,11 +53,10 @@ describe("translation state normalization", () => {
       status: "draft",
     };
 
-    expect(isPendingTranslationEntry(translatedEntry)).toBe(false);
     expect(isTranslatedEntry(translatedEntry)).toBe(true);
   });
 
-  it("counts translation progress without treating blank originals as work", () => {
+  it("counts progress per file without treating blank originals as work", () => {
     const entries: TranslationEntry[] = [
       baseEntry,
       { ...baseEntry, id: "Map001:text:2", translation: "Hola", status: "draft" },
@@ -67,12 +64,16 @@ describe("translation state normalization", () => {
       { ...baseEntry, id: "Map001:text:4", translation: "   ", status: "reviewed" },
     ];
 
-    expect(countTranslationProgress(entries)).toEqual({
+    const stats = fileStats(entries);
+    expect(stats).toEqual({
       total: 3,
       translated: 1,
       pending: 2,
-      percent: 33,
+      byStatus: { untranslated: 1, draft: 1, reviewed: 1, final: 0 },
     });
-    expect(countPendingTranslationEntries(entries)).toBe(2);
+    // Mismo array, mismo resultado en caché; un array nuevo (una edición) se recalcula.
+    expect(fileStats(entries)).toBe(stats);
+    expect(fileStats([...entries])).not.toBe(stats);
+    expect(projectStats([{ entries }, { entries }]).pending).toBe(4);
   });
 });

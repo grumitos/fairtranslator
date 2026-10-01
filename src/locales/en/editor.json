@@ -1,29 +1,22 @@
 {
   "toolbar": {
-    "batchTranslate": "Batch translate",
+    "translate": "Translate",
     "findReplace": "Find & Replace",
     "findReplaceShortcut": "Ctrl+F / Ctrl+H",
-    "export": "Export",
-    "progress": "Progress",
-    "save": "Save",
     "filter": "Filter",
     "settings": "Settings",
     "glossary": "Glossary",
-    "toggleTheme": "Toggle theme",
     "styleGuide": "Style guide"
   },
   "grid": {
     "original": "Original",
     "translation": "Translation",
     "status": "Status",
-    "file": "File",
     "context": "Context",
     "notes": "Notes",
-    "notesPlaceholder": "Optional notes…",
     "label": "Translation grid",
     "noEntries": "No entries to display",
     "noFilteredEntries": "No results for these filters",
-    "selectFile": "Select a file from the sidebar",
     "totalEntries": "{{count}} entries",
     "totalEntries_one": "{{count}} entry",
     "totalEntries_other": "{{count}} entries",
@@ -45,17 +38,20 @@
     "replaceAll": "Replace all in Translation",
     "previous": "Previous match",
     "next": "Next match",
-    "matches": "{{count}} matches",
     "noMatches": "No matches",
     "replaced": "{{count}} entries updated",
     "replaced_one": "{{count}} entry updated",
     "replaced_other": "{{count}} entries updated",
     "invalidRegex": "Invalid regular expression",
+    "invalidRegexShort": "Invalid",
     "noReplaceMatches": "No Translation matches to replace",
     "noReplaceInOriginal": "The current match is in Original; replace only applies to Translation.",
     "replaceFailed": "Could not apply replacements",
     "close": "Close",
-    "currentMatch": "{{current}} of {{total}} matches"
+    "currentMatch": "{{current}} of {{total}} matches",
+    "currentMatchShort": "{{current}} of {{total}}",
+    "replaceShort": "Replace",
+    "replaceAllShort": "All"
   },
   "status": {
     "untranslated": "Untranslated",
@@ -68,9 +64,11 @@
     "files": "Files",
     "allEntries": "All entries",
     "filterByStatus": "Filter by status",
-    "entries": "{{count}} entries",
     "noFiles": "No files",
     "resize": "Resize file sidebar",
+    "progressOf": "{{translated}} of {{total}}",
+    "fileCount_one": "{{count}} file",
+    "fileCount_other": "{{count}} files",
     "groups": {
       "system": "System",
       "database": "Database",
@@ -78,51 +76,45 @@
       "maps": "Maps"
     }
   },
+  "header": {
+    "entries": "Entries",
+    "translated": "Translated",
+    "progress": "Progress"
+  },
   "statusBar": {
-    "total": "Total: {{count}}",
-    "translated": "Translated: {{count}}",
-    "percentage": "{{percent}}% complete",
-    "percentageShort": "{{percent}}%",
-    "noProject": "No project",
-    "engine": "Engine: {{engine}}"
+    "percentage": "{{percent}}% complete"
   },
   "batch": {
     "title": "Batch translation",
-    "description": "Translate pending entries in bulk.",
     "tabs": {
       "providers": "Providers",
       "externalAi": "External AI"
     },
     "provider": "Provider",
-    "selectProvider": "Select a provider",
     "providers": {
-      "modeTitle": "In-app provider flow",
-      "modeDescription": "Translate in FairTranslator and apply results to this project.",
-      "modeFeatures": "Context varies by provider; check the note before starting.",
-      "capabilityTitle": "Selected provider note",
       "configuration": {
         "notConfigured": "Not configured",
         "loadFailed": "Could not load configuration",
         "action": "Configure provider"
       },
-      "capabilities": {
-        "openai": "Uses full project context: style guide, glossary, protected terms, memory, and neighboring batches.",
-        "codex": "Uses the same context as OpenAI through the local Codex CLI.",
-        "opencode": "Uses full project context through OpenCode Go and the model selected for this run.",
-        "deepl": "Runs in-app. Uses limited glossary/style guidance; no project memory or batch context.",
-        "google": "Runs in-app. Protects glossary terms and control codes; no project memory."
+      "ready": "Ready",
+      "names": {
+        "codex": "Codex CLI",
+        "openai": "OpenAI",
+        "opencode": "OpenCode Go",
+        "deepl": "DeepL",
+        "google": "Google Translate"
       },
-      "openai": "OpenAI",
-      "deepl": "DeepL",
-      "google": "Google Translate",
-      "codex": "Codex CLI · local",
-      "opencode": "OpenCode Go · integrated API"
+      "context": {
+        "codex": "Style guide · glossary · memory · nearby batches",
+        "openai": "Style guide · glossary · memory · nearby batches",
+        "opencode": "Style guide · glossary · memory · nearby batches",
+        "deepl": "Glossary · style guide (limited)",
+        "google": "Glossary · control codes"
+      }
     },
     "models": {
       "title": "Model for this run",
-      "selected": "Selected: {{model}}",
-      "codexDefault": "Codex will use the CLI default model.",
-      "noneSelected": "Select a model before translating.",
       "manualPlaceholder": "Type a model or refresh the list",
       "refresh": "Refresh",
       "refreshed": "Models refreshed",
@@ -130,25 +122,15 @@
       "count": "{{count}} models available",
       "count_one": "{{count}} model available",
       "count_other": "{{count}} models available",
-      "required": "Select a model for this provider."
+      "required": "Select a model for this provider.",
+      "cliDefault": "CLI default"
     },
     "selectFiles": "Files to translate",
-    "allFiles": "All files",
-    "selectedFiles": "{{count}} files selected",
-    "untranslatedOnly": "Untranslated entries only",
     "start": "Start translation",
-    "starting": "Starting…",
-    "translating": "Translating…",
-    "progress": "Entries: {{completed}}/{{total}}",
-    "progressFiles": "Files: {{completed}}/{{total}}",
-    "progressChunks": "Batches: {{completed}}/{{total}}",
-    "currentFile": "Current file: {{file}}",
-    "currentChunk": "Batch {{current}}/{{total}} in this file",
     "complete": "Translation complete",
     "completeDetail": "Translated: {{completed}}/{{total}}",
     "completeWithErrors": "Translation completed with errors",
     "completeWithErrorsDetail": "Translated: {{completed}}/{{total}}. Failed: {{failed}}",
-    "errors": "Errors: {{count}}",
     "noProvider": "Configure a provider in Settings.",
     "noEntries": "No untranslated entries",
     "cancel": "Cancel",
@@ -158,15 +140,12 @@
     "cancelled": "Translation cancelled",
     "cancelledDetail": "Translated before cancelling: {{completed}}/{{total}}",
     "ai": {
-      "description": "Export untranslated entries, send the prompt to an AI, then paste the JSON response with the same projectId and batchId.",
       "maxEntries": "Max entries per AI batch",
       "invalidMaxEntries": "Max entries must be a positive integer.",
       "export": "Export AI batch",
       "exported": "AI batch exported",
       "exportedDetail": "Exported: {{exported}}/{{total}}",
-      "instructionCandidates": "Possible instructions/help: {{count}}",
       "prompt": "Prompt for external AI",
-      "promptPlaceholder": "Generate a batch to get a prompt.",
       "copy": "Copy prompt",
       "copied": "Prompt copied to clipboard",
       "copyFailed": "Could not copy prompt",
@@ -182,14 +161,24 @@
       "partialApply": "AI response applied with issues",
       "partialApplyDetail": "Applied: {{applied}}. Skipped: {{skipped}}. Blocked: {{invalid}}. Missing: {{missing}}. Duplicate IDs: {{duplicates}}",
       "exportFailed": "Could not export AI batch",
-      "applyFailed": "Could not apply AI response"
-    }
+      "applyFailed": "Could not apply AI response",
+      "batch": "Batch",
+      "exportedLabel": "Exported",
+      "instructionLabel": "Possible instructions"
+    },
+    "summary": "{{project}} · {{count}} untranslated",
+    "allFilesCount": "All · {{count}}",
+    "selection": "Selection",
+    "pending": "Pending entries",
+    "context": "Context",
+    "progressOf": "{{completed}} of {{total}}",
+    "currentFileShort": "{{file}} · batch {{current}} of {{total}}",
+    "chunks": "Batches",
+    "filesLabel": "Files",
+    "failed": "Failed"
   },
   "styleGuide": {
-    "title": "Project style guide",
-    "description": "Rules for AI translation.",
     "addTitle": "New rule",
-    "addPlaceholder": "e.g. Keep menu labels short and natural",
     "add": "Add",
     "rulesLabel": "Rules ({{count}})",
     "ruleInputLabel": "Rule {{index}}",
@@ -199,5 +188,12 @@
     "saved": "Style guide saved",
     "saveFailed": "Could not save style guide",
     "empty": "No rules yet"
+  },
+  "context": {
+    "title": "Project context"
+  },
+  "entry": {
+    "codes": "Codes",
+    "characters": "Characters"
   }
 }

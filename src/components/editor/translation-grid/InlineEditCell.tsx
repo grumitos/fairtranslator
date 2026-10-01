@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import type { EntryStatus } from "@/types/domain";
 import type { EntryWithPath } from "@/components/editor/translation-grid/types";
+import { statusAfterEdit } from "@/lib/translationState";
 
 interface InlineEditCellProps {
   entry: EntryWithPath;
@@ -69,6 +70,8 @@ export function InlineEditCell({
   }, [value, initialValue, entry.id, entry._filePath, entry.status, onCommit, onCancel]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Durante la composición de un IME (japonés, chino, coreano) Enter confirma la conversión, no la celda.
+    if (e.nativeEvent.isComposing) return;
     if (e.key === "Tab") {
       e.preventDefault();
       if (!committedRef.current) {
@@ -93,9 +96,7 @@ export function InlineEditCell({
       onCancel();
     } else if (e.key === "F2") {
       e.preventDefault();
-      const nextStatus = entry.status === "untranslated" && value.trim()
-        ? "draft"
-        : entry.status;
+      const nextStatus = statusAfterEdit(entry.status, value);
       if (!committedRef.current) {
         committedRef.current = true;
         if (value !== initialValue) {
@@ -117,6 +118,7 @@ export function InlineEditCell({
   return (
     <textarea
       ref={textareaRef}
+      data-ft-inline-edit
       name={`translation-${entry.id}`}
       aria-label={ariaLabel}
       value={value}
@@ -124,7 +126,7 @@ export function InlineEditCell({
       onKeyDown={handleKeyDown}
       onBlur={handleBlur}
       onDoubleClick={(e) => e.stopPropagation()}
-      className="w-full resize-none rounded-md border border-primary/55 bg-card px-2 py-1 text-sm shadow-sm outline-none ring-2 ring-primary/20 transition-[border-color,box-shadow] duration-150 focus:border-primary focus:ring-primary/35"
+      className="w-full resize-none rounded-md border border-line-chip bg-surface-1 px-2 py-1 text-sm leading-5 text-ink outline-none focus:border-ink-3"
       style={wrapStyle}
       rows={1}
     />
