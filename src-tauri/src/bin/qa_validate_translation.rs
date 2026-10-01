@@ -2,10 +2,24 @@ use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use app_lib::services::exporter;
 use app_lib::services::persistence;
+use app_lib::services::text_fit::TextFitReport;
 use app_lib::services::translation_coverage::{
     validate_project_translation_coverage, CoverageOptions, CoverageSeverity,
+    TranslationCoverageReport,
 };
+use serde::Serialize;
+
+/// Coverage report plus the text-fit dry run (absent when the source game is
+/// not available).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ValidationOutput<'a> {
+    #[serde(flatten)]
+    coverage: &'a TranslationCoverageReport,
+    text_fit: Option<&'a TextFitReport>,
+}
 
 #[derive(Debug)]
 struct Options {
@@ -87,8 +101,21 @@ fn main() -> ExitCode {
         },
     );
 
+    // Read-only: measures what an export would wrap, paginate or report.
+    let text_fit = match exporter::analyze_text_fit(&project) {
+        Ok(text_fit) => Some(text_fit),
+        Err(error) => {
+            eprintln!("No se pudo analizar el encaje de texto: {error}");
+            None
+        }
+    };
+
     if options.json {
-        match serde_json::to_string_pretty(&report) {
+        let output = ValidationOutput {
+            coverage: &report,
+            text_fit: text_fit.as_ref(),
+        };
+        match serde_json::to_string_pretty(&output) {
             Ok(output) => println!("{output}"),
             Err(error) => {
                 eprintln!("No se pudo serializar reporte: {error}");
@@ -113,6 +140,29 @@ fn main() -> ExitCode {
         println!("errores: {}", report.error_count);
         println!("avisos: {}", report.warning_count);
         println!("estado: {}", if report.complete { "OK" } else { "FALLO" });
+        if let Some(text_fit) = &text_fit {
+            println!(
+                "encaje: {} entradas reajustadas, {} mensajes con páginas nuevas (+{}), {} sin espacio",
+                text_fit.wrapped_entries,
+                text_fit.paginated_entries,
+                text_fit.pages_added,
+                text_fit.overflow_count
+            );
+            for note in &text_fit.calibration {
+                println!("  calibración: {note}");
+            }
+            for overflow in text_fit.overflow.iter().take(20) {
+                println!(
+                    "  [ENCAJE] {:?} {} -> {} | {}px de {}px, {} líneas",
+                    overflow.kind,
+                    overflow.file_path,
+                    overflow.entry_id,
+                    overflow.width,
+                    overflow.max_width,
+                    overflow.lines
+                );
+            }
+        }
 
         for issue in &report.issues {
             let severity = match issue.severity {

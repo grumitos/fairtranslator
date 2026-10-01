@@ -8,7 +8,7 @@ use crate::error::AppError;
 use crate::models::{EntryStatus, TranslationEntry, TranslationFile};
 use crate::parser::rpgmaker::{
     CODE_CHANGE_NAME, CODE_CHANGE_NICKNAME, CODE_CHANGE_PROFILE, CODE_SCROLL_TEXT,
-    CODE_SHOW_CHOICES, CODE_SHOW_TEXT,
+    CODE_SHOW_CHOICES, CODE_SHOW_TEXT, CODE_SHOW_TEXT_HEADER,
 };
 
 const DATABASE_FILES: &[&str] = &[
@@ -48,6 +48,8 @@ pub fn parse_xp_game(game_dir: &Path) -> Result<Vec<TranslationFile>, AppError> 
 }
 
 fn parse_legacy_game(game_dir: &Path, extension: &str) -> Result<Vec<TranslationFile>, AppError> {
+    // XP keeps the first line of each message in the Show Text command (101).
+    let xp = extension.eq_ignore_ascii_case("rxdata");
     let rvdata_files = scan_legacy_game_dir(game_dir, extension)?;
     let mut translation_files = Vec::new();
 
@@ -70,7 +72,7 @@ fn parse_legacy_game(game_dir: &Path, extension: &str) -> Result<Vec<Translation
         }
 
         let value = read_marshal_value(&path)?;
-        let entries = extract_entries(&stem, &kind, &value)?;
+        let entries = extract_entries(&stem, &kind, &value, xp)?;
 
         if !entries.is_empty() {
             let relative_path = path
@@ -186,12 +188,13 @@ fn extract_entries(
     stem: &str,
     kind: &FileKind,
     json: &Value,
+    xp: bool,
 ) -> Result<Vec<TranslationEntry>, AppError> {
     match kind {
         FileKind::Database => extract_database_entries(stem, json),
-        FileKind::Map => extract_map_entries(stem, json),
-        FileKind::CommonEvents => extract_common_events_entries(json),
-        FileKind::Troops => extract_troops_entries(json),
+        FileKind::Map => extract_map_entries(stem, json, xp),
+        FileKind::CommonEvents => extract_common_events_entries(json, xp),
+        FileKind::Troops => extract_troops_entries(json, xp),
         FileKind::System => extract_system_entries(json),
         FileKind::Ignored => Ok(Vec::new()),
     }
@@ -241,7 +244,11 @@ fn extract_database_entries(stem: &str, json: &Value) -> Result<Vec<TranslationE
     Ok(entries)
 }
 
-fn extract_map_entries(stem: &str, json: &Value) -> Result<Vec<TranslationEntry>, AppError> {
+fn extract_map_entries(
+    stem: &str,
+    json: &Value,
+    xp: bool,
+) -> Result<Vec<TranslationEntry>, AppError> {
     let fields = object_fields(json)
         .ok_or_else(|| AppError::Parse(format!("{stem}: expected RPG::Map object")))?;
 
@@ -290,7 +297,12 @@ fn extract_map_entries(stem: &str, json: &Value) -> Result<Vec<TranslationEntry>
                     if let Some(list) = page_fields.get("@list").and_then(Value::as_array) {
                         let id_prefix = format!("{stem}:{ev_id}:{page_idx}");
                         let context_prefix = format!("{stem} > {ev_label} > Page {}", page_idx + 1);
-                        entries.extend(extract_event_commands(list, &id_prefix, &context_prefix)?);
+                        entries.extend(extract_event_commands(
+                            list,
+                            &id_prefix,
+                            &context_prefix,
+                            xp,
+                        )?);
                     }
                 }
             }
@@ -300,7 +312,10 @@ fn extract_map_entries(stem: &str, json: &Value) -> Result<Vec<TranslationEntry>
     Ok(entries)
 }
 
-fn extract_common_events_entries(json: &Value) -> Result<Vec<TranslationEntry>, AppError> {
+fn extract_common_events_entries(
+    json: &Value,
+    xp: bool,
+) -> Result<Vec<TranslationEntry>, AppError> {
     let arr = json
         .as_array()
         .ok_or_else(|| AppError::Parse("CommonEvents: expected array".into()))?;
@@ -331,6 +346,7 @@ fn extract_common_events_entries(json: &Value) -> Result<Vec<TranslationEntry>, 
                 list,
                 &format!("CommonEvents:{ce_id}"),
                 &format!("CommonEvents > {ce_label}"),
+                xp,
             )?);
         }
     }
@@ -338,7 +354,7 @@ fn extract_common_events_entries(json: &Value) -> Result<Vec<TranslationEntry>, 
     Ok(entries)
 }
 
-fn extract_troops_entries(json: &Value) -> Result<Vec<TranslationEntry>, AppError> {
+fn extract_troops_entries(json: &Value, xp: bool) -> Result<Vec<TranslationEntry>, AppError> {
     let arr = json
         .as_array()
         .ok_or_else(|| AppError::Parse("Troops: expected array".into()))?;
@@ -380,7 +396,12 @@ fn extract_troops_entries(json: &Value) -> Result<Vec<TranslationEntry>, AppErro
                         page_idx + 1
                     );
                     let id_prefix = format!("Troops:{troop_id}:{page_idx}");
-                    entries.extend(extract_event_commands(list, &id_prefix, &context_prefix)?);
+                    entries.extend(extract_event_commands(
+                        list,
+                        &id_prefix,
+                        &context_prefix,
+                        xp,
+                    )?);
                 }
             }
         }
@@ -447,10 +468,15 @@ fn extract_terms_recursive(
     Ok(())
 }
 
+/// `xp`: RPG Maker XP stores the first line of a message in the Show Text
+/// command itself (101) and only the following lines in 401s. That first line
+/// becomes its own entry, `…:text:{101 index}`, so projects created before it
+/// was extracted keep their `…:text:{first 401 index}` entries unchanged.
 fn extract_event_commands(
     list: &[Value],
     id_prefix: &str,
     context_prefix: &str,
+    xp: bool,
 ) -> Result<Vec<TranslationEntry>, AppError> {
     let mut entries = Vec::new();
     let mut text_accumulator: Vec<String> = Vec::new();
@@ -483,6 +509,21 @@ fn extract_event_commands(
             ));
             scroll_accumulator.clear();
             scroll_start_idx = None;
+        }
+
+        if xp && code == CODE_SHOW_TEXT_HEADER {
+            let head = match command_parameter(cmd, 0) {
+                Some(value) => string_from_value(value, &format!("{id_prefix}:text:{cmd_idx}"))?,
+                None => None,
+            };
+            if let Some(head) = head.filter(|text| !text.trim().is_empty()) {
+                entries.push(make_entry(
+                    &format!("{id_prefix}:text:{cmd_idx}"),
+                    &format!("{context_prefix} > text #{}", entries.len() + 1),
+                    head,
+                ));
+            }
+            continue;
         }
 
         match code {

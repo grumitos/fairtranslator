@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::{BufReader, BufWriter};
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -15,9 +15,8 @@ use crate::parser::rpgmaker::{
     CODE_SCROLL_TEXT, CODE_SHOW_CHOICES, CODE_SHOW_TEXT, CODE_SHOW_TEXT_HEADER, DB_TEXT_FIELDS,
     SYSTEM_TEXT_FIELDS,
 };
-use crate::services::message_wrapping::{
-    join_overflow_message_lines, wrap_mv_mz_message_translation,
-};
+use crate::services::persistence::write_synced;
+use crate::services::text_fit::{self, FittedText, TextFitContext, TextFitReport, TextSlotKind};
 use crate::services::translation_integrity;
 
 const LEGACY_DB_TEXT_FIELDS: &[(&str, &str)] = &[
@@ -69,6 +68,137 @@ pub struct ExportResult {
     pub total_entries: usize,
     /// Non-blocking integrity warnings discovered during export preflight.
     pub warnings: Vec<String>,
+    /// How translated text was fitted to the game's windows, and what still
+    /// does not fit.
+    pub text_fit: TextFitReport,
+}
+
+/// Translations and originals by entry ID, plus the fitter state shared by
+/// every apply function of one data file.
+struct ApplyContext<'a> {
+    translations: &'a HashMap<String, String>,
+    originals: &'a HashMap<String, String>,
+    fit: &'a TextFitContext,
+    report: &'a mut TextFitReport,
+    file_path: &'a str,
+    /// Game folder being written (the export copy), for plugin source files.
+    game_dir: &'a Path,
+}
+
+impl ApplyContext<'_> {
+    fn translation(&self, entry_id: &str) -> Option<&String> {
+        self.translations.get(entry_id)
+    }
+
+    fn original(&self, entry_id: &str) -> &str {
+        self.originals
+            .get(entry_id)
+            .map(String::as_str)
+            .unwrap_or("")
+    }
+
+    /// Records what fitting did to a message, scroll block or description.
+    fn record_fit(&mut self, entry_id: &str, kind: TextSlotKind, fitted: &FittedText) {
+        if fitted.plugin_wrapped {
+            return;
+        }
+        if fitted.changed {
+            self.report.wrapped_entries += 1;
+        }
+        let original_lines = self.original(entry_id).split('\n').count();
+        let original_pages = original_lines.max(1).div_ceil(fitted.rows_per_page.max(1));
+        if kind == TextSlotKind::Message && fitted.pages > original_pages {
+            self.report.paginated_entries += 1;
+            self.report.pages_added += fitted.pages - original_pages;
+        }
+        let too_many_lines =
+            kind == TextSlotKind::Description && fitted.lines.len() > fitted.rows_per_page;
+        if fitted.overflow || too_many_lines {
+            let max_lines = (kind == TextSlotKind::Description).then_some(fitted.rows_per_page);
+            let row = text_fit::overflow_row(
+                self.file_path,
+                entry_id,
+                kind,
+                fitted.widest,
+                fitted.max_width,
+                fitted.lines.len(),
+                max_lines,
+            );
+            self.report.record_overflow(row);
+        }
+    }
+
+    /// Reports a choice, name or term that does not fit; never rewrites it.
+    fn record_measure(&mut self, entry_id: &str, kind: TextSlotKind, measured: Option<(f32, f32)>) {
+        if let Some((width, max_width)) = measured {
+            let row =
+                text_fit::overflow_row(self.file_path, entry_id, kind, width, max_width, 1, None);
+            self.report.record_overflow(row);
+        }
+    }
+
+    fn check_choice(&mut self, entry_id: &str, translation: &str) {
+        let measured = text_fit::choice_overflow(translation, self.fit);
+        self.record_measure(entry_id, TextSlotKind::Choice, measured);
+    }
+
+    fn check_name(&mut self, entry_id: &str, kind: TextSlotKind, translation: &str) {
+        let measured = text_fit::name_overflow(translation, self.original(entry_id), self.fit);
+        self.record_measure(entry_id, kind, measured);
+    }
+}
+
+/// Fitter for one export: game settings, widened to the original text of the
+/// untouched copy, with translated names for `\N[n]`.
+fn build_fit_context(
+    project: &Project,
+    game_dir: &Path,
+    warnings: &mut Vec<String>,
+) -> TextFitContext {
+    let mut context = TextFitContext::detect(&project.engine, game_dir);
+    match context.calibrate_from_game(game_dir) {
+        Ok(notes) => context.calibration = notes,
+        Err(error) => warnings.push(format!(
+            "Text fitting used default window sizes because the original text could not be measured: {error}"
+        )),
+    }
+    for file in &project.files {
+        for entry in &file.entries {
+            let text = if entry.status != EntryStatus::Untranslated
+                && !entry.translation.trim().is_empty()
+            {
+                &entry.translation
+            } else {
+                &entry.original
+            };
+            if let Some(id) = entry
+                .id
+                .strip_prefix("Actors:name:")
+                .and_then(|id| id.parse().ok())
+            {
+                context.actor_names.insert(id, text.clone());
+            } else if entry.id == "System:currencyUnit" || entry.id == "System:terms.currency_unit"
+            {
+                context.currency_unit = text.clone();
+            }
+        }
+    }
+    context
+}
+
+fn text_fit_warnings(report: &TextFitReport, warnings: &mut Vec<String>) {
+    if report.paginated_entries > 0 {
+        warnings.push(format!(
+            "Text fitting added {} message pages to {} messages whose translation needed more lines than the original.",
+            report.pages_added, report.paginated_entries
+        ));
+    }
+    if report.overflow_count > 0 {
+        warnings.push(format!(
+            "{} translated entries still exceed their on-screen space (choices, names, terms or descriptions cannot grow); see the text-fit report.",
+            report.overflow_count
+        ));
+    }
 }
 
 trait EngineExporter {
@@ -170,6 +300,50 @@ pub fn export_project(project: &Project, output_dir: &Path) -> Result<ExportResu
     exporter.export_project(project, output_dir)
 }
 
+/// Dry run of the export's text fitting against the source game: reads the
+/// original data files, applies translations in memory and reports what an
+/// export would wrap, paginate, or still leave overflowing. Never writes.
+pub fn analyze_text_fit(project: &Project) -> Result<TextFitReport, AppError> {
+    let game_dir = validate_game_dir(project)?;
+    if matches!(project.engine, Engine::Unity) {
+        return Ok(TextFitReport::default());
+    }
+    let (translations, originals, _) = collect_translations(project);
+    let mut warnings = Vec::new();
+    let fit = build_fit_context(project, &game_dir, &mut warnings);
+    let mut report = fit.new_report();
+
+    for file in &project.files {
+        let path = game_dir.join(&file.relative_path);
+        let stem = Path::new(&file.relative_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
+        let mut context = ApplyContext {
+            translations: &translations,
+            originals: &originals,
+            fit: &fit,
+            report: &mut report,
+            file_path: &file.relative_path,
+            game_dir: &game_dir,
+        };
+        if matches!(project.engine, Engine::Mv | Engine::Mz) {
+            let kind = classify_relative_path(&file.relative_path);
+            if matches!(kind, FileKind::Plugins | FileKind::Html) {
+                continue;
+            }
+            let mut json: Value = serde_json::from_str(&std::fs::read_to_string(&path)?)?;
+            apply_translations(&stem, &kind, &mut json, &mut context)?;
+        } else {
+            let mut value = read_marshal_value(&path)?;
+            apply_legacy_translations(&stem, &mut value, &mut context)?;
+        }
+    }
+
+    Ok(report)
+}
+
 fn export_mv_mz_project(project: &Project, output_dir: &Path) -> Result<ExportResult, AppError> {
     let game_dir = PathBuf::from(&project.game_dir);
     let validation = translation_integrity::validate_project_for_export(project);
@@ -184,10 +358,13 @@ fn export_mv_mz_project(project: &Project, output_dir: &Path) -> Result<ExportRe
         return Err(error);
     }
 
-    let (translations, total_entries) = collect_translations(project);
+    let (translations, originals, total_entries) = collect_translations(project);
 
     let prefer_system_fonts = project_requires_safe_web_fonts(project);
     let mut export_warnings = validation.warnings.clone();
+    // Measured on the copy before any translation is written into it.
+    let fit = build_fit_context(project, output_dir, &mut export_warnings);
+    let mut text_fit_report = fit.new_report();
 
     let export_result = (|| {
         let mut files_exported: usize = 0;
@@ -209,8 +386,15 @@ fn export_mv_mz_project(project: &Project, output_dir: &Path) -> Result<ExportRe
                 _ => serde_json::from_str(&content)?,
             };
 
-            let applied =
-                apply_translations(&stem, &kind, &mut json, &translations, &project.target_lang)?;
+            let mut context = ApplyContext {
+                translations: &translations,
+                originals: &originals,
+                fit: &fit,
+                report: &mut text_fit_report,
+                file_path: &file.relative_path,
+                game_dir: output_dir,
+            };
+            let applied = apply_translations(&stem, &kind, &mut json, &mut context)?;
             entries_applied += applied;
 
             if prefer_system_fonts && stem == "System" {
@@ -225,7 +409,7 @@ fn export_mv_mz_project(project: &Project, output_dir: &Path) -> Result<ExportRe
                     .to_string(),
                 _ => serde_json::to_string_pretty(&json)?,
             };
-            std::fs::write(&copied_path, output_content)?;
+            write_synced(&copied_path, output_content.as_bytes())?;
 
             files_exported += 1;
         }
@@ -254,12 +438,14 @@ fn export_mv_mz_project(project: &Project, output_dir: &Path) -> Result<ExportRe
                 "Post-export visible text QA could not run: {error}"
             ));
         }
+        text_fit_warnings(&text_fit_report, &mut export_warnings);
 
         Ok(ExportResult {
             files_exported,
             entries_applied,
             total_entries,
             warnings: export_warnings.clone(),
+            text_fit: std::mem::take(&mut text_fit_report),
         })
     })();
 
@@ -360,7 +546,7 @@ fn export_unity_project(project: &Project, output_dir: &Path) -> Result<ExportRe
             output_bytes.extend_from_slice(&[0xef, 0xbb, 0xbf]);
         }
         output_bytes.extend_from_slice(&rendered);
-        std::fs::write(&copied_path, output_bytes)?;
+        write_synced(&copied_path, &output_bytes)?;
 
         let readback = parser::unity::parse_unity_game(output_dir)?;
         let readback_entries = readback
@@ -381,6 +567,7 @@ fn export_unity_project(project: &Project, output_dir: &Path) -> Result<ExportRe
             entries_applied,
             total_entries: project_file.entries.len(),
             warnings: validation.warnings.clone(),
+            text_fit: TextFitReport::default(),
         })
     })();
 
@@ -438,7 +625,11 @@ fn export_legacy_project(project: &Project, output_dir: &Path) -> Result<ExportR
         return Err(error);
     }
 
-    let (translations, total_entries) = collect_translations(project);
+    let (translations, originals, total_entries) = collect_translations(project);
+    let mut export_warnings = validation.warnings.clone();
+    // Measured on the copy before any translation is written into it.
+    let fit = build_fit_context(project, output_dir, &mut export_warnings);
+    let mut text_fit_report = fit.new_report();
     let export_result = (|| {
         let mut files_exported: usize = 0;
         let mut entries_applied: usize = 0;
@@ -452,18 +643,28 @@ fn export_legacy_project(project: &Project, output_dir: &Path) -> Result<ExportR
                 .to_string();
 
             let mut value = read_marshal_value(&output_path)?;
-            let applied = apply_legacy_translations(&stem, &mut value, &translations)?;
+            let mut context = ApplyContext {
+                translations: &translations,
+                originals: &originals,
+                fit: &fit,
+                report: &mut text_fit_report,
+                file_path: &file.relative_path,
+                game_dir: output_dir,
+            };
+            let applied = apply_legacy_translations(&stem, &mut value, &mut context)?;
             entries_applied += applied;
 
             write_marshal_value(&output_path, &value)?;
             files_exported += 1;
         }
 
+        text_fit_warnings(&text_fit_report, &mut export_warnings);
         Ok(ExportResult {
             files_exported,
             entries_applied,
             total_entries,
-            warnings: validation.warnings.clone(),
+            warnings: export_warnings.clone(),
+            text_fit: std::mem::take(&mut text_fit_report),
         })
     })();
 
@@ -829,7 +1030,7 @@ fn normalize_exported_mv_mz_asset_references(output_dir: &Path) -> Result<usize,
         let before = json.clone();
         refs_fixed += normalize_asset_references_for_file(stem, &mut json, &indexes);
         if json != before {
-            std::fs::write(&path, serde_json::to_string_pretty(&json)?)?;
+            write_synced(&path, serde_json::to_string_pretty(&json)?.as_bytes())?;
         }
     }
 
@@ -1351,20 +1552,25 @@ fn normalize_lexically(path: &Path) -> PathBuf {
     normalized
 }
 
-fn collect_translations(project: &Project) -> (HashMap<String, String>, usize) {
+/// Applicable translations and every original text, keyed by entry ID.
+fn collect_translations(
+    project: &Project,
+) -> (HashMap<String, String>, HashMap<String, String>, usize) {
     let mut translations: HashMap<String, String> = HashMap::new();
+    let mut originals: HashMap<String, String> = HashMap::new();
     let mut total_entries: usize = 0;
 
     for file in &project.files {
         for entry in &file.entries {
             total_entries += 1;
+            originals.insert(entry.id.clone(), entry.original.clone());
             if entry.status != EntryStatus::Untranslated && !entry.translation.trim().is_empty() {
                 translations.insert(entry.id.clone(), entry.translation.clone());
             }
         }
     }
 
-    (translations, total_entries)
+    (translations, originals, total_entries)
 }
 
 fn project_requires_safe_web_fonts(project: &Project) -> bool {
@@ -1458,7 +1664,7 @@ fn patch_exported_mv_mz_system_font_file(output_dir: &Path) -> Result<bool, AppE
     let changed = patch_mv_mz_system_font_preferences(&mut json);
     if changed {
         let output_content = serde_json::to_string_pretty(&json)?;
-        std::fs::write(&system_path, output_content)?;
+        write_synced(&system_path, output_content.as_bytes())?;
     }
 
     Ok(changed)
@@ -1539,7 +1745,7 @@ fn truncate_for_warning(text: &str, max_chars: usize) -> String {
     truncated
 }
 
-fn read_marshal_value(path: &Path) -> Result<Value, AppError> {
+pub(crate) fn read_marshal_value(path: &Path) -> Result<Value, AppError> {
     let file = File::open(path)?;
     let mut reader = BufReader::new(file);
     let value: rpgtool_common::Value =
@@ -1566,29 +1772,35 @@ fn write_marshal_value(path: &Path, value: &Value) -> Result<(), AppError> {
                 path.display()
             ))
         })?;
-    let file = File::create(path)?;
-    let mut writer = BufWriter::new(file);
-    rpgtool_common::conv_write(marshal_value, rpgtool_common::Format::Marshal, &mut writer)
+    // Serialize fully before touching the file: rpgtool-common never flushes its
+    // writer, and a dropped BufWriter silently discards late write errors.
+    let mut bytes = Vec::new();
+    rpgtool_common::conv_write(marshal_value, rpgtool_common::Format::Marshal, &mut bytes)
         .map_err(|e| {
             AppError::Parse(format!(
                 "Failed to write marshal file '{}': {e}",
                 path.display()
             ))
         })?;
-    Ok(())
+    write_synced(path, &bytes).map_err(|e| {
+        AppError::Io(format!(
+            "Failed to write marshal file '{}': {e}",
+            path.display()
+        ))
+    })
 }
 
 fn apply_legacy_translations(
     stem: &str,
     json: &mut Value,
-    translations: &HashMap<String, String>,
+    context: &mut ApplyContext<'_>,
 ) -> Result<usize, AppError> {
     match classify_file(stem) {
-        FileKind::Database => apply_vxace_database(stem, json, translations),
-        FileKind::Map => apply_vxace_map(stem, json, translations),
-        FileKind::CommonEvents => apply_vxace_common_events(json, translations),
-        FileKind::Troops => apply_vxace_troops(json, translations),
-        FileKind::System => apply_vxace_system(json, translations),
+        FileKind::Database => apply_vxace_database(stem, json, context),
+        FileKind::Map => apply_vxace_map(stem, json, context),
+        FileKind::CommonEvents => apply_vxace_common_events(json, context),
+        FileKind::Troops => apply_vxace_troops(json, context),
+        FileKind::System => apply_vxace_system(json, context),
         FileKind::Plugins => Ok(0),
         FileKind::Html => Ok(0),
         FileKind::Ignored => Ok(0),
@@ -1598,7 +1810,7 @@ fn apply_legacy_translations(
 fn apply_vxace_database(
     stem: &str,
     json: &mut Value,
-    translations: &HashMap<String, String>,
+    context: &mut ApplyContext<'_>,
 ) -> Result<usize, AppError> {
     let arr = json
         .as_array_mut()
@@ -1619,11 +1831,13 @@ fn apply_vxace_database(
 
         for (field_name, legacy_key) in LEGACY_DB_TEXT_FIELDS {
             let entry_id = format!("{stem}:{field_name}:{item_id}");
-            if let Some(translation) = translations.get(&entry_id) {
-                if let Some(value) = fields.get_mut(*legacy_key) {
-                    if set_string_value(value, translation) {
-                        applied += 1;
-                    }
+            let Some(translation) = context.translation(&entry_id).cloned() else {
+                continue;
+            };
+            if let Some(value) = fields.get_mut(*legacy_key) {
+                let text = fit_database_text(field_name, &entry_id, &translation, context);
+                if set_string_value(value, &text) {
+                    applied += 1;
                 }
             }
         }
@@ -1635,16 +1849,18 @@ fn apply_vxace_database(
 fn apply_vxace_map(
     stem: &str,
     json: &mut Value,
-    translations: &HashMap<String, String>,
+    context: &mut ApplyContext<'_>,
 ) -> Result<usize, AppError> {
     let fields = object_fields_mut(json)
         .ok_or_else(|| AppError::Parse(format!("{stem}: expected RPG::Map object")))?;
 
     let mut applied = 0;
 
-    if let Some(translation) = translations.get(&format!("{stem}:displayName")) {
+    let display_name_id = format!("{stem}:displayName");
+    if let Some(translation) = context.translation(&display_name_id).cloned() {
         if let Some(display_name) = fields.get_mut("@display_name") {
-            if set_string_value(display_name, translation) {
+            if set_string_value(display_name, &translation) {
+                context.check_name(&display_name_id, TextSlotKind::Name, &translation);
                 applied += 1;
             }
         }
@@ -1674,11 +1890,7 @@ fn apply_vxace_map(
                             page_fields.get_mut("@list").and_then(Value::as_array_mut)
                         {
                             let id_prefix = format!("{stem}:{ev_id}:{page_idx}");
-                            applied += apply_vxace_event_commands(
-                                list.as_mut_slice(),
-                                &id_prefix,
-                                translations,
-                            );
+                            applied += apply_vxace_event_commands(list, &id_prefix, context);
                         }
                     }
                 }
@@ -1691,7 +1903,7 @@ fn apply_vxace_map(
 
 fn apply_vxace_common_events(
     json: &mut Value,
-    translations: &HashMap<String, String>,
+    context: &mut ApplyContext<'_>,
 ) -> Result<usize, AppError> {
     let arr = json
         .as_array_mut()
@@ -1708,21 +1920,14 @@ fn apply_vxace_common_events(
             .map(|v| v as u64)
             .unwrap_or((idx + 1) as u64);
         if let Some(list) = fields.get_mut("@list").and_then(Value::as_array_mut) {
-            applied += apply_vxace_event_commands(
-                list.as_mut_slice(),
-                &format!("CommonEvents:{ce_id}"),
-                translations,
-            );
+            applied += apply_vxace_event_commands(list, &format!("CommonEvents:{ce_id}"), context);
         }
     }
 
     Ok(applied)
 }
 
-fn apply_vxace_troops(
-    json: &mut Value,
-    translations: &HashMap<String, String>,
-) -> Result<usize, AppError> {
+fn apply_vxace_troops(json: &mut Value, context: &mut ApplyContext<'_>) -> Result<usize, AppError> {
     let arr = json
         .as_array_mut()
         .ok_or_else(|| AppError::Parse("Troops: expected array".into()))?;
@@ -1738,7 +1943,7 @@ fn apply_vxace_troops(
             .map(|v| v as u64)
             .unwrap_or((idx + 1) as u64);
 
-        if let Some(translation) = translations.get(&format!("Troops:name:{troop_id}")) {
+        if let Some(translation) = context.translation(&format!("Troops:name:{troop_id}")) {
             if let Some(name) = fields.get_mut("@name") {
                 if set_string_value(name, translation) {
                     applied += 1;
@@ -1753,9 +1958,9 @@ fn apply_vxace_troops(
                 };
                 if let Some(list) = page_fields.get_mut("@list").and_then(Value::as_array_mut) {
                     applied += apply_vxace_event_commands(
-                        list.as_mut_slice(),
+                        list,
                         &format!("Troops:{troop_id}:{page_idx}"),
-                        translations,
+                        context,
                     );
                 }
             }
@@ -1765,25 +1970,23 @@ fn apply_vxace_troops(
     Ok(applied)
 }
 
-fn apply_vxace_system(
-    json: &mut Value,
-    translations: &HashMap<String, String>,
-) -> Result<usize, AppError> {
+fn apply_vxace_system(json: &mut Value, context: &mut ApplyContext<'_>) -> Result<usize, AppError> {
     let fields = object_fields_mut(json)
         .ok_or_else(|| AppError::Parse("System: expected RPG::System object".into()))?;
 
     let mut applied = 0;
 
-    if let Some(translation) = translations.get("System:gameTitle") {
+    if let Some(translation) = context.translation("System:gameTitle").cloned() {
         if let Some(title) = fields.get_mut("@game_title") {
-            if set_string_value(title, translation) {
+            if set_string_value(title, &translation) {
+                context.check_name("System:gameTitle", TextSlotKind::Name, &translation);
                 applied += 1;
             }
         }
     }
 
     if let Some(terms) = fields.get_mut("@terms") {
-        applied += apply_vxace_terms_recursive(terms, "System:terms", translations);
+        applied += apply_vxace_terms_recursive(terms, "System:terms", context);
     }
 
     Ok(applied)
@@ -1792,10 +1995,11 @@ fn apply_vxace_system(
 fn apply_vxace_terms_recursive(
     value: &mut Value,
     id_prefix: &str,
-    translations: &HashMap<String, String>,
+    context: &mut ApplyContext<'_>,
 ) -> usize {
-    if let Some(translation) = translations.get(id_prefix) {
-        if set_string_value(value, translation) {
+    if let Some(translation) = context.translation(id_prefix).cloned() {
+        if set_string_value(value, &translation) {
+            context.check_name(id_prefix, TextSlotKind::Term, &translation);
             return 1;
         }
     }
@@ -1807,7 +2011,7 @@ fn apply_vxace_terms_recursive(
     if let Some(arr) = value.as_array_mut() {
         let mut applied = 0;
         for (i, val) in arr.iter_mut().enumerate() {
-            applied += apply_vxace_terms_recursive(val, &format!("{id_prefix}.{i}"), translations);
+            applied += apply_vxace_terms_recursive(val, &format!("{id_prefix}.{i}"), context);
         }
         return applied;
     }
@@ -1821,63 +2025,190 @@ fn apply_vxace_terms_recursive(
         if let Some(val) = fields.get_mut(&key) {
             let clean_key = key.trim_start_matches('@');
             applied +=
-                apply_vxace_terms_recursive(val, &format!("{id_prefix}.{clean_key}"), translations);
+                apply_vxace_terms_recursive(val, &format!("{id_prefix}.{clean_key}"), context);
         }
     }
 
     applied
 }
 
+fn legacy_code(command: &Value) -> i64 {
+    command_code_legacy(command).unwrap_or(0)
+}
+
+fn legacy_first_param_string(command: &Value) -> Option<String> {
+    object_fields(command)?
+        .get("@parameters")?
+        .as_array()?
+        .first()
+        .and_then(string_from_legacy_value)
+}
+
+fn set_legacy_command_text(command: &mut Value, text: &str) -> bool {
+    command_parameters_legacy_mut(command)
+        .and_then(|parameters| parameters.first_mut())
+        .is_some_and(|parameter| set_string_value(parameter, text))
+}
+
+fn set_legacy_command_code(command: &mut Value, code: i64) {
+    if let Some(fields) = object_fields_mut(command) {
+        fields.insert("@code".into(), Value::from(code));
+    }
+}
+
+fn join_message_parts(head: &str, body: &str) -> String {
+    match (head.is_empty(), body.is_empty()) {
+        (_, true) => head.to_string(),
+        (true, false) => body.to_string(),
+        (false, false) => format!("{head}\n{body}"),
+    }
+}
+
+/// XP has no native paging: lays `lines` out as one 101 (first line) plus
+/// 401s per page of `rows` lines, cloning the original header so each extra
+/// page is a normal Show Text at the same indent.
+fn xp_message_commands(existing: &[Value], lines: &[String], rows: usize) -> Vec<Value> {
+    let header = &existing[0];
+    let line_template = existing.get(1).cloned().unwrap_or_else(|| {
+        let mut template = header.clone();
+        set_legacy_command_code(&mut template, CODE_SHOW_TEXT);
+        template
+    });
+
+    if lines.len() <= existing.len() && lines.len() <= rows {
+        return line_commands(existing, lines, set_legacy_command_text);
+    }
+
+    let mut commands = Vec::new();
+    let mut reusable = existing[1..].iter();
+    for (page_index, page) in lines.chunks(rows.max(1)).enumerate() {
+        let mut page_header = header.clone();
+        set_legacy_command_text(&mut page_header, &page[0]);
+        commands.push(page_header);
+        for line in &page[1..] {
+            let mut command = if page_index == 0 {
+                reusable
+                    .next()
+                    .cloned()
+                    .unwrap_or_else(|| line_template.clone())
+            } else {
+                line_template.clone()
+            };
+            set_legacy_command_text(&mut command, line);
+            commands.push(command);
+        }
+    }
+    commands
+}
+
+/// Legacy counterpart of `apply_event_commands`. VX Ace and VX page extra
+/// 401 lines natively; XP gets explicit pages (see `xp_message_commands`),
+/// and its message head (the 101 text) is fitted together with the 401s.
 fn apply_vxace_event_commands(
-    list: &mut [Value],
+    list: &mut Vec<Value>,
     id_prefix: &str,
-    translations: &HashMap<String, String>,
+    context: &mut ApplyContext<'_>,
 ) -> usize {
+    let xp = matches!(context.fit.metrics.engine, Engine::Xp);
     let mut applied = 0;
+    let mut splices = Vec::new();
     let mut i = 0;
 
     while i < list.len() {
-        let code = command_code_legacy(&list[i]).unwrap_or(0);
+        let code = legacy_code(&list[i]);
 
         match code {
-            CODE_SHOW_TEXT => {
-                let start = i;
-                let mut line_indices: Vec<usize> = vec![i];
-                i += 1;
-                while i < list.len() {
-                    if command_code_legacy(&list[i]).unwrap_or(0) == CODE_SHOW_TEXT {
-                        line_indices.push(i);
-                        i += 1;
+            CODE_SHOW_TEXT_HEADER if xp => {
+                let header = i;
+                let end = block_end(list, header + 1, CODE_SHOW_TEXT, legacy_code);
+                let head_id = format!("{id_prefix}:text:{header}");
+                let body_id = format!("{id_prefix}:text:{}", header + 1);
+                let head_translation = context.translation(&head_id).cloned();
+                let body_translation = (end > header + 1)
+                    .then(|| context.translation(&body_id).cloned())
+                    .flatten();
+                if head_translation.is_some() || body_translation.is_some() {
+                    let head_original =
+                        legacy_first_param_string(&list[header]).unwrap_or_default();
+                    let body_original = list[header + 1..end]
+                        .iter()
+                        .filter_map(legacy_first_param_string)
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let original = join_message_parts(&head_original, &body_original);
+                    let translation = join_message_parts(
+                        head_translation.as_deref().unwrap_or(&head_original),
+                        body_translation.as_deref().unwrap_or(&body_original),
+                    );
+                    let followed_by_choice =
+                        list.get(end).map(legacy_code) == Some(CODE_SHOW_CHOICES);
+                    let fitted = text_fit::fit_message(
+                        &translation,
+                        &original,
+                        false,
+                        followed_by_choice,
+                        context.fit,
+                    );
+                    let report_id = if head_translation.is_some() {
+                        &head_id
                     } else {
-                        break;
-                    }
+                        &body_id
+                    };
+                    context.record_fit(report_id, TextSlotKind::Message, &fitted);
+                    let commands = xp_message_commands(
+                        &list[header..end],
+                        &fitted.lines,
+                        context.fit.metrics.message_rows,
+                    );
+                    replace_block(list, header, end, commands, &mut splices);
+                    applied += usize::from(head_translation.is_some())
+                        + usize::from(body_translation.is_some());
                 }
-
-                let entry_id = format!("{id_prefix}:text:{start}");
-                if let Some(translation) = translations.get(&entry_id) {
-                    apply_vxace_multiline_text(list, &line_indices, translation);
-                    applied += 1;
-                }
+                i = end;
                 continue;
             }
-            CODE_SCROLL_TEXT => {
+            CODE_SHOW_TEXT | CODE_SCROLL_TEXT => {
                 let start = i;
-                let mut line_indices: Vec<usize> = vec![i];
-                i += 1;
-                while i < list.len() {
-                    if command_code_legacy(&list[i]).unwrap_or(0) == CODE_SCROLL_TEXT {
-                        line_indices.push(i);
-                        i += 1;
+                let end = block_end(list, start, code, legacy_code);
+                let is_message = code == CODE_SHOW_TEXT;
+                let entry_id = format!(
+                    "{id_prefix}:{}:{start}",
+                    if is_message { "text" } else { "scroll" }
+                );
+                if let Some(translation) = context.translation(&entry_id).cloned() {
+                    let fitted = if is_message {
+                        let has_face = !xp
+                            && start
+                                .checked_sub(1)
+                                .filter(|&header| {
+                                    legacy_code(&list[header]) == CODE_SHOW_TEXT_HEADER
+                                })
+                                .and_then(|header| legacy_first_param_string(&list[header]))
+                                .is_some_and(|face| !face.is_empty());
+                        let followed_by_choice =
+                            list.get(end).map(legacy_code) == Some(CODE_SHOW_CHOICES);
+                        text_fit::fit_message(
+                            &translation,
+                            context.original(&entry_id),
+                            has_face,
+                            followed_by_choice,
+                            context.fit,
+                        )
                     } else {
-                        break;
-                    }
-                }
-
-                let entry_id = format!("{id_prefix}:scroll:{start}");
-                if let Some(translation) = translations.get(&entry_id) {
-                    apply_vxace_multiline_text(list, &line_indices, translation);
+                        text_fit::fit_scroll(&translation, context.fit)
+                    };
+                    let slot = if is_message {
+                        TextSlotKind::Message
+                    } else {
+                        TextSlotKind::Scroll
+                    };
+                    context.record_fit(&entry_id, slot, &fitted);
+                    let commands =
+                        line_commands(&list[start..end], &fitted.lines, set_legacy_command_text);
+                    replace_block(list, start, end, commands, &mut splices);
                     applied += 1;
                 }
+                i = end;
                 continue;
             }
             CODE_SHOW_CHOICES => {
@@ -1885,8 +2216,9 @@ fn apply_vxace_event_commands(
                     if let Some(choices) = params.get_mut(0).and_then(Value::as_array_mut) {
                         for (ci, choice) in choices.iter_mut().enumerate() {
                             let entry_id = format!("{id_prefix}:choice:{i}:{ci}");
-                            if let Some(translation) = translations.get(&entry_id) {
-                                if set_string_value(choice, translation) {
+                            if let Some(translation) = context.translation(&entry_id).cloned() {
+                                if set_string_value(choice, &translation) {
+                                    context.check_choice(&entry_id, &translation);
                                     applied += 1;
                                 }
                             }
@@ -1894,26 +2226,26 @@ fn apply_vxace_event_commands(
                     }
                 }
             }
-            CODE_CHANGE_NAME => {
-                let entry_id = format!("{id_prefix}:changeName:{i}");
-                if let Some(translation) = translations.get(&entry_id) {
-                    if set_vxace_parameter(list, i, 1, translation) {
-                        applied += 1;
-                    }
-                }
-            }
-            CODE_CHANGE_NICKNAME => {
-                let entry_id = format!("{id_prefix}:changeNickname:{i}");
-                if let Some(translation) = translations.get(&entry_id) {
-                    if set_vxace_parameter(list, i, 1, translation) {
+            CODE_CHANGE_NAME | CODE_CHANGE_NICKNAME => {
+                let label = if code == CODE_CHANGE_NAME {
+                    "changeName"
+                } else {
+                    "changeNickname"
+                };
+                let entry_id = format!("{id_prefix}:{label}:{i}");
+                if let Some(translation) = context.translation(&entry_id).cloned() {
+                    if set_vxace_parameter(list, i, 1, &translation) {
+                        context.check_name(&entry_id, TextSlotKind::Name, &translation);
                         applied += 1;
                     }
                 }
             }
             CODE_CHANGE_PROFILE => {
                 let entry_id = format!("{id_prefix}:changeProfile:{i}");
-                if let Some(translation) = translations.get(&entry_id) {
-                    if set_vxace_parameter(list, i, 1, translation) {
+                if let Some(translation) = context.translation(&entry_id).cloned() {
+                    let fitted = text_fit::fit_description(&translation, context.fit);
+                    context.record_fit(&entry_id, TextSlotKind::Description, &fitted);
+                    if set_vxace_parameter(list, i, 1, &fitted.lines.join("\n")) {
                         applied += 1;
                     }
                 }
@@ -1924,25 +2256,8 @@ fn apply_vxace_event_commands(
         i += 1;
     }
 
+    apply_splices(list, splices);
     applied
-}
-
-fn apply_vxace_multiline_text(list: &mut [Value], line_indices: &[usize], translation: &str) {
-    let lines: Vec<&str> = translation.split('\n').collect();
-    let num_commands = line_indices.len();
-
-    for (j, &cmd_idx) in line_indices.iter().enumerate() {
-        let text = if j < lines.len() {
-            if j == num_commands - 1 && lines.len() > num_commands {
-                lines[j..].join("\n")
-            } else {
-                lines[j].to_string()
-            }
-        } else {
-            String::new()
-        };
-        let _ = set_vxace_parameter(list, cmd_idx, 0, &text);
-    }
 }
 
 fn set_vxace_parameter(list: &mut [Value], cmd_idx: usize, param_idx: usize, value: &str) -> bool {
@@ -1955,7 +2270,7 @@ fn set_vxace_parameter(list: &mut [Value], cmd_idx: usize, param_idx: usize, val
     set_string_value(parameter, value)
 }
 
-fn object_fields(value: &Value) -> Option<&Map<String, Value>> {
+pub(crate) fn object_fields(value: &Value) -> Option<&Map<String, Value>> {
     value
         .get("$object")
         .and_then(|o| o.get("fields"))
@@ -1973,7 +2288,7 @@ fn hash_entries_mut(value: &mut Value) -> Option<&mut Vec<Value>> {
     value.get_mut("$hash").and_then(Value::as_array_mut)
 }
 
-fn command_code_legacy(cmd: &Value) -> Option<i64> {
+pub(crate) fn command_code_legacy(cmd: &Value) -> Option<i64> {
     object_fields(cmd)?.get("@code").and_then(Value::as_i64)
 }
 
@@ -1983,7 +2298,7 @@ fn command_parameters_legacy_mut(cmd: &mut Value) -> Option<&mut Vec<Value>> {
         .and_then(Value::as_array_mut)
 }
 
-fn string_from_legacy_value(value: &Value) -> Option<String> {
+pub(crate) fn string_from_legacy_value(value: &Value) -> Option<String> {
     if let Some(s) = value.as_str() {
         return Some(s.to_string());
     }
@@ -2045,30 +2360,17 @@ fn apply_translations(
     stem: &str,
     kind: &FileKind,
     json: &mut Value,
-    translations: &HashMap<String, String>,
-    target_lang: &str,
+    context: &mut ApplyContext<'_>,
 ) -> Result<usize, AppError> {
-    let choice_prompt = choice_prompt_guard_text(target_lang);
     match kind {
-        FileKind::Database => apply_database(stem, json, translations),
-        FileKind::Map => apply_map(stem, json, translations, choice_prompt),
-        FileKind::CommonEvents => apply_common_events(json, translations, choice_prompt),
-        FileKind::Troops => apply_troops(json, translations, choice_prompt),
-        FileKind::System => apply_system(json, translations),
-        FileKind::Plugins => apply_plugins(json, translations),
-        FileKind::Html => apply_index_html(stem, json, translations),
+        FileKind::Database => apply_database(stem, json, context),
+        FileKind::Map => apply_map(stem, json, context),
+        FileKind::CommonEvents => apply_common_events(json, context),
+        FileKind::Troops => apply_troops(json, context),
+        FileKind::System => apply_system(json, context),
+        FileKind::Plugins => apply_plugins(json, context.translations, context.game_dir),
+        FileKind::Html => apply_index_html(stem, json, context.translations),
         FileKind::Ignored => Ok(0),
-    }
-}
-
-fn choice_prompt_guard_text(target_lang: &str) -> &'static str {
-    let lang = target_lang.to_ascii_lowercase();
-    if lang.starts_with("es") || lang.contains("spanish") || lang.contains("español") {
-        "Elige una opción."
-    } else if lang.starts_with("ja") || lang.starts_with("jp") || lang.contains("japanese") {
-        "選択してください。"
-    } else {
-        "Choose an option."
     }
 }
 
@@ -2118,6 +2420,7 @@ fn escape_html_text(text: &str) -> String {
 fn apply_plugins(
     json: &mut Value,
     translations: &HashMap<String, String>,
+    game_dir: &Path,
 ) -> Result<usize, AppError> {
     let plugins = json
         .as_array_mut()
@@ -2129,6 +2432,37 @@ fn apply_plugins(
         let Some(plugin_obj) = plugin.as_object_mut() else {
             continue;
         };
+        let plugin_name = plugin_obj
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+
+        // A parameter missing from plugins.js was extracted from the plugin
+        // source's `@default`; when a structured default (`key:json:…`) has
+        // translations, restore that default first so they have a target.
+        if let Some(parameters) = plugin_obj
+            .get_mut("parameters")
+            .and_then(Value::as_object_mut)
+        {
+            let parameter_prefix = format!("Plugins:{plugin_index}:parameters:");
+            let missing_structured = translations
+                .keys()
+                .filter_map(|entry_id| entry_id.strip_prefix(&parameter_prefix))
+                .filter_map(|rest| rest.split_once(':').map(|(key, _)| key))
+                .filter(|key| !parameters.contains_key(*key))
+                .map(str::to_string)
+                .collect::<HashSet<_>>();
+            if !missing_structured.is_empty() {
+                for (key, default) in
+                    parser::rpgmaker::plugin_source_defaults(game_dir, &plugin_name)?
+                {
+                    if missing_structured.contains(&key) {
+                        parameters.insert(key, Value::String(default));
+                    }
+                }
+            }
+        }
 
         if let Some(description) = plugin_obj.get_mut("description") {
             applied += apply_plugin_value(
@@ -2229,7 +2563,7 @@ fn parse_embedded_plugin_json(text: &str) -> Option<Value> {
 fn apply_database(
     stem: &str,
     json: &mut Value,
-    translations: &HashMap<String, String>,
+    context: &mut ApplyContext<'_>,
 ) -> Result<usize, AppError> {
     let arr = json
         .as_array_mut()
@@ -2250,18 +2584,45 @@ fn apply_database(
 
         for &field in DB_TEXT_FIELDS {
             let entry_id = format!("{stem}:{field}:{item_id}");
-            if let Some(translation) = translations.get(&entry_id) {
-                if let Some(val) = obj.get_mut(field) {
-                    if val.is_string() {
-                        *val = Value::String(translation.clone());
-                        applied += 1;
-                    }
+            let Some(translation) = context.translation(&entry_id).cloned() else {
+                continue;
+            };
+            if let Some(val) = obj.get_mut(field) {
+                if val.is_string() {
+                    let text = fit_database_text(field, &entry_id, &translation, context);
+                    *val = Value::String(text);
+                    applied += 1;
                 }
             }
         }
     }
 
     Ok(applied)
+}
+
+/// Descriptions and profiles are wrapped inside the help window; names and
+/// battle messages are only measured, since the engines squeeze them.
+fn fit_database_text(
+    field: &str,
+    entry_id: &str,
+    translation: &str,
+    context: &mut ApplyContext<'_>,
+) -> String {
+    match field {
+        "description" | "profile" => {
+            let fitted = text_fit::fit_description(translation, context.fit);
+            context.record_fit(entry_id, TextSlotKind::Description, &fitted);
+            fitted.lines.join("\n")
+        }
+        "name" | "nickname" => {
+            context.check_name(entry_id, TextSlotKind::Name, translation);
+            translation.to_string()
+        }
+        _ => {
+            context.check_name(entry_id, TextSlotKind::Term, translation);
+            translation.to_string()
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2271,8 +2632,7 @@ fn apply_database(
 fn apply_map(
     stem: &str,
     json: &mut Value,
-    translations: &HashMap<String, String>,
-    choice_prompt_guard: &str,
+    context: &mut ApplyContext<'_>,
 ) -> Result<usize, AppError> {
     let obj = json
         .as_object_mut()
@@ -2282,10 +2642,11 @@ fn apply_map(
 
     // displayName
     let dn_id = format!("{stem}:displayName");
-    if let Some(translation) = translations.get(&dn_id) {
+    if let Some(translation) = context.translation(&dn_id).cloned() {
         if let Some(val) = obj.get_mut("displayName") {
             if val.is_string() {
-                *val = Value::String(translation.clone());
+                context.check_name(&dn_id, TextSlotKind::Name, &translation);
+                *val = Value::String(translation);
                 applied += 1;
             }
         }
@@ -2306,12 +2667,7 @@ fn apply_map(
                 for (page_idx, page) in pages.iter_mut().enumerate() {
                     if let Some(Value::Array(list)) = page.get_mut("list") {
                         let id_prefix = format!("{stem}:{ev_id}:{page_idx}");
-                        applied += apply_event_commands(
-                            list,
-                            &id_prefix,
-                            translations,
-                            choice_prompt_guard,
-                        );
+                        applied += apply_event_commands(list, &id_prefix, context);
                     }
                 }
             }
@@ -2327,8 +2683,7 @@ fn apply_map(
 
 fn apply_common_events(
     json: &mut Value,
-    translations: &HashMap<String, String>,
-    choice_prompt_guard: &str,
+    context: &mut ApplyContext<'_>,
 ) -> Result<usize, AppError> {
     let arr = json
         .as_array_mut()
@@ -2347,7 +2702,7 @@ fn apply_common_events(
 
         if let Some(Value::Array(list)) = item.get_mut("list") {
             let id_prefix = format!("CommonEvents:{ce_id}");
-            applied += apply_event_commands(list, &id_prefix, translations, choice_prompt_guard);
+            applied += apply_event_commands(list, &id_prefix, context);
         }
     }
 
@@ -2358,11 +2713,7 @@ fn apply_common_events(
 // Troops (name + battle event commands)
 // ---------------------------------------------------------------------------
 
-fn apply_troops(
-    json: &mut Value,
-    translations: &HashMap<String, String>,
-    choice_prompt_guard: &str,
-) -> Result<usize, AppError> {
+fn apply_troops(json: &mut Value, context: &mut ApplyContext<'_>) -> Result<usize, AppError> {
     let arr = json
         .as_array_mut()
         .ok_or_else(|| AppError::Parse("Troops: expected JSON array".into()))?;
@@ -2380,7 +2731,7 @@ fn apply_troops(
 
         // Troop name
         let name_id = format!("Troops:name:{troop_id}");
-        if let Some(translation) = translations.get(&name_id) {
+        if let Some(translation) = context.translation(&name_id) {
             if let Some(obj) = item.as_object_mut() {
                 if let Some(val) = obj.get_mut("name") {
                     if val.is_string() {
@@ -2396,8 +2747,7 @@ fn apply_troops(
             for (page_idx, page) in pages.iter_mut().enumerate() {
                 if let Some(Value::Array(list)) = page.get_mut("list") {
                     let id_prefix = format!("Troops:{troop_id}:{page_idx}");
-                    applied +=
-                        apply_event_commands(list, &id_prefix, translations, choice_prompt_guard);
+                    applied += apply_event_commands(list, &id_prefix, context);
                 }
             }
         }
@@ -2410,10 +2760,7 @@ fn apply_troops(
 // System (gameTitle + visible vocabulary + terms)
 // ---------------------------------------------------------------------------
 
-fn apply_system(
-    json: &mut Value,
-    translations: &HashMap<String, String>,
-) -> Result<usize, AppError> {
+fn apply_system(json: &mut Value, context: &mut ApplyContext<'_>) -> Result<usize, AppError> {
     let obj = json
         .as_object_mut()
         .ok_or_else(|| AppError::Parse("System: expected JSON object".into()))?;
@@ -2421,10 +2768,11 @@ fn apply_system(
     let mut applied = 0;
 
     // gameTitle
-    if let Some(translation) = translations.get("System:gameTitle") {
+    if let Some(translation) = context.translation("System:gameTitle").cloned() {
         if let Some(val) = obj.get_mut("gameTitle") {
             if val.is_string() {
-                *val = Value::String(translation.clone());
+                context.check_name("System:gameTitle", TextSlotKind::Name, &translation);
+                *val = Value::String(translation);
                 applied += 1;
             }
         }
@@ -2432,13 +2780,13 @@ fn apply_system(
 
     for field in SYSTEM_TEXT_FIELDS {
         if let Some(value) = obj.get_mut(*field) {
-            applied += apply_terms_recursive(value, &format!("System:{field}"), translations);
+            applied += apply_terms_recursive(value, &format!("System:{field}"), context);
         }
     }
 
     // terms — recursive injection
     if let Some(terms) = obj.get_mut("terms") {
-        applied += apply_terms_recursive(terms, "System:terms", translations);
+        applied += apply_terms_recursive(terms, "System:terms", context);
     }
 
     Ok(applied)
@@ -2449,14 +2797,15 @@ fn apply_system(
 fn apply_terms_recursive(
     value: &mut Value,
     id_prefix: &str,
-    translations: &HashMap<String, String>,
+    context: &mut ApplyContext<'_>,
 ) -> usize {
     let mut applied = 0;
 
     match value {
         Value::String(_) => {
-            if let Some(translation) = translations.get(id_prefix) {
-                *value = Value::String(translation.clone());
+            if let Some(translation) = context.translation(id_prefix).cloned() {
+                context.check_name(id_prefix, TextSlotKind::Term, &translation);
+                *value = Value::String(translation);
                 applied += 1;
             }
         }
@@ -2464,16 +2813,14 @@ fn apply_terms_recursive(
             let keys: Vec<String> = map.keys().cloned().collect();
             for key in keys {
                 if let Some(val) = map.get_mut(&key) {
-                    applied +=
-                        apply_terms_recursive(val, &format!("{id_prefix}.{key}"), translations);
+                    applied += apply_terms_recursive(val, &format!("{id_prefix}.{key}"), context);
                 }
             }
         }
         Value::Array(arr) => {
             for (i, val) in arr.iter_mut().enumerate() {
                 if val.is_string() {
-                    applied +=
-                        apply_terms_recursive(val, &format!("{id_prefix}.{i}"), translations);
+                    applied += apply_terms_recursive(val, &format!("{id_prefix}.{i}"), context);
                 }
             }
         }
@@ -2487,24 +2834,102 @@ fn apply_terms_recursive(
 // Event commands (shared by Maps, CommonEvents, Troops)
 // ---------------------------------------------------------------------------
 
+fn command_code(command: &Value) -> i64 {
+    command.get("code").and_then(Value::as_i64).unwrap_or(0)
+}
+
+/// End (exclusive) of the run of commands with `code` that starts at `start`.
+fn block_end(list: &[Value], start: usize, code: i64, code_of: fn(&Value) -> i64) -> usize {
+    let mut end = start;
+    while end < list.len() && code_of(&list[end]) == code {
+        end += 1;
+    }
+    end
+}
+
+/// Rewrites a block of one-line commands (401/405) with `lines`: existing
+/// commands are reused, extra lines clone the last one (same code and
+/// indent), and missing lines keep the original command with blank text.
+fn line_commands(
+    existing: &[Value],
+    lines: &[String],
+    set_text: fn(&mut Value, &str) -> bool,
+) -> Vec<Value> {
+    let count = existing.len().max(lines.len());
+    (0..count)
+        .map(|index| {
+            let mut command = existing
+                .get(index)
+                .or(existing.last())
+                .cloned()
+                .unwrap_or(Value::Null);
+            set_text(
+                &mut command,
+                lines.get(index).map(String::as_str).unwrap_or(""),
+            );
+            command
+        })
+        .collect()
+}
+
+fn set_command_text(command: &mut Value, text: &str) -> bool {
+    match command
+        .get_mut("parameters")
+        .and_then(Value::as_array_mut)
+        .and_then(|parameters| parameters.first_mut())
+    {
+        Some(slot) => {
+            *slot = Value::String(text.to_string());
+            true
+        }
+        None => false,
+    }
+}
+
+/// Replaces `list[start..end]` now when the length is unchanged, otherwise
+/// queues the splice so indices of later commands stay valid for their IDs.
+fn replace_block(
+    list: &mut Vec<Value>,
+    start: usize,
+    end: usize,
+    commands: Vec<Value>,
+    splices: &mut Vec<(usize, usize, Vec<Value>)>,
+) {
+    if commands.len() == end - start {
+        list.splice(start..end, commands);
+    } else {
+        splices.push((start, end, commands));
+    }
+}
+
+fn apply_splices(list: &mut Vec<Value>, splices: Vec<(usize, usize, Vec<Value>)>) {
+    for (start, end, commands) in splices.into_iter().rev() {
+        list.splice(start..end, commands);
+    }
+}
+
 /// Apply translations to event commands in a list.
-/// Mirrors `parser::rpgmaker::extract_event_commands`.
+/// Mirrors `parser::rpgmaker::extract_event_commands`. Entry IDs come from
+/// the original command indices, so Show Text/Scrolling Text blocks that need
+/// more lines are spliced in only after the whole list has been resolved.
+/// Extra Show Text lines stay in the same message: MV and MZ page them
+/// natively, keeping face, background, position and speaker name.
 fn apply_event_commands(
     list: &mut Vec<Value>,
     id_prefix: &str,
-    translations: &HashMap<String, String>,
-    _choice_prompt_guard: &str,
+    context: &mut ApplyContext<'_>,
 ) -> usize {
     let mut applied = 0;
+    let mut splices = Vec::new();
     let mut i = 0;
 
     while i < list.len() {
-        let code = list[i].get("code").and_then(|v| v.as_i64()).unwrap_or(0);
+        let code = command_code(&list[i]);
 
         match code {
             CODE_SHOW_TEXT_HEADER => {
                 let entry_id = format!("{id_prefix}:speakerName:{i}");
-                if let Some(translation) = translations.get(&entry_id) {
+                if let Some(translation) = context.translation(&entry_id).cloned() {
                     let has_speaker_name = list[i]
                         .get("parameters")
                         .and_then(Value::as_array)
@@ -2512,105 +2937,95 @@ fn apply_event_commands(
                         .and_then(Value::as_str)
                         .is_some();
                     if has_speaker_name {
-                        set_parameter(list, i, 4, translation);
+                        context.check_name(&entry_id, TextSlotKind::Name, &translation);
+                        set_parameter(list, i, 4, &translation);
                         applied += 1;
                     }
                 }
             }
-            CODE_SHOW_TEXT => {
-                // Collect consecutive 401 commands (multi-line text)
+            CODE_SHOW_TEXT | CODE_SCROLL_TEXT => {
                 let start = i;
-                let mut line_indices: Vec<usize> = vec![i];
-                i += 1;
-                while i < list.len() {
-                    let next_code = list[i].get("code").and_then(|v| v.as_i64()).unwrap_or(0);
-                    if next_code == CODE_SHOW_TEXT {
-                        line_indices.push(i);
-                        i += 1;
+                let end = block_end(list, start, code, command_code);
+                let is_message = code == CODE_SHOW_TEXT;
+                let entry_id = format!(
+                    "{id_prefix}:{}:{start}",
+                    if is_message { "text" } else { "scroll" }
+                );
+                if let Some(translation) = context.translation(&entry_id).cloned() {
+                    let fitted = if is_message {
+                        let has_face = start
+                            .checked_sub(1)
+                            .filter(|&header| command_code(&list[header]) == CODE_SHOW_TEXT_HEADER)
+                            .and_then(|header| list[header].get("parameters")?.get(0)?.as_str())
+                            .is_some_and(|face| !face.is_empty());
+                        let followed_by_choice =
+                            list.get(end).map(command_code) == Some(CODE_SHOW_CHOICES);
+                        text_fit::fit_message(
+                            &translation,
+                            context.original(&entry_id),
+                            has_face,
+                            followed_by_choice,
+                            context.fit,
+                        )
                     } else {
-                        break;
-                    }
-                }
-
-                let entry_id = format!("{id_prefix}:text:{start}");
-                if let Some(translation) = translations.get(&entry_id) {
-                    let followed_by_choice = list
-                        .get(i)
-                        .and_then(|command| command.get("code"))
-                        .and_then(Value::as_i64)
-                        == Some(CODE_SHOW_CHOICES);
-                    let prepared = wrap_mv_mz_message_translation(
-                        translation,
-                        followed_by_choice,
-                        line_indices.len(),
-                    );
-                    apply_multiline_text(list, &line_indices, &prepared);
+                        text_fit::fit_scroll(&translation, context.fit)
+                    };
+                    let slot = if is_message {
+                        TextSlotKind::Message
+                    } else {
+                        TextSlotKind::Scroll
+                    };
+                    context.record_fit(&entry_id, slot, &fitted);
+                    let commands =
+                        line_commands(&list[start..end], &fitted.lines, set_command_text);
+                    replace_block(list, start, end, commands, &mut splices);
                     applied += 1;
                 }
-                continue; // i already advanced past the group
-            }
-            CODE_SCROLL_TEXT => {
-                // Collect consecutive 405 commands (scrolling text)
-                let start = i;
-                let mut line_indices: Vec<usize> = vec![i];
-                i += 1;
-                while i < list.len() {
-                    let next_code = list[i].get("code").and_then(|v| v.as_i64()).unwrap_or(0);
-                    if next_code == CODE_SCROLL_TEXT {
-                        line_indices.push(i);
-                        i += 1;
-                    } else {
-                        break;
-                    }
-                }
-
-                let entry_id = format!("{id_prefix}:scroll:{start}");
-                if let Some(translation) = translations.get(&entry_id) {
-                    apply_multiline_text(list, &line_indices, translation);
-                    applied += 1;
-                }
+                i = end;
                 continue;
             }
             CODE_SHOW_CHOICES => {
-                // Replace individual choice strings
-                if let Some(params) = list[i].get_mut("parameters") {
-                    if let Some(arr) = params.as_array_mut() {
-                        if let Some(choices) = arr.first_mut().and_then(|v| v.as_array_mut()) {
-                            for (ci, choice) in choices.iter_mut().enumerate() {
-                                let entry_id = format!("{id_prefix}:choice:{i}:{ci}");
-                                if let Some(translation) = translations.get(&entry_id) {
-                                    *choice = Value::String(translation.clone());
-                                    applied += 1;
-                                }
-                            }
+                let choices = list[i]
+                    .get_mut("parameters")
+                    .and_then(Value::as_array_mut)
+                    .and_then(|parameters| parameters.first_mut())
+                    .and_then(Value::as_array_mut);
+                if let Some(choices) = choices {
+                    for (ci, choice) in choices.iter_mut().enumerate() {
+                        let entry_id = format!("{id_prefix}:choice:{i}:{ci}");
+                        if let Some(translation) = context.translation(&entry_id).cloned() {
+                            context.check_choice(&entry_id, &translation);
+                            *choice = Value::String(translation);
+                            applied += 1;
                         }
                     }
                 }
             }
-            CODE_CHANGE_NAME => {
-                let entry_id = format!("{id_prefix}:changeName:{i}");
-                if let Some(translation) = translations.get(&entry_id) {
-                    set_parameter(list, i, 1, translation);
-                    applied += 1;
-                }
-            }
-            CODE_CHANGE_NICKNAME => {
-                let entry_id = format!("{id_prefix}:changeNickname:{i}");
-                if let Some(translation) = translations.get(&entry_id) {
-                    set_parameter(list, i, 1, translation);
+            CODE_CHANGE_NAME | CODE_CHANGE_NICKNAME => {
+                let label = if code == CODE_CHANGE_NAME {
+                    "changeName"
+                } else {
+                    "changeNickname"
+                };
+                let entry_id = format!("{id_prefix}:{label}:{i}");
+                if let Some(translation) = context.translation(&entry_id).cloned() {
+                    context.check_name(&entry_id, TextSlotKind::Name, &translation);
+                    set_parameter(list, i, 1, &translation);
                     applied += 1;
                 }
             }
             CODE_CHANGE_PROFILE => {
                 let entry_id = format!("{id_prefix}:changeProfile:{i}");
-                if let Some(translation) = translations.get(&entry_id) {
-                    set_parameter(list, i, 1, translation);
+                if let Some(translation) = context.translation(&entry_id).cloned() {
+                    let fitted = text_fit::fit_description(&translation, context.fit);
+                    context.record_fit(&entry_id, TextSlotKind::Description, &fitted);
+                    set_parameter(list, i, 1, &fitted.lines.join("\n"));
                     applied += 1;
                 }
             }
             CODE_CONTROL_VARIABLES => {
                 let entry_id = format!("{id_prefix}:variableText:{i}");
-                if let Some(translation) = translations.get(&entry_id) {
+                if let Some(translation) = context.translation(&entry_id) {
                     if let Ok(quoted) = serde_json::to_string(translation) {
                         set_parameter(list, i, 4, &quoted);
                         applied += 1;
@@ -2622,45 +3037,13 @@ fn apply_event_commands(
         i += 1;
     }
 
+    apply_splices(list, splices);
     applied
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/// Apply a multi-line translation to consecutive 401/405 commands.
-///
-/// - Lines are distributed 1:1 across the commands.
-/// - If the translation has fewer lines, excess commands get empty strings.
-/// - If the translation has more lines, overflow is compacted into the last
-///   existing command so scene/event command structure is left unchanged.
-fn apply_multiline_text(list: &mut Vec<Value>, line_indices: &[usize], translation: &str) {
-    let lines: Vec<&str> = translation.split('\n').collect();
-    let num_commands = line_indices.len();
-    if num_commands == 0 {
-        return;
-    }
-
-    for (j, &cmd_idx) in line_indices.iter().enumerate() {
-        let text = if j + 1 == num_commands && lines.len() > num_commands {
-            join_overflow_message_lines(&lines[j..])
-        } else if j < lines.len() {
-            lines[j].to_string()
-        } else {
-            // Translation has fewer lines — empty this command
-            String::new()
-        };
-
-        if let Some(params) = list[cmd_idx].get_mut("parameters") {
-            if let Some(arr) = params.as_array_mut() {
-                if !arr.is_empty() {
-                    arr[0] = Value::String(text);
-                }
-            }
-        }
-    }
-}
 
 /// Set a string parameter at a specific index in a command's parameters array.
 fn set_parameter(list: &mut [Value], cmd_idx: usize, param_idx: usize, value: &str) {
@@ -2673,10 +3056,6 @@ fn set_parameter(list: &mut [Value], cmd_idx: usize, param_idx: usize, value: &s
     }
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2685,6 +3064,25 @@ mod tests {
     use serde_json::json;
     use std::fs;
     use std::io::{BufReader, BufWriter};
+
+    /// Runs an MV/MZ apply function with default MV windows and no originals.
+    fn with_mv_context<R>(
+        translations: &HashMap<String, String>,
+        run: impl FnOnce(&mut ApplyContext<'_>) -> R,
+    ) -> R {
+        let originals = HashMap::new();
+        let fit = TextFitContext::new(text_fit::TextMetrics::defaults(&Engine::Mv));
+        let mut report = TextFitReport::default();
+        let mut context = ApplyContext {
+            translations,
+            originals: &originals,
+            fit: &fit,
+            report: &mut report,
+            file_path: "data/Map001.json",
+            game_dir: Path::new("."),
+        };
+        run(&mut context)
+    }
 
     fn make_entry(
         id: &str,
@@ -2818,7 +3216,7 @@ mod tests {
             updated_at: String::new(),
         };
 
-        let (translations, total_entries) = collect_translations(&project);
+        let (translations, _, total_entries) = collect_translations(&project);
         assert_eq!(total_entries, 2);
         assert_eq!(translations.len(), 1);
         assert_eq!(translations.get("System:terms.basic.0").unwrap(), "Nivel");
@@ -3148,7 +3546,10 @@ mod tests {
         translations.insert("Actors:name:1".into(), "Haroldo".into());
         translations.insert("Actors:description:2".into(), "Una sanadora.".into());
 
-        let applied = apply_database("Actors", &mut json, &translations).unwrap();
+        let applied = with_mv_context(&translations, |context| {
+            apply_database("Actors", &mut json, context)
+        })
+        .unwrap();
         assert_eq!(applied, 2);
         assert_eq!(json[1]["name"], "Haroldo");
         assert_eq!(json[1]["description"], "A brave warrior."); // unchanged
@@ -3169,7 +3570,10 @@ mod tests {
         let mut translations = HashMap::new();
         translations.insert("Map001:displayName".into(), "Bosque de Pruebas".into());
 
-        let applied = apply_map("Map001", &mut json, &translations, "Choose an option.").unwrap();
+        let applied = with_mv_context(&translations, |context| {
+            apply_map("Map001", &mut json, context)
+        })
+        .unwrap();
         assert_eq!(applied, 1);
         assert_eq!(json["displayName"], "Bosque de Pruebas");
     }
@@ -3192,85 +3596,13 @@ mod tests {
         );
 
         let list = json.as_array_mut().unwrap();
-        let applied = apply_event_commands(list, "Map001:1:0", &translations, "Choose an option.");
+        let applied = with_mv_context(&translations, |context| {
+            apply_event_commands(list, "Map001:1:0", context)
+        });
         assert_eq!(applied, 1);
-        assert_eq!(
-            list[0]["parameters"][0],
-            "¡Hola, viajero! Bienvenido a nuestro pueblo."
-        );
-        assert_eq!(list[1]["parameters"][0], "");
-    }
-
-    #[test]
-    fn test_apply_event_commands_wraps_long_show_text_lines() {
-        let mut json: Value = serde_json::from_str(
-            r#"[
-                {"code": 101, "parameters": ["", 0, 2, 2]},
-                {"code": 401, "parameters": ["\\C[27]\\N[1]\\C[0]"]},
-                {"code": 401, "parameters": ["Original"]},
-                {"code": 0, "parameters": []}
-            ]"#,
-        )
-        .unwrap();
-
-        let mut translations = HashMap::new();
-        translations.insert(
-            "Map001:1:0:text:1".into(),
-            "\\C[27]\\N[1]\\C[0]\nUna chica de secundaria de pelo corto vuelve caminando tranquilamente de la escuela.".into(),
-        );
-
-        let list = json.as_array_mut().unwrap();
-        let applied = apply_event_commands(list, "Map001:1:0", &translations, "Choose an option.");
-        assert_eq!(applied, 1);
-        assert_eq!(list[1]["parameters"][0], "\\C[27]\\N[1]\\C[0]");
-        assert_eq!(
-            list[2]["parameters"][0],
-            "Una chica de secundaria de pelo corto vuelve caminando tranquilamente de la escuela."
-        );
-        assert_eq!(list[3]["code"], 0);
-    }
-
-    #[test]
-    fn test_apply_event_commands_does_not_insert_oversized_show_text_pages() {
-        let mut json: Value = serde_json::from_str(
-            r#"[
-                {"code": 101, "parameters": ["", 0, 2, 2]},
-                {"code": 401, "parameters": ["Line 1"]},
-                {"code": 401, "parameters": ["Line 2"]},
-                {"code": 0, "parameters": []}
-            ]"#,
-        )
-        .unwrap();
-
-        let mut translations = HashMap::new();
-        translations.insert(
-            "Map001:1:0:text:1".into(),
-            "Esta es una explicación larga que debería ocupar varias líneas completas de la caja de diálogo antes de pasar a una segunda página del mismo mensaje porque no cabe en cuatro líneas. La frase continúa con más detalles para comprobar que el exportador divide el texto por ancho real y no por saltos previos del proveedor.".into(),
-        );
-
-        let list = json.as_array_mut().unwrap();
-        let applied = apply_event_commands(list, "Map001:1:0", &translations, "Choose an option.");
-        assert_eq!(applied, 1);
-        let message_count = list
-            .iter()
-            .filter(|command| command.get("code").and_then(Value::as_i64) == Some(101))
-            .count();
-        let lines = list
-            .iter()
-            .filter(|command| command.get("code").and_then(Value::as_i64) == Some(CODE_SHOW_TEXT))
-            .filter_map(|command| {
-                command
-                    .get("parameters")
-                    .and_then(Value::as_array)
-                    .and_then(|parameters| parameters.first())
-                    .and_then(Value::as_str)
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(message_count, 1);
-        assert_eq!(lines.len(), 2);
-        assert_eq!(list[3]["code"], 0);
-        assert!(lines[0].contains("Esta es una explicación larga"));
-        assert!(lines[1].contains("proveedor"));
+        // Lines that fit keep the translator's breaks.
+        assert_eq!(list[0]["parameters"][0], "¡Hola, viajero!");
+        assert_eq!(list[1]["parameters"][0], "Bienvenido a nuestro pueblo.");
     }
 
     #[test]
@@ -3292,43 +3624,18 @@ mod tests {
         );
 
         let list = json.as_array_mut().unwrap();
-        let applied = apply_event_commands(list, "Map001:1:0", &translations, "Elige una opción.");
+        let applied = with_mv_context(&translations, |context| {
+            apply_event_commands(list, "Map001:1:0", context)
+        });
         assert_eq!(applied, 1);
+        // The blank line is dropped before the choices; both lines still show,
+        // as two 401s of the same message, and the choices keep their place.
         assert_eq!(
             list[1]["parameters"][0],
-            "Selecciona la cantidad de vello púbico. ※Estado actual: Normal."
+            "Selecciona la cantidad de vello púbico."
         );
-        assert_eq!(list[2]["code"], 102);
-    }
-
-    #[test]
-    fn test_apply_event_commands_does_not_add_final_prompt_before_split_choice() {
-        let mut json: Value = serde_json::from_str(
-            r#"[
-                {"code": 101, "parameters": ["", 0, 2, 2]},
-                {"code": 401, "parameters": ["Primera explicación."]},
-                {"code": 101, "parameters": ["", 0, 2, 2]},
-                {"code": 401, "parameters": ["Segunda explicación."]},
-                {"code": 102, "parameters": [["Sí", "No"]]},
-                {"code": 0, "parameters": []}
-            ]"#,
-        )
-        .unwrap();
-
-        let translations = HashMap::new();
-        let list = json.as_array_mut().unwrap();
-        let applied = apply_event_commands(list, "Map001:1:0", &translations, "Elige una opción.");
-        assert_eq!(applied, 0);
-        assert_eq!(list.len(), 6);
-        assert_eq!(list[4]["code"], 102);
-        assert!(list.iter().all(|command| {
-            command
-                .get("parameters")
-                .and_then(Value::as_array)
-                .and_then(|parameters| parameters.first())
-                .and_then(Value::as_str)
-                != Some("Elige una opción.")
-        }));
+        assert_eq!(list[2]["parameters"][0], "※Estado actual: Normal.");
+        assert_eq!(list[3]["code"], 102);
     }
 
     #[test]
@@ -3346,7 +3653,9 @@ mod tests {
         translations.insert("Map001:2:0:choice:0:1".into(), "No".into());
 
         let list = json.as_array_mut().unwrap();
-        let applied = apply_event_commands(list, "Map001:2:0", &translations, "Choose an option.");
+        let applied = with_mv_context(&translations, |context| {
+            apply_event_commands(list, "Map001:2:0", context)
+        });
         assert_eq!(applied, 2);
         assert_eq!(list[0]["parameters"][0][0], "Sí");
         assert_eq!(list[0]["parameters"][0][1], "No");
@@ -3368,7 +3677,9 @@ mod tests {
         translations.insert("Map001:1:0:speakerName:0".into(), "Alicia".into());
 
         let list = json.as_array_mut().unwrap();
-        let applied = apply_event_commands(list, "Map001:1:0", &translations, "Choose an option.");
+        let applied = with_mv_context(&translations, |context| {
+            apply_event_commands(list, "Map001:1:0", context)
+        });
 
         assert_eq!(applied, 1);
         assert_eq!(list[0]["parameters"], json!(["Actor1", 2, 0, 2, "Alicia"]));
@@ -3417,7 +3728,8 @@ mod tests {
             "¡%1 no tiene efecto!".into(),
         );
 
-        let applied = apply_system(&mut json, &translations).unwrap();
+        let applied =
+            with_mv_context(&translations, |context| apply_system(&mut json, context)).unwrap();
         assert_eq!(applied, 9);
         assert_eq!(json["gameTitle"], "Mi Aventura RPG");
         assert_eq!(json["currencyUnit"], "Oro");
@@ -3450,31 +3762,13 @@ mod tests {
         translations.insert("test:text:0".into(), "Línea 1".into());
 
         let list = json.as_array_mut().unwrap();
-        let applied = apply_event_commands(list, "test", &translations, "Choose an option.");
+        let applied = with_mv_context(&translations, |context| {
+            apply_event_commands(list, "test", context)
+        });
         assert_eq!(applied, 1);
         assert_eq!(list[0]["parameters"][0], "Línea 1");
         assert_eq!(list[1]["parameters"][0], ""); // emptied
         assert_eq!(list[2]["parameters"][0], ""); // emptied
-    }
-
-    #[test]
-    fn test_apply_multiline_more_lines() {
-        let mut json: Value = serde_json::from_str(
-            r#"[
-                {"code": 401, "parameters": ["Line 1"]},
-                {"code": 0, "parameters": []}
-            ]"#,
-        )
-        .unwrap();
-
-        let mut translations = HashMap::new();
-        translations.insert("test:text:0".into(), "Línea 1\nLínea 2\nLínea 3".into());
-
-        let list = json.as_array_mut().unwrap();
-        let applied = apply_event_commands(list, "test", &translations, "Choose an option.");
-        assert_eq!(applied, 1);
-        assert_eq!(list[0]["parameters"][0], "Línea 1 Línea 2 Línea 3");
-        assert_eq!(list[1]["code"], 0);
     }
 
     #[test]
@@ -3491,7 +3785,9 @@ mod tests {
         translations.insert("test:changeName:0".into(), "Haroldo".into());
 
         let list = json.as_array_mut().unwrap();
-        let applied = apply_event_commands(list, "test", &translations, "Choose an option.");
+        let applied = with_mv_context(&translations, |context| {
+            apply_event_commands(list, "test", context)
+        });
         assert_eq!(applied, 1);
         assert_eq!(list[0]["parameters"][1], "Haroldo");
     }
@@ -3510,7 +3806,9 @@ mod tests {
         translations.insert("test:changeNickname:0".into(), "El Valiente".into());
 
         let list = json.as_array_mut().unwrap();
-        let applied = apply_event_commands(list, "test", &translations, "Choose an option.");
+        let applied = with_mv_context(&translations, |context| {
+            apply_event_commands(list, "test", context)
+        });
         assert_eq!(applied, 1);
         assert_eq!(list[0]["parameters"][1], "El Valiente");
     }
@@ -3532,7 +3830,9 @@ mod tests {
         );
 
         let list = json.as_array_mut().unwrap();
-        let applied = apply_event_commands(list, "test", &translations, "Choose an option.");
+        let applied = with_mv_context(&translations, |context| {
+            apply_event_commands(list, "test", context)
+        });
         assert_eq!(applied, 1);
         assert_eq!(list[0]["parameters"][1], "Un guerrero valiente del norte.");
     }
@@ -3564,7 +3864,7 @@ mod tests {
             "Introducción de personajes".into(),
         );
 
-        let applied = apply_plugins(&mut json, &translations).unwrap();
+        let applied = apply_plugins(&mut json, &translations, Path::new(".")).unwrap();
         assert_eq!(applied, 2);
 
         let subcommands = json[0]["parameters"]["subCommands"].as_str().unwrap();
@@ -3590,7 +3890,7 @@ mod tests {
         let mut translations = HashMap::new();
         translations.insert("Plugins:0:parameters:endName".into(), "Salir".into());
 
-        let applied = apply_plugins(&mut json, &translations).unwrap();
+        let applied = apply_plugins(&mut json, &translations, Path::new(".")).unwrap();
         assert_eq!(applied, 1);
         assert_eq!(json[0]["parameters"]["endName"], "Salir");
     }
@@ -3625,8 +3925,20 @@ mod tests {
 ];"#,
         )
         .unwrap();
-        let plugin_source = "/*:\n * @param endName\n * @default ゲーム終了\n */\nvar parameters = PluginManager.parameters('gameEnd');\nvar EndName = String(parameters['endName'] || 'ゲーム終了');\nvar internalMarker = 'ゲーム終了';\n";
+        // `Help Text` is also missing from plugins.js and its default is a
+        // structured (note[]) value, as in YEP_QuestJournal's `Description`.
+        let plugin_source = "/*:\n * @param endName\n * @default ゲーム終了\n * @param Help Text\n * @default [\"\\\"ゲームを終了します\\\"\"]\n */\nvar parameters = PluginManager.parameters('gameEnd');\nvar EndName = String(parameters['endName'] || 'ゲーム終了');\nvar internalMarker = 'ゲーム終了';\n";
         fs::write(plugins_dir.join("gamEnd.js"), plugin_source).unwrap();
+        let parsed_plugins = parse_mv_mz_game(&temp_dir)
+            .unwrap()
+            .into_iter()
+            .find(|file| file.relative_path == "js/plugins.js")
+            .unwrap();
+        assert!(parsed_plugins
+            .entries
+            .iter()
+            .any(|entry| entry.id == "Plugins:0:parameters:Help Text:json:0"
+                && entry.original == "\"ゲームを終了します\""));
 
         let project = Project {
             id: "test".into(),
@@ -3642,12 +3954,20 @@ mod tests {
                 },
                 TranslationFile {
                     relative_path: "js/plugins.js".into(),
-                    entries: vec![make_entry(
-                        "Plugins:0:parameters:endName",
-                        "ゲーム終了",
-                        "Salir",
-                        EntryStatus::Reviewed,
-                    )],
+                    entries: vec![
+                        make_entry(
+                            "Plugins:0:parameters:endName",
+                            "ゲーム終了",
+                            "Salir",
+                            EntryStatus::Reviewed,
+                        ),
+                        make_entry(
+                            "Plugins:0:parameters:Help Text:json:0",
+                            "\"ゲームを終了します\"",
+                            "\"Sale del juego\"",
+                            EntryStatus::Reviewed,
+                        ),
+                    ],
                 },
             ],
             glossary: vec![],
@@ -3661,10 +3981,18 @@ mod tests {
             uuid::Uuid::new_v4().as_simple()
         ));
         let result = export_project(&project, &output_dir).unwrap();
-        assert_eq!(result.entries_applied, 1);
+        assert_eq!(result.entries_applied, 2);
 
         let plugins_output = fs::read_to_string(output_dir.join("js").join("plugins.js")).unwrap();
         assert!(plugins_output.contains(r#""endName": "Salir""#));
+        let exported_plugins = parse_plugins_js(&plugins_output).unwrap();
+        let help_text: Value = serde_json::from_str(
+            exported_plugins[0]["parameters"]["Help Text"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(help_text, json!(["\"Sale del juego\""]));
 
         let source_output =
             fs::read(output_dir.join("js").join("plugins").join("gamEnd.js")).unwrap();
@@ -4166,7 +4494,9 @@ mod tests {
         );
 
         let list = json.as_array_mut().unwrap();
-        let applied = apply_event_commands(list, "test", &translations, "Choose an option.");
+        let applied = with_mv_context(&translations, |context| {
+            apply_event_commands(list, "test", context)
+        });
         assert_eq!(applied, 1);
         assert_eq!(list[0]["parameters"][0], "En un reino lejano...");
         assert_eq!(list[1]["parameters"][0], "Nació un héroe.");
@@ -5085,6 +5415,501 @@ mod tests {
 
         // Cleanup
         let _ = fs::remove_dir_all(&temp_dir);
+        let _ = fs::remove_dir_all(&output_dir);
+    }
+
+    fn strip_color_codes_and_space(text: &str) -> String {
+        let without_colors = regex::Regex::new(r"\\[Cc]\[\d+\]")
+            .unwrap()
+            .replace_all(text, "")
+            .to_string();
+        without_colors
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    fn control_tokens(text: &str) -> Vec<String> {
+        translation_integrity::collect_special_token_spans(text)
+            .into_iter()
+            .map(|span| span.token)
+            .collect()
+    }
+
+    fn fit_project(game_dir: &Path, engine: Engine, translations: &[(&str, &str)]) -> Project {
+        let mut files = match engine {
+            Engine::Mv | Engine::Mz => parse_mv_mz_game(game_dir).unwrap(),
+            _ => parser::parse_game(game_dir).unwrap().files,
+        };
+        for entry in files.iter_mut().flat_map(|file| file.entries.iter_mut()) {
+            if let Some((_, translation)) = translations.iter().find(|(id, _)| *id == entry.id) {
+                entry.translation = (*translation).to_string();
+                entry.status = EntryStatus::Reviewed;
+            }
+        }
+        Project {
+            id: "fit".into(),
+            name: "Fit".into(),
+            source_lang: "en".into(),
+            target_lang: "es".into(),
+            engine,
+            game_dir: game_dir.to_string_lossy().into(),
+            files,
+            glossary: vec![],
+            style_guide: vec![],
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    /// Long translations must fit MZ's message window: wrapped at word
+    /// boundaries into extra 401 lines that MZ pages by itself (keeping face
+    /// and speaker name), with every control code intact, the color restored
+    /// on the new page and the event structure around the message unchanged.
+    /// Descriptions wrap inside the help window; a choice cannot grow and is
+    /// reported. The source game is never touched.
+    #[test]
+    fn test_export_fits_long_mz_text_into_native_pages_and_keeps_event_structure() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "fairtl_export_fit_mz_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        let data_dir = temp_dir.join("data");
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::create_dir_all(temp_dir.join("js")).unwrap();
+        fs::write(temp_dir.join("js").join("rmmz_core.js"), "").unwrap();
+        fs::write(
+            data_dir.join("System.json"),
+            r#"{"advanced":{"uiAreaWidth":816,"fontSize":26,"mainFontFilename":"mplus-1m-regular.woff","fallbackFonts":"Verdana, sans-serif"},"terms":{}}"#,
+        )
+        .unwrap();
+        fs::write(
+            data_dir.join("Items.json"),
+            r#"[null,{"id":1,"name":"Potion","description":"Restores HP."}]"#,
+        )
+        .unwrap();
+        fs::write(
+            data_dir.join("Map001.json"),
+            r#"{"displayName":"","events":[null,{"id":1,"name":"EV001","pages":[{"list":[
+                {"code":101,"indent":0,"parameters":["Actor1",0,0,2,"Alice"]},
+                {"code":401,"indent":0,"parameters":["\\C[2]Alice\\C[0] looks at the \\I[5] map: \\C[3]the road is long."]},
+                {"code":401,"indent":0,"parameters":["We leave with \\N[1].\\C[0]"]},
+                {"code":102,"indent":0,"parameters":[["Yes","No"],1,0,2,0]},
+                {"code":402,"indent":0,"parameters":[0,"Yes"]},
+                {"code":101,"indent":1,"parameters":["",0,0,2,""]},
+                {"code":401,"indent":1,"parameters":["Fine."]},
+                {"code":0,"indent":1,"parameters":[]},
+                {"code":402,"indent":0,"parameters":[1,"No"]},
+                {"code":0,"indent":1,"parameters":[]},
+                {"code":404,"indent":0,"parameters":[]},
+                {"code":105,"indent":0,"parameters":[2,false]},
+                {"code":405,"indent":0,"parameters":["Scroll line."]},
+                {"code":0,"indent":0,"parameters":[]}
+            ]}]}]}"#,
+        )
+        .unwrap();
+        let source_snapshot = snapshot_file_tree(&temp_dir);
+
+        let long_message = "\\C[2]Alicia\\C[0] mira el \\I[5] mapa y dice: \\C[3]el camino hacia la montaña es largo, peligroso y lleno de criaturas que despiertan cuando cae la noche sobre el valle, así que debemos preparar provisiones, antorchas y mucho valor antes de partir mañana temprano con \\N[1].\\C[0]";
+        let long_scroll = "En un reino muy lejano, más allá de las montañas nevadas y los ríos helados, vivía un héroe olvidado por todos.";
+        let long_choice =
+            "Sí, acepto acompañarte en este viaje tan largo y peligroso hasta el final del mundo";
+        let long_description = "Restaura una gran cantidad de puntos de vida a un aliado y además elimina el veneno y la parálisis.";
+        let translations = [
+            ("Map001:1:0:text:1", long_message),
+            ("Map001:1:0:speakerName:0", "Alicia"),
+            ("Map001:1:0:choice:3:0", long_choice),
+            ("Map001:1:0:choice:3:1", "No"),
+            ("Map001:1:0:text:6", "Bien."),
+            ("Map001:1:0:scroll:12", long_scroll),
+            ("Items:description:1", long_description),
+        ];
+        let project = fit_project(&temp_dir, Engine::Mz, &translations);
+        let output_dir = std::env::temp_dir().join(format!(
+            "fairtl_export_fit_mz_out_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+
+        let result = export_project(&project, &output_dir).unwrap();
+        assert_eq!(result.entries_applied, translations.len());
+        assert_eq!(snapshot_file_tree(&temp_dir), source_snapshot);
+
+        let exported: Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("data").join("Map001.json")).unwrap(),
+        )
+        .unwrap();
+        let list = exported["events"][1]["pages"][0]["list"]
+            .as_array()
+            .unwrap();
+        let codes = list
+            .iter()
+            .map(|command| command["code"].as_i64().unwrap())
+            .collect::<Vec<_>>();
+        let message_lines = codes[1..].iter().take_while(|code| **code == 401).count();
+        assert!(
+            message_lines > 4,
+            "expected a second page, got {message_lines} lines"
+        );
+        let after_message = &codes[1 + message_lines..];
+        assert_eq!(
+            after_message[..9],
+            [102, 402, 101, 401, 0, 402, 0, 404, 105]
+        );
+        let scroll_lines = after_message[9..]
+            .iter()
+            .take_while(|code| **code == 405)
+            .count();
+        assert!(scroll_lines >= 2, "long scrolling text must wrap");
+        assert_eq!(after_message[9 + scroll_lines..], [0]);
+
+        // Same message: header, face and speaker name untouched; the choice
+        // and branch commands keep their parameters and indentation.
+        assert_eq!(list[0]["parameters"], json!(["Actor1", 0, 0, 2, "Alicia"]));
+        let choice = &list[1 + message_lines];
+        assert_eq!(
+            choice["parameters"],
+            json!([[long_choice, "No"], 1, 0, 2, 0])
+        );
+        assert_eq!(list[1 + message_lines + 2]["indent"], 1);
+        assert!(list[1..=message_lines]
+            .iter()
+            .all(|line| line["indent"] == 0));
+
+        // Every line fits the face-reduced window; the color that spans the
+        // page break is restored at the top of page two.
+        let fit = TextFitContext::detect(&Engine::Mz, &temp_dir);
+        let lines = list[1..=message_lines]
+            .iter()
+            .map(|line| line["parameters"][0].as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+        for line in &lines {
+            assert!(
+                text_fit::line_width(line, &fit) <= 620.0,
+                "line too wide: {line}"
+            );
+        }
+        assert!(
+            lines[4].starts_with("\\C[3]"),
+            "page two must restore the color: {}",
+            lines[4]
+        );
+
+        // No control code is lost, split or reordered.
+        let exported_text = lines.join("\n");
+        let mut exported_tokens = control_tokens(&exported_text).into_iter();
+        for token in control_tokens(long_message) {
+            assert!(
+                exported_tokens.any(|candidate| candidate == token),
+                "control code {token} missing or out of order in {exported_text}"
+            );
+        }
+        assert_eq!(
+            strip_color_codes_and_space(&exported_text),
+            strip_color_codes_and_space(long_message)
+        );
+
+        // The description wraps into the help window's two rows.
+        let items: Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("data").join("Items.json")).unwrap(),
+        )
+        .unwrap();
+        let description = items[1]["description"].as_str().unwrap();
+        assert_eq!(description.lines().count(), 2);
+        assert_eq!(
+            strip_color_codes_and_space(description),
+            strip_color_codes_and_space(long_description)
+        );
+
+        let report = &result.text_fit;
+        assert_eq!(report.paginated_entries, 1);
+        assert_eq!(report.pages_added, 1);
+        assert!(report.wrapped_entries >= 3);
+        assert_eq!(report.overflow_count, 1);
+        assert_eq!(report.overflow[0].entry_id, "Map001:1:0:choice:3:0");
+        assert_eq!(report.overflow[0].kind, TextSlotKind::Choice);
+
+        // The re-imported export reads back the fitted text.
+        let readback = parse_mv_mz_game(&output_dir)
+            .unwrap()
+            .into_iter()
+            .flat_map(|file| file.entries)
+            .map(|entry| (entry.id, entry.original))
+            .collect::<HashMap<_, _>>();
+        assert_eq!(
+            strip_color_codes_and_space(&readback["Map001:1:0:text:1"]),
+            strip_color_codes_and_space(long_message)
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+        let _ = fs::remove_dir_all(&output_dir);
+    }
+
+    /// MV games with YEP_MessageCore: `<WordWrap>` messages are wrapped by the
+    /// plugin and must not be re-wrapped; YEP_CoreEngine's wider screen must
+    /// widen the budget so text that fits is left alone.
+    #[test]
+    fn test_export_leaves_plugin_wrapped_mv_text_alone_and_uses_plugin_screen_width() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "fairtl_export_fit_yep_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        let data_dir = temp_dir.join("data");
+        let js_dir = temp_dir.join("js");
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::create_dir_all(&js_dir).unwrap();
+        fs::write(js_dir.join("rpg_core.js"), "").unwrap();
+        fs::write(
+            js_dir.join("plugins.js"),
+            r#"var $plugins =
+[
+{"name":"YEP_CoreEngine","status":true,"description":"","parameters":{"Screen Width":"1000","Font Size":"28"}},
+{"name":"YEP_MessageCore","status":true,"description":"","parameters":{"Default Rows":"4","Default Width":"Graphics.boxWidth","Word Wrapping":"false"}}
+];
+"#,
+        )
+        .unwrap();
+        fs::write(
+            data_dir.join("Map001.json"),
+            r#"{"displayName":"","events":[null,{"id":1,"name":"EV001","pages":[{"list":[
+                {"code":101,"indent":0,"parameters":["",0,0,2]},
+                {"code":401,"indent":0,"parameters":["<WordWrap>One."]},
+                {"code":101,"indent":0,"parameters":["",0,0,2]},
+                {"code":401,"indent":0,"parameters":["Two."]},
+                {"code":0,"indent":0,"parameters":[]}
+            ]}]}]}"#,
+        )
+        .unwrap();
+
+        let plugin_wrapped = "<WordWrap>Este mensaje largo lo ajusta el propio plugin de mensajes, así que el exportador no debe insertar saltos de línea ni páginas nuevas por su cuenta.";
+        // 62 characters: wider than the default 816px screen allows (53),
+        // narrower than YEP's 1000px screen (66).
+        let fits_wide_screen = "Esta línea cabe en la pantalla ancha de mil píxeles del juego.";
+        let translations = [
+            ("Map001:1:0:text:1", plugin_wrapped),
+            ("Map001:1:0:text:3", fits_wide_screen),
+        ];
+        let project = fit_project(&temp_dir, Engine::Mv, &translations);
+        let output_dir = std::env::temp_dir().join(format!(
+            "fairtl_export_fit_yep_out_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+
+        let result = export_project(&project, &output_dir).unwrap();
+        assert_eq!(
+            result.text_fit.wrap_plugin.as_deref(),
+            Some("YEP_MessageCore")
+        );
+        assert_eq!(result.text_fit.wrapped_entries, 0);
+
+        let exported: Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("data").join("Map001.json")).unwrap(),
+        )
+        .unwrap();
+        let list = exported["events"][1]["pages"][0]["list"]
+            .as_array()
+            .unwrap();
+        assert_eq!(
+            list.iter()
+                .map(|command| command["code"].as_i64().unwrap())
+                .collect::<Vec<_>>(),
+            vec![101, 401, 101, 401, 0]
+        );
+        assert_eq!(list[1]["parameters"][0], plugin_wrapped);
+        assert_eq!(list[3]["parameters"][0], fits_wide_screen);
+
+        let _ = fs::remove_dir_all(&temp_dir);
+        let _ = fs::remove_dir_all(&output_dir);
+    }
+
+    fn xp_command(code: i64, parameters: Value) -> Value {
+        json!({"$object": {"class": "RPG::EventCommand", "fields": {
+            "@code": code, "@indent": 0, "@parameters": parameters
+        }}})
+    }
+
+    fn xp_event_list(map: &Value) -> &Vec<Value> {
+        map["$object"]["fields"]["@events"]["$hash"][0]["value"]["$object"]["fields"]["@pages"][0]
+            ["$object"]["fields"]["@list"]
+            .as_array()
+            .unwrap()
+    }
+
+    /// Projects saved before XP's first message lines were extracted keep
+    /// every entry and translation; opening them adds the new lines without
+    /// renumbering. The export writes both parts of each message and pages a
+    /// long one with extra Show Text commands (XP has no native paging), with
+    /// the choices still after the last page. The source is never touched.
+    #[test]
+    fn test_old_xp_project_gains_first_lines_on_open_and_exports_paged_messages() {
+        let game_dir = std::env::temp_dir().join(format!(
+            "fairtl_xp_first_lines_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        fs::create_dir_all(game_dir.join("Data")).unwrap();
+        let list = json!([
+            xp_command(101, json!(["Hello there, traveler."])),
+            xp_command(401, json!(["Welcome to our village."])),
+            xp_command(101, json!(["A one-line message."])),
+            xp_command(102, json!([["Yes", "No"], 2])),
+            xp_command(0, json!([])),
+        ]);
+        write_marshal(
+            &game_dir.join("Data").join("Map001.rxdata"),
+            json!({"$object": {"class": "RPG::Map", "fields": {
+                "@events": {"$hash": [{"key": 1, "value": {"$object": {"class": "RPG::Event", "fields": {
+                    "@id": 1, "@name": "EV001",
+                    "@pages": [{"$object": {"class": "RPG::Event::Page", "fields": {"@list": list}}}]
+                }}}}]}
+            }}}),
+        );
+        let source_snapshot = snapshot_file_tree(&game_dir);
+
+        let parsed = parser::parse_game(&game_dir).unwrap();
+        assert_eq!(parsed.engine, Engine::Xp);
+        let all_ids = [
+            "Map001:1:0:text:0",
+            "Map001:1:0:text:1",
+            "Map001:1:0:text:2",
+            "Map001:1:0:choice:3:0",
+            "Map001:1:0:choice:3:1",
+        ];
+        assert_eq!(
+            parsed.files[0]
+                .entries
+                .iter()
+                .map(|entry| entry.id.as_str())
+                .collect::<Vec<_>>(),
+            all_ids
+        );
+
+        // What the parser produced before: no 101 lines, so the one-line
+        // message was missing entirely.
+        let mut files = parsed.files;
+        files[0]
+            .entries
+            .retain(|entry| entry.id != "Map001:1:0:text:0" && entry.id != "Map001:1:0:text:2");
+        let body = files[0]
+            .entries
+            .iter_mut()
+            .find(|entry| entry.id == "Map001:1:0:text:1")
+            .unwrap();
+        body.translation = "Bienvenido a nuestro pueblo.".into();
+        body.status = EntryStatus::Reviewed;
+        let old_project = Project {
+            id: "xp-old".into(),
+            name: "XP".into(),
+            source_lang: "en".into(),
+            target_lang: "es".into(),
+            engine: Engine::Xp,
+            game_dir: game_dir.to_string_lossy().into(),
+            files,
+            glossary: vec![],
+            style_guide: vec![],
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        let project_path = std::env::temp_dir().join(format!(
+            "fairtl_xp_first_lines_{}.fairtl",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        crate::services::persistence::save_project(&old_project, &project_path).unwrap();
+
+        let opened = crate::services::project_refresh::open_project(&project_path).unwrap();
+        assert_eq!(opened.added_entries, 2);
+        assert!(opened.refresh_skipped.is_none());
+        let mut project = opened.project;
+        assert_eq!(
+            project.files[0]
+                .entries
+                .iter()
+                .map(|entry| entry.id.as_str())
+                .collect::<Vec<_>>(),
+            all_ids
+        );
+        let kept = &project.files[0].entries[1];
+        assert_eq!(kept.translation, "Bienvenido a nuestro pueblo.");
+        assert_eq!(kept.status, EntryStatus::Reviewed);
+        assert_eq!(
+            project.files[0].entries[0].status,
+            EntryStatus::Untranslated
+        );
+
+        let long_head = "Hola, viajero cansado del largo camino: antes de entrar debes saber que las puertas de la ciudad se cierran al anochecer y que los guardias no dejan pasar a nadie sin un permiso firmado por el alcalde en persona.";
+        let one_line = "Un mensaje de una sola línea.";
+        for entry in &mut project.files[0].entries {
+            let translation = match entry.id.as_str() {
+                "Map001:1:0:text:0" => long_head,
+                "Map001:1:0:text:2" => one_line,
+                _ => continue,
+            };
+            entry.translation = translation.into();
+            entry.status = EntryStatus::Reviewed;
+        }
+
+        let output_dir = std::env::temp_dir().join(format!(
+            "fairtl_xp_first_lines_out_{}",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        let result = export_project(&project, &output_dir).unwrap();
+        assert_eq!(snapshot_file_tree(&game_dir), source_snapshot);
+        assert_eq!(result.entries_applied, 3);
+        assert_eq!(result.text_fit.paginated_entries, 1);
+
+        let exported = read_marshal(&output_dir.join("Data").join("Map001.rxdata"));
+        let commands = xp_event_list(&exported);
+        let codes = commands
+            .iter()
+            .map(|command| command["$object"]["fields"]["@code"].as_i64().unwrap())
+            .collect::<Vec<_>>();
+        let choice_at = codes.iter().position(|code| *code == 102).unwrap();
+        assert_eq!(codes[choice_at..], [102, 0]);
+        // Long message: two or more XP pages, each a 101 plus at most three
+        // 401 lines; then the one-line message right before its choices.
+        let headers = codes[..choice_at]
+            .iter()
+            .enumerate()
+            .filter(|(_, code)| **code == 101)
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        assert!(
+            headers.len() >= 3,
+            "expected paged message plus one-line message: {codes:?}"
+        );
+        for window in headers.windows(2) {
+            assert!(
+                window[1] - window[0] <= 4,
+                "an XP page shows at most 4 lines: {codes:?}"
+            );
+        }
+        assert_eq!(*headers.last().unwrap(), choice_at - 1);
+        assert!(commands
+            .iter()
+            .all(|command| command["$object"]["fields"]["@indent"] == 0));
+        assert_eq!(
+            commands[choice_at]["$object"]["fields"]["@parameters"],
+            json!([["Yes", "No"], 2])
+        );
+        assert_eq!(
+            commands[choice_at - 1]["$object"]["fields"]["@parameters"][0],
+            one_line
+        );
+
+        // Reading the export back yields every word of both translations.
+        let exported_text = parser::parse_game(&output_dir)
+            .unwrap()
+            .files
+            .iter()
+            .flat_map(|file| file.entries.iter().map(|entry| entry.original.clone()))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let normalize = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(normalize(&exported_text).contains(&normalize(&format!(
+            "{long_head} Bienvenido a nuestro pueblo."
+        ))));
+        assert!(exported_text.contains(one_line));
+
+        let _ = fs::remove_dir_all(&game_dir);
+        let _ = fs::remove_dir_all(&project_path);
         let _ = fs::remove_dir_all(&output_dir);
     }
 }

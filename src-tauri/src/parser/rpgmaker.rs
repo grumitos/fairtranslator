@@ -1,4 +1,3 @@
-use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
@@ -46,9 +45,6 @@ pub const CODE_CHANGE_NAME: i64 = 320;
 pub const CODE_CHANGE_NICKNAME: i64 = 324;
 pub const CODE_CHANGE_PROFILE: i64 = 325;
 pub const CODE_CONTROL_VARIABLES: i64 = 122;
-
-const MAX_GAME_ROOT_SEARCH_DEPTH: usize = 8;
-const MAX_GAME_ROOT_SCAN_DIRS: usize = 20_000;
 
 // ---------------------------------------------------------------------------
 // FileKind — classify a /data/ JSON file
@@ -127,7 +123,7 @@ pub fn detect_engine(game_dir: &Path) -> Result<Engine, AppError> {
     }
 }
 
-fn data_dir_for(dir: &Path) -> Option<PathBuf> {
+pub(super) fn data_dir_for(dir: &Path) -> Option<PathBuf> {
     let data = dir.join("data");
     if data.is_dir() {
         return Some(data);
@@ -194,86 +190,6 @@ fn is_mv_mz_root(dir: &Path) -> bool {
 
 pub(super) fn is_rpgmaker_root(dir: &Path) -> bool {
     is_mv_mz_root(dir) || detect_legacy_engine(dir).is_some()
-}
-
-/// Resolve the actual RPG Maker game root from a selected directory.
-///
-/// Behavior:
-/// - If `selected_dir` is already a game root, returns it.
-/// - Otherwise, recursively searches nested subdirectories up to a bounded depth.
-/// - If exactly one root is found, returns it.
-/// - If multiple roots are found, returns an error so user can choose explicitly.
-pub fn resolve_game_dir(selected_dir: &Path) -> Result<PathBuf, AppError> {
-    if is_rpgmaker_root(selected_dir) {
-        return Ok(selected_dir.to_path_buf());
-    }
-
-    let mut queue: VecDeque<(PathBuf, usize)> = VecDeque::new();
-    queue.push_back((selected_dir.to_path_buf(), 0));
-
-    let mut scanned_dirs = 0usize;
-    let mut candidates: Vec<PathBuf> = Vec::new();
-
-    while let Some((dir, depth)) = queue.pop_front() {
-        if depth >= MAX_GAME_ROOT_SEARCH_DEPTH {
-            continue;
-        }
-
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-
-            scanned_dirs += 1;
-            if scanned_dirs > MAX_GAME_ROOT_SCAN_DIRS {
-                return Err(AppError::Project(format!(
-                    "Search limit reached while scanning '{}'. Please select the exact game folder.",
-                    selected_dir.display()
-                )));
-            }
-
-            if is_rpgmaker_root(&path) {
-                candidates.push(path);
-                if candidates.len() > 1 {
-                    break;
-                }
-            } else {
-                queue.push_back((path, depth + 1));
-            }
-        }
-
-        if candidates.len() > 1 {
-            break;
-        }
-    }
-
-    match candidates.len() {
-        1 => Ok(candidates.remove(0)),
-        0 => Err(AppError::NotFound(format!(
-            "No RPG Maker game root found under '{}'. Select a folder containing MV/MZ markers (js/ + data/) or legacy Data/*.rvdata2|*.rvdata|*.rxdata.",
-            selected_dir.display()
-        ))),
-        _ => {
-            candidates.sort_by(|a, b| a.as_os_str().cmp(b.as_os_str()));
-            let list = candidates
-                .iter()
-                .take(5)
-                .map(|p| format!("- {}", p.display()))
-                .collect::<Vec<_>>()
-                .join("\n");
-            Err(AppError::Project(format!(
-                "Multiple RPG Maker game roots were found under '{}'. Please select one game folder directly:\n{}",
-                selected_dir.display(),
-                list
-            )))
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -883,16 +799,7 @@ fn inject_plugin_source_defaults(json: &mut Value, game_dir: &Path) -> Result<()
         let Some(plugin_name) = plugin_obj.get("name").and_then(Value::as_str) else {
             continue;
         };
-        let Some(source_path) = find_plugin_source_path(game_dir, plugin_name) else {
-            continue;
-        };
-
-        let source_bytes = std::fs::read(&source_path)?;
-        let Ok(source_content) = std::str::from_utf8(&source_bytes) else {
-            // Plugin defaults are optional metadata; never invent text from invalid bytes.
-            continue;
-        };
-        let defaults = extract_plugin_source_defaults(source_content);
+        let defaults = plugin_source_defaults(game_dir, plugin_name)?;
         if defaults.is_empty() {
             continue;
         }
@@ -915,6 +822,22 @@ fn inject_plugin_source_defaults(json: &mut Value, game_dir: &Path) -> Result<()
     }
 
     Ok(())
+}
+
+/// `@param`/`@default` pairs declared in a plugin's source file; none when the
+/// file is missing or not UTF-8 (optional metadata is never guessed from
+/// invalid bytes).
+pub(crate) fn plugin_source_defaults(
+    game_dir: &Path,
+    plugin_name: &str,
+) -> Result<Vec<(String, String)>, AppError> {
+    let Some(source_path) = find_plugin_source_path(game_dir, plugin_name) else {
+        return Ok(Vec::new());
+    };
+    let source_bytes = std::fs::read(&source_path)?;
+    Ok(std::str::from_utf8(&source_bytes)
+        .map(extract_plugin_source_defaults)
+        .unwrap_or_default())
 }
 
 fn find_plugin_source_path(game_dir: &Path, plugin_name: &str) -> Option<PathBuf> {
@@ -1799,79 +1722,6 @@ mod tests {
         assert!(!plugins.to_string().contains('\u{fffd}'));
 
         let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn test_resolve_game_dir_exact_root() {
-        let root = std::env::temp_dir().join(format!(
-            "fairtl_resolve_exact_{}",
-            uuid::Uuid::new_v4().as_simple()
-        ));
-        fs::create_dir_all(root.join("js")).unwrap();
-        fs::create_dir_all(root.join("data")).unwrap();
-        fs::write(root.join("js").join("rpg_core.js"), "// mv marker").unwrap();
-
-        let resolved = resolve_game_dir(&root).unwrap();
-        assert_eq!(resolved, root);
-
-        let _ = fs::remove_dir_all(&resolved);
-    }
-
-    #[test]
-    fn test_resolve_game_dir_nested_root() {
-        let base = std::env::temp_dir().join(format!(
-            "fairtl_resolve_nested_{}",
-            uuid::Uuid::new_v4().as_simple()
-        ));
-        let game = base.join("foo").join("bar").join("MyGame");
-        fs::create_dir_all(game.join("js")).unwrap();
-        fs::create_dir_all(game.join("Data")).unwrap();
-        fs::write(game.join("js").join("rmmz_core.js"), "// mz marker").unwrap();
-
-        let resolved = resolve_game_dir(&base).unwrap();
-        assert_eq!(resolved, game);
-
-        let _ = fs::remove_dir_all(&base);
-    }
-
-    #[test]
-    fn test_resolve_game_dir_multiple_candidates() {
-        let base = std::env::temp_dir().join(format!(
-            "fairtl_resolve_multiple_{}",
-            uuid::Uuid::new_v4().as_simple()
-        ));
-        let game_a = base.join("A").join("GameA");
-        let game_b = base.join("B").join("GameB");
-
-        fs::create_dir_all(game_a.join("js")).unwrap();
-        fs::create_dir_all(game_a.join("data")).unwrap();
-        fs::write(game_a.join("js").join("rpg_core.js"), "// mv marker").unwrap();
-
-        fs::create_dir_all(game_b.join("js")).unwrap();
-        fs::create_dir_all(game_b.join("Data")).unwrap();
-        fs::write(game_b.join("js").join("rmmz_core.js"), "// mz marker").unwrap();
-
-        let err = resolve_game_dir(&base).unwrap_err();
-        let msg = format!("{err}");
-        assert!(msg.contains("Multiple RPG Maker game roots"));
-
-        let _ = fs::remove_dir_all(&base);
-    }
-
-    #[test]
-    fn test_resolve_game_dir_detects_legacy_root() {
-        let root = std::env::temp_dir().join(format!(
-            "fairtl_resolve_legacy_{}",
-            uuid::Uuid::new_v4().as_simple()
-        ));
-        fs::create_dir_all(root.join("Data")).unwrap();
-        fs::write(root.join("Data").join("System.rvdata2"), "legacy").unwrap();
-        fs::write(root.join("Game.exe"), "stub").unwrap();
-
-        let resolved = resolve_game_dir(&root).unwrap();
-        assert_eq!(resolved, root);
-
-        let _ = fs::remove_dir_all(&resolved);
     }
 
     #[test]
