@@ -61,11 +61,12 @@ cargo run --release --manifest-path src-tauri\Cargo.toml --bin qa_translate_prov
 
 Codex runtime and model notes:
 
-- The runner resolves Codex as: `--codex-command`, then a sidecar binary, then
-  `codex` on `PATH`. Builds also look for the git-ignored sidecar at
-  `src-tauri\binaries\codex-<target>.exe` of the checkout they were compiled
-  from, which can be older than the installed CLI. Pass `--codex-command "<path-to-installed-codex.exe>"` to be
-  sure which runtime runs.
+- The runner resolves Codex as: `--codex-command`, then a sidecar binary next
+  to the executable, then `codex` on `PATH`. Debug builds fall back last to the
+  git-ignored sidecar at `src-tauri\binaries\codex-<target>.exe` of the
+  checkout they were compiled from. Pass
+  `--codex-command "<path-to-installed-codex.exe>"` to be sure which runtime
+  runs.
 - List the model IDs available to that CLI with `codex debug models` (JSON
   catalog; use `slug` from entries whose `visibility` is `list`). Current CLIs
   have no `codex models` subcommand.

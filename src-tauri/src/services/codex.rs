@@ -225,7 +225,6 @@ impl CodexProvider {
             Ok(runtime) => runtime,
             Err(failure) => return Ok(status_from_failure(failure)),
         };
-
         let login_output = self
             .run_command(
                 &runtime.candidate,
@@ -372,7 +371,10 @@ impl CodexProvider {
         runtime: &RuntimeCandidate,
         args: &[String],
     ) -> Result<std::process::Output, AppError> {
-        let executable = runtime.effective_command_path.clone();
+        let executable = runtime
+            .resolved_command_path
+            .clone()
+            .unwrap_or_else(|| runtime.effective_command_path.clone());
         let args = args.to_vec();
 
         task::spawn_blocking(move || {
@@ -409,6 +411,15 @@ impl CodexProvider {
             });
         }
 
+        self.select_runtime().await
+    }
+
+    /// Picks the runtime in a fixed order: the configured path, else a working
+    /// sidecar bundled next to the app, else `codex` on PATH, else (debug
+    /// builds only) the ignored sidecar in this checkout's `binaries` folder.
+    /// PATH goes before the checkout copy so a forgotten stale download never
+    /// hides the CLI the auto-updater keeps current.
+    async fn select_runtime(&self) -> Result<ResolvedRuntime, RuntimeResolutionFailure> {
         if let Some(configured_path) = &self.configured_command_path {
             let resolved = resolve_command_path(configured_path);
             let candidate = RuntimeCandidate {
@@ -429,8 +440,8 @@ impl CodexProvider {
             return self.probe_runtime(candidate).await;
         }
 
-        if let Some(sidecar_candidate) = self.sidecar_candidate() {
-            if let Ok(runtime) = self.probe_runtime(sidecar_candidate).await {
+        if let Some(bundled) = bundled_sidecar_path(self.app_handle.as_ref()) {
+            if let Ok(runtime) = self.probe_runtime(sidecar_candidate(bundled)).await {
                 return Ok(runtime);
             }
         }
@@ -443,42 +454,46 @@ impl CodexProvider {
                 .as_ref()
                 .map(|path| path.to_string_lossy().into_owned()),
         };
-        if resolved.is_none() {
-            return Err(RuntimeResolutionFailure {
-                candidate,
-                state: RuntimeFailureState::NotInstalled,
-                message: "Codex CLI was not found on PATH".to_string(),
-                version: None,
-            });
+        if resolved.is_some() {
+            return self.probe_runtime(candidate).await;
         }
 
-        self.probe_runtime(candidate).await
+        if let Some(checkout) = checkout_sidecar_path() {
+            if let Ok(runtime) = self.probe_runtime(sidecar_candidate(checkout)).await {
+                return Ok(runtime);
+            }
+        }
+
+        Err(RuntimeResolutionFailure {
+            candidate,
+            state: RuntimeFailureState::NotInstalled,
+            message: "Codex CLI was not found on PATH".to_string(),
+            version: None,
+        })
     }
 
     /// The install a run would use, classified for the auto-updater. Mirrors
-    /// `resolve_runtime` without waiting on the update gate: the configured
-    /// path, else a working bundled sidecar, else `codex` on PATH.
+    /// the order of `select_runtime` without waiting on the update gate, and
+    /// only probes the bundled sidecar (the updater reads the version itself).
     pub(crate) async fn update_target(&self, standard_roots: &[PathBuf]) -> CliInstall {
         if let Some(configured_path) = &self.configured_command_path {
             let resolved = resolve_command_path(configured_path);
             return cli_updates::classify_install(resolved.as_deref(), false, standard_roots);
         }
-        if let Some(sidecar) = self.sidecar_candidate() {
-            if self.probe_runtime(sidecar.clone()).await.is_ok() {
-                let path = sidecar.resolved_command_path.map(PathBuf::from);
-                return cli_updates::classify_install(path.as_deref(), true, standard_roots);
+        if let Some(bundled) = bundled_sidecar_path(self.app_handle.as_ref()) {
+            if self
+                .probe_runtime(sidecar_candidate(bundled.clone()))
+                .await
+                .is_ok()
+            {
+                return cli_updates::classify_install(Some(&bundled), true, standard_roots);
             }
         }
-        let resolved = resolve_command_path(DEFAULT_COMMAND_PATH);
-        cli_updates::classify_install(resolved.as_deref(), false, standard_roots)
-    }
-
-    fn sidecar_candidate(&self) -> Option<RuntimeCandidate> {
-        resolve_sidecar_path(self.app_handle.as_ref()).map(|path| RuntimeCandidate {
-            source: RuntimeSource::Sidecar,
-            effective_command_path: path.to_string_lossy().into_owned(),
-            resolved_command_path: Some(path.to_string_lossy().into_owned()),
-        })
+        if let Some(resolved) = resolve_command_path(DEFAULT_COMMAND_PATH) {
+            return cli_updates::classify_install(Some(&resolved), false, standard_roots);
+        }
+        let checkout = checkout_sidecar_path();
+        cli_updates::classify_install(checkout.as_deref(), checkout.is_some(), standard_roots)
     }
 
     async fn probe_runtime(
@@ -623,7 +638,13 @@ impl CodexProvider {
     ) -> Result<Command, AppError> {
         match runtime.source {
             RuntimeSource::Sidecar | RuntimeSource::Configured | RuntimeSource::Path => {
-                let mut command = Command::new(&runtime.effective_command_path);
+                // Run the exact file that was probed, not a fresh lookup that
+                // could land on another install (or miss `codex.cmd`).
+                let program = runtime
+                    .resolved_command_path
+                    .as_deref()
+                    .unwrap_or(&runtime.effective_command_path);
+                let mut command = Command::new(program);
                 if let Some(current_dir) = current_dir {
                     command.current_dir(current_dir);
                 }
@@ -1053,15 +1074,22 @@ fn disabled_mcp_servers_config_arg() -> String {
 
 fn resolve_command_path(command_path: &str) -> Option<PathBuf> {
     let raw_path = Path::new(command_path);
-    if raw_path.is_absolute() || raw_path.parent().is_some() {
+    // A bare name such as `codex` has an empty parent: search PATH for it.
+    let has_dir = raw_path
+        .parent()
+        .is_some_and(|parent| !parent.as_os_str().is_empty());
+    if raw_path.is_absolute() || has_dir {
         return raw_path.is_file().then(|| raw_path.to_path_buf());
     }
 
-    let path_var = env::var_os("PATH")?;
+    search_path(command_path, &env::var_os("PATH")?)
+}
+
+fn search_path(command_path: &str, path_var: &std::ffi::OsStr) -> Option<PathBuf> {
     #[cfg(windows)]
     let pathexts = windows_pathexts();
 
-    for dir in env::split_paths(&path_var) {
+    for dir in env::split_paths(path_var) {
         #[cfg(windows)]
         let candidates = executable_candidates(&dir, command_path, &pathexts);
         #[cfg(not(windows))]
@@ -1097,14 +1125,32 @@ fn sidecar_relative_path() -> PathBuf {
     PathBuf::from("binaries").join(sidecar_filename())
 }
 
+fn sidecar_candidate(path: PathBuf) -> RuntimeCandidate {
+    let path = path.to_string_lossy().into_owned();
+    RuntimeCandidate {
+        source: RuntimeSource::Sidecar,
+        effective_command_path: path.clone(),
+        resolved_command_path: Some(path),
+    }
+}
+
+/// Sidecar shipped by a sidecar build (`tauri.sidecar.conf.json`). tauri-build
+/// and the bundler copy `binaries/codex-<triple>` next to the app without the
+/// target triple, so `codex.exe` beside the executable is the usual location.
 #[cfg(not(test))]
-fn resolve_sidecar_path(app_handle: Option<&RuntimeAppHandle>) -> Option<PathBuf> {
+fn bundled_sidecar_path(app_handle: Option<&RuntimeAppHandle>) -> Option<PathBuf> {
     let sidecar_name = sidecar_filename();
+    let installed_name = if cfg!(windows) {
+        format!("{SIDECAR_BASENAME}.exe")
+    } else {
+        SIDECAR_BASENAME.to_string()
+    };
     let relative_path = sidecar_relative_path();
-    let mut candidates = vec![PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(&relative_path)];
+    let mut candidates = Vec::new();
 
     if let Ok(current_exe) = std::env::current_exe() {
         if let Some(parent) = current_exe.parent() {
+            candidates.push(parent.join(&installed_name));
             candidates.push(parent.join(&sidecar_name));
             candidates.push(parent.join("binaries").join(&sidecar_name));
         }
@@ -1129,9 +1175,21 @@ fn resolve_sidecar_path(app_handle: Option<&RuntimeAppHandle>) -> Option<PathBuf
 }
 
 #[cfg(test)]
-fn resolve_sidecar_path(_app_handle: Option<&RuntimeAppHandle>) -> Option<PathBuf> {
+fn bundled_sidecar_path(_app_handle: Option<&RuntimeAppHandle>) -> Option<PathBuf> {
+    None
+}
+
+/// Ignored `src-tauri/binaries` copy of the checkout a debug build came from.
+/// Release builds never look there, so they carry no path of the build machine.
+#[cfg(debug_assertions)]
+fn checkout_sidecar_path() -> Option<PathBuf> {
     let candidate = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(sidecar_relative_path());
     candidate.is_file().then_some(candidate)
+}
+
+#[cfg(not(debug_assertions))]
+fn checkout_sidecar_path() -> Option<PathBuf> {
+    None
 }
 
 #[cfg(windows)]
@@ -1159,17 +1217,16 @@ fn windows_pathexts() -> Vec<String> {
 
 #[cfg(windows)]
 fn executable_candidates(dir: &Path, command_name: &str, pathexts: &[String]) -> Vec<PathBuf> {
-    let mut candidates = Vec::new();
     let base = dir.join(command_name);
-    candidates.push(base.clone());
-
-    if base.extension().is_none() {
-        for ext in pathexts {
-            candidates.push(dir.join(format!("{command_name}{ext}")));
-        }
+    // Windows cannot run an extensionless file (npm also drops a POSIX shell
+    // script named `codex` next to `codex.cmd`), so only try PATHEXT names.
+    if base.extension().is_some() {
+        return vec![base];
     }
-
-    candidates
+    pathexts
+        .iter()
+        .map(|ext| dir.join(format!("{command_name}{ext}")))
+        .collect()
 }
 
 #[cfg(not(windows))]
@@ -1541,6 +1598,22 @@ exit /b 0
         assert!(std::fs::read_to_string(&stdin_log)
             .unwrap()
             .contains("Hello"));
+
+        // A bare `codex` is looked up on PATH, skipping the extensionless
+        // POSIX script npm installs next to `codex.cmd`.
+        let decoy = root.join("decoy");
+        let bin = root.join("bin");
+        std::fs::create_dir_all(&decoy).unwrap();
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(decoy.join("codex"), "#!/bin/sh\n").unwrap();
+        std::fs::copy(&script, bin.join("codex.cmd")).unwrap();
+        let path_var = env::join_paths([&decoy, &bin]).unwrap();
+        let found = search_path(DEFAULT_COMMAND_PATH, &path_var).unwrap();
+        assert_eq!(found.parent(), Some(bin.as_path()));
+        assert!(found
+            .to_string_lossy()
+            .to_ascii_lowercase()
+            .ends_with("codex.cmd"));
 
         let _ = std::fs::remove_dir_all(&root);
     }
