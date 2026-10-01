@@ -43,10 +43,11 @@ Custom provider endpoint overrides are intentionally restricted: they must be HT
 For Codex, authentication is managed by the installed Codex CLI. FairTranslator does not implement ChatGPT OAuth itself and does not store ChatGPT OAuth tokens. The runtime can be resolved from:
 
 1. A user-configured executable path
-2. A bundled sidecar binary
+2. A sidecar binary bundled next to the app
 3. `codex` from `PATH`
+4. Debug builds only: the ignored `src-tauri/binaries/codex-*` sidecar of the checkout they were compiled from
 
-For the standard release workflow, assume option `1` or `3`. Sidecar builds are supported by the codebase, but they are not the default public release artifact. Builds made from a repository checkout also find the ignored `src-tauri/binaries/codex-*` sidecar of that checkout, which takes precedence over `PATH`; configure the executable path if that copy is outdated.
+For the standard release workflow, assume option `1` or `3`. Sidecar builds are supported by the codebase, but they are not the default public release artifact. Release builds never look at the checkout folder.
 
 FairTranslator keeps a standard Codex CLI install up to date: at startup it checks the npm registry and runs `codex update` when a newer version exists ("Update on startup" in Settings, on by default; the change applies on the next start). It never touches a bundled sidecar or a custom executable path, and a translation run that needs Codex waits until the check finishes.
 
@@ -128,7 +129,7 @@ npm run test:run
 npm run build
 npm audit --audit-level=high
 cargo fmt --manifest-path src-tauri\Cargo.toml --check
-cargo check --manifest-path src-tauri\Cargo.toml --all-targets --locked
+cargo clippy --manifest-path src-tauri\Cargo.toml --all-targets --locked -- -D warnings
 cargo test --manifest-path src-tauri\Cargo.toml --no-fail-fast --locked
 npm run tauri -- build
 ```

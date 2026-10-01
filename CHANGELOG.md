@@ -42,6 +42,8 @@ and this project follows [Semantic Versioning](https://semver.org/).
 - Made the headless OpenCode runner reuse the credential saved by FairTranslator
   in the operating-system secure store by default; key files are compatibility
   overrides only.
+- CI now runs `cargo clippy --all-targets --locked -- -D warnings` (with
+  `too_many_arguments` allowed) instead of `cargo check`.
 
 ### Fixed
 - Extracted and exported the first line of every RPG Maker XP message (show-text
@@ -64,9 +66,22 @@ and this project follows [Semantic Versioning](https://semver.org/).
   translation and negotiate/cache the API family that satisfies the schema.
 - Preserved completed checkpoints when planner-budget changes rebuild a chunk
   plan during resume.
+- Found the Codex CLI on `PATH`: a bare `codex` was never searched there, so a
+  standard install is now used, discovered and auto-updated without setting
+  its path. The runtime order is now: configured path, sidecar bundled next to
+  the app, `PATH`, and only in debug builds the checkout's ignored
+  `src-tauri/binaries` copy; release builds no longer embed the build
+  machine's checkout path.
+- Stopped rejecting AI translations that merge or re-break lines in messages,
+  scrolling text and descriptions, which the exporter rewraps anyway; prompts
+  mark those entries (`rw`), other multi-line entries still keep their line
+  count, and a speaker label line (`【Name】`, `Name:`) must stay on its own
+  line. A 19-entry Codex batch now needs one call instead of eight or nine.
 
 ### Removed
 - Removed the light theme and its setting.
+- Removed the `.fairtl` file association: projects are folders, which Windows
+  file associations cannot open.
 
 ### Security
 - Removed webview permissions the interface does not use (`store:default`, which
