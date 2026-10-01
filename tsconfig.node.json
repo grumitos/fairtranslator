@@ -9,6 +9,8 @@
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
     "composite": true,
+    "outDir": "./node_modules/.tmp/tsc-node",
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo",
     "emitDeclarationOnly": true,
     "isolatedModules": true,
     "moduleDetection": "force",

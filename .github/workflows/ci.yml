@@ -19,7 +19,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Setup npm with release-age support
@@ -31,8 +31,35 @@ jobs:
       - name: TypeScript check
         run: npx tsc --noEmit
 
+      # Brand accent and contrast against the shared design kit rules (vendored in src/styles/kit).
+      - name: Design kit check
+        run: node src/styles/kit/check.mjs --brand-from src/styles/brand.css
+
       - name: Frontend tests
         run: npm run test:run
+
+      # `tsc --noEmit` only covers tsconfig.json; the build also runs `tsc -b`, which type-checks vite.config.ts.
+      - name: Production build
+        run: npm run build
+
+  audit-frontend:
+    name: Frontend (npm audit)
+    runs-on: ubuntu-latest
+    # New advisories appear without any change in this repo: report them without blocking unrelated pull requests.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup npm with release-age support
+        run: npm install --global npm@11.16.0
+
+      - name: Audit production and build dependencies
+        run: npm audit --audit-level=high
 
   check-rust:
     name: Rust (check + test)
@@ -42,20 +69,23 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
 
-      - name: Install Tauri system dependencies
-        run: |
-          # Windows: WebView2 is pre-installed on GitHub runners
+      - name: Cargo fmt
+        run: cargo fmt --check
+        working-directory: src-tauri
 
+      # --locked: the Tauri 2.11 transitive pins live only in Cargo.lock.
       - name: Cargo check
-        run: cargo check
+        run: cargo check --locked
         working-directory: src-tauri
 
       - name: Cargo test
-        run: cargo test
+        run: cargo test --locked
         working-directory: src-tauri
