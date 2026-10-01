@@ -68,7 +68,7 @@ pub(crate) fn contains_ascii_words(text: &str) -> bool {
 }
 
 pub(crate) fn contains_non_ascii(text: &str) -> bool {
-    text.chars().any(|ch| !ch.is_ascii())
+    !text.is_ascii()
 }
 
 pub(crate) fn lexical_terms_vec(text: &str) -> Vec<String> {

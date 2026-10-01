@@ -62,7 +62,7 @@ jobs:
         run: npm audit --audit-level=high
 
   check-rust:
-    name: Rust (check + test)
+    name: Rust (clippy + test)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -70,7 +70,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
+          components: rustfmt, clippy
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -82,8 +82,8 @@ jobs:
         working-directory: src-tauri
 
       # --locked: the Tauri 2.11 transitive pins live only in Cargo.lock.
-      - name: Cargo check
-        run: cargo check --locked
+      - name: Cargo clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
         working-directory: src-tauri
 
       - name: Cargo test

@@ -215,7 +215,7 @@ impl TranslationProvider for DeepLProvider {
 
             for ((req, translation), (_, replacements)) in chunk
                 .iter()
-                .zip(deepl_response.translations.into_iter())
+                .zip(deepl_response.translations)
                 .zip(prepared.iter())
             {
                 all_responses.push(TranslationResponse {

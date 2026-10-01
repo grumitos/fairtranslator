@@ -244,78 +244,6 @@ fn load_all_batch_entries(manifest: &SampleManifest) -> Result<Vec<Vec<AiBatchEn
         .collect()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn current_manifest() -> SampleManifest {
-        SampleManifest {
-            sample_name: "sample".into(),
-            inventory_fingerprint: Some("fairtl-inventory-v1-fnv1a64:0000000000000000".into()),
-            source_lang: Some("en".into()),
-            target_lang: Some("es".into()),
-            batch_count: Some(1),
-            project_path: "project.fairtl".into(),
-            exports_dir: "exports".into(),
-            batch_dir: "ai-batches".into(),
-            batches: vec![BatchArtifactRow {
-                index: 1,
-                batch_id: "batch-1".into(),
-                entries_fingerprint: Some("batch-fingerprint".into()),
-                entries_path: "batch-1.entries.json".into(),
-                response_template_path: "batch-1.response.template.json".into(),
-            }],
-        }
-    }
-
-    #[test]
-    fn legacy_manifest_loads_for_an_actionable_fingerprint_rejection() {
-        let manifest: SampleManifest = serde_json::from_value(serde_json::json!({
-            "sampleName": "sample",
-            "projectPath": "project.fairtl",
-            "exportsDir": "exports",
-            "batchDir": "ai-batches",
-            "batches": []
-        }))
-        .unwrap();
-
-        let error = qa_inventory_fingerprint::verify_project_inventory_fingerprint(
-            manifest.inventory_fingerprint.as_deref(),
-            &[],
-        )
-        .unwrap_err();
-        assert!(error.contains("qa_prepare"));
-    }
-
-    #[test]
-    fn manifest_contract_rejects_language_and_batch_drift() {
-        let manifest = current_manifest();
-        assert!(validate_manifest_contract(&manifest, "en", "es").is_ok());
-
-        let language_error = validate_manifest_contract(&manifest, "en", "fr").unwrap_err();
-        assert!(language_error.contains("idiomas"));
-
-        let mut missing_batch = current_manifest();
-        missing_batch.batch_count = Some(2);
-        assert!(validate_manifest_contract(&missing_batch, "en", "es")
-            .unwrap_err()
-            .contains("batchCount"));
-
-        let mut duplicate_path = current_manifest();
-        duplicate_path.batch_count = Some(2);
-        duplicate_path.batches.push(BatchArtifactRow {
-            index: 2,
-            batch_id: "batch-2".into(),
-            entries_fingerprint: Some("batch-fingerprint-2".into()),
-            entries_path: "batch-1.entries.json".into(),
-            response_template_path: "batch-2.response.template.json".into(),
-        });
-        assert!(validate_manifest_contract(&duplicate_path, "en", "es")
-            .unwrap_err()
-            .contains("duplicada"));
-    }
-}
-
 fn main() -> ExitCode {
     let options = match parse_args(env::args()) {
         Ok(options) => options,
@@ -597,4 +525,76 @@ fn main() -> ExitCode {
     println!("Exportación: {}", export_dir.display());
 
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn current_manifest() -> SampleManifest {
+        SampleManifest {
+            sample_name: "sample".into(),
+            inventory_fingerprint: Some("fairtl-inventory-v1-fnv1a64:0000000000000000".into()),
+            source_lang: Some("en".into()),
+            target_lang: Some("es".into()),
+            batch_count: Some(1),
+            project_path: "project.fairtl".into(),
+            exports_dir: "exports".into(),
+            batch_dir: "ai-batches".into(),
+            batches: vec![BatchArtifactRow {
+                index: 1,
+                batch_id: "batch-1".into(),
+                entries_fingerprint: Some("batch-fingerprint".into()),
+                entries_path: "batch-1.entries.json".into(),
+                response_template_path: "batch-1.response.template.json".into(),
+            }],
+        }
+    }
+
+    #[test]
+    fn legacy_manifest_loads_for_an_actionable_fingerprint_rejection() {
+        let manifest: SampleManifest = serde_json::from_value(serde_json::json!({
+            "sampleName": "sample",
+            "projectPath": "project.fairtl",
+            "exportsDir": "exports",
+            "batchDir": "ai-batches",
+            "batches": []
+        }))
+        .unwrap();
+
+        let error = qa_inventory_fingerprint::verify_project_inventory_fingerprint(
+            manifest.inventory_fingerprint.as_deref(),
+            &[],
+        )
+        .unwrap_err();
+        assert!(error.contains("qa_prepare"));
+    }
+
+    #[test]
+    fn manifest_contract_rejects_language_and_batch_drift() {
+        let manifest = current_manifest();
+        assert!(validate_manifest_contract(&manifest, "en", "es").is_ok());
+
+        let language_error = validate_manifest_contract(&manifest, "en", "fr").unwrap_err();
+        assert!(language_error.contains("idiomas"));
+
+        let mut missing_batch = current_manifest();
+        missing_batch.batch_count = Some(2);
+        assert!(validate_manifest_contract(&missing_batch, "en", "es")
+            .unwrap_err()
+            .contains("batchCount"));
+
+        let mut duplicate_path = current_manifest();
+        duplicate_path.batch_count = Some(2);
+        duplicate_path.batches.push(BatchArtifactRow {
+            index: 2,
+            batch_id: "batch-2".into(),
+            entries_fingerprint: Some("batch-fingerprint-2".into()),
+            entries_path: "batch-1.entries.json".into(),
+            response_template_path: "batch-2.response.template.json".into(),
+        });
+        assert!(validate_manifest_contract(&duplicate_path, "en", "es")
+            .unwrap_err()
+            .contains("duplicada"));
+    }
 }

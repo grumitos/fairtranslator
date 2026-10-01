@@ -192,7 +192,7 @@ impl TranslationProvider for GoogleProvider {
 
             for ((req, translation), (_, literal_replacements, glossary_replacements)) in chunk
                 .iter()
-                .zip(google_response.data.translations.into_iter())
+                .zip(google_response.data.translations)
                 .zip(prepared.iter())
             {
                 all_responses.push(TranslationResponse {

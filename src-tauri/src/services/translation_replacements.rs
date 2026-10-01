@@ -52,7 +52,7 @@ pub(crate) fn protect_glossary_terms(
         .iter()
         .filter(|term| !term.source.is_empty() && !term.target.is_empty())
         .collect::<Vec<_>>();
-    terms.sort_by(|left, right| right.source.len().cmp(&left.source.len()));
+    terms.sort_by_key(|term| std::cmp::Reverse(term.source.len()));
 
     let mut spans = Vec::new();
     for term in terms {
