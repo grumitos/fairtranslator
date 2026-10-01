@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -142,69 +143,136 @@ pub fn save_project(project: &Project, project_path: &Path) -> Result<(), AppErr
         std::process::id(),
         uuid::Uuid::new_v4().as_simple()
     ));
-
-    // Clean up any leftover temp dir from a previous crashed save
-    if temp_dir.exists() {
-        std::fs::remove_dir_all(&temp_dir)?;
-    }
-
-    std::fs::create_dir_all(temp_dir.join("entries"))?;
-
-    let file_list: Vec<String> = project
-        .files
-        .iter()
-        .map(|f| f.relative_path.clone())
-        .collect();
-
-    let meta = ProjectMeta {
-        schema_version: SCHEMA_VERSION,
-        id: project.id.clone(),
-        name: project.name.clone(),
-        source_lang: project.source_lang.clone(),
-        target_lang: project.target_lang.clone(),
-        engine: project.engine.clone(),
-        game_dir: project.game_dir.clone(),
-        file_list,
-        glossary: project.glossary.clone(),
-        style_guide: project.style_guide.clone(),
-        created_at: project.created_at.clone(),
-        updated_at: project.updated_at.clone(),
-    };
-
-    let meta_json = serde_json::to_string_pretty(&meta)?;
-    std::fs::write(temp_dir.join("project.json"), meta_json)?;
-
-    // Write entries/<stem>.json for each file
-    for file in &project.files {
-        let entry_filename = entries_filename(&file.relative_path);
-        let entries_json = serde_json::to_string_pretty(&file.entries)?;
-        std::fs::write(temp_dir.join("entries").join(&entry_filename), entries_json)?;
-    }
-
-    // Atomic swap: remove old, rename temp to final
     let backup = project_backup_path(project_path)?;
-    if project_path.exists() {
-        // Rename old to a backup first, so if rename fails we don't lose data
-        if backup.exists() {
-            std::fs::remove_dir_all(&backup)?;
+
+    let result = (|| {
+        std::fs::create_dir_all(temp_dir.join("entries"))?;
+
+        let file_list: Vec<String> = project
+            .files
+            .iter()
+            .map(|f| f.relative_path.clone())
+            .collect();
+
+        let meta = ProjectMeta {
+            schema_version: SCHEMA_VERSION,
+            id: project.id.clone(),
+            name: project.name.clone(),
+            source_lang: project.source_lang.clone(),
+            target_lang: project.target_lang.clone(),
+            engine: project.engine.clone(),
+            game_dir: project.game_dir.clone(),
+            file_list,
+            glossary: project.glossary.clone(),
+            style_guide: project.style_guide.clone(),
+            created_at: project.created_at.clone(),
+            updated_at: project.updated_at.clone(),
+        };
+
+        let meta_json = serde_json::to_string_pretty(&meta)?;
+        write_synced(&temp_dir.join("project.json"), meta_json.as_bytes())?;
+
+        // Write entries/<stem>.json for each file
+        for file in &project.files {
+            let entry_filename = entries_filename(&file.relative_path);
+            let entries_json = serde_json::to_string_pretty(&file.entries)?;
+            write_synced(
+                &temp_dir.join("entries").join(&entry_filename),
+                entries_json.as_bytes(),
+            )?;
         }
-        std::fs::rename(project_path, &backup)?;
-        match std::fs::rename(&temp_dir, project_path) {
-            Ok(()) => {
-                // Success — remove backup
-                let _ = std::fs::remove_dir_all(&backup);
+        sync_dir(&temp_dir.join("entries"))?;
+        sync_dir(&temp_dir)?;
+
+        // Atomic swap: remove old, rename temp to final
+        if project_path.exists() {
+            // Rename old to a backup first, so if rename fails we don't lose data
+            if backup.exists() {
+                std::fs::remove_dir_all(&backup)?;
             }
-            Err(e) => {
-                // Restore backup
-                let _ = std::fs::rename(&backup, project_path);
-                return Err(AppError::Io(format!("Failed to finalize save: {e}")));
+            std::fs::rename(project_path, &backup)?;
+            match std::fs::rename(&temp_dir, project_path) {
+                Ok(()) => {
+                    // Success — remove backup
+                    let _ = std::fs::remove_dir_all(&backup);
+                }
+                Err(e) => {
+                    // Restore backup
+                    let _ = std::fs::rename(&backup, project_path);
+                    return Err(AppError::Io(format!("Failed to finalize save: {e}")));
+                }
             }
+        } else {
+            std::fs::rename(&temp_dir, project_path)?;
         }
-    } else {
-        std::fs::rename(&temp_dir, project_path)?;
+        sync_dir(parent)?;
+
+        Ok(())
+    })();
+
+    // The temp name is unique per save, so a failed attempt must remove its own
+    // snapshot or it is left orphaned next to the project forever. Keep it only
+    // when both the swap and the backup restore failed: then it is the sole
+    // on-disk copy of the newest data.
+    if result.is_err() && (project_path.exists() || !backup.exists()) {
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
+    result
+}
+
+/// Writes a file and flushes it to the disk (`FlushFileBuffers` on Windows),
+/// so a save that reached its final rename survives a power cut.
+pub(crate) fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut file = std::fs::File::create(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()
+}
+
+/// Flushes a directory's entries (the renames into it). Windows offers no
+/// supported way to flush a directory, so there this is a no-op: NTFS
+/// journals the rename itself, and the files were flushed before it.
+fn sync_dir(dir: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::fs::File::open(dir)?.sync_all()?;
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
     Ok(())
+}
+
+/// Saves only the style guide of an already saved project: `project.json` is
+/// replaced atomically and the entry files on disk are left alone, so pending
+/// translation edits are not written with it. Returns `false` when the project
+/// has not been saved yet (the guide is then saved with the project).
+pub fn save_style_guide(
+    project_path: &Path,
+    style_guide: &[String],
+    updated_at: &str,
+) -> Result<bool, AppError> {
+    recover_interrupted_save(project_path)?;
+    let meta_path = project_path.join("project.json");
+    if !meta_path.is_file() {
+        return Ok(false);
+    }
+    let mut meta =
+        migrate_project_meta(serde_json::from_str(&std::fs::read_to_string(&meta_path)?)?)?;
+    meta.style_guide = style_guide.to_vec();
+    meta.updated_at = updated_at.to_string();
+
+    let temp_path = project_path.join(format!(
+        ".project.json.tmp_{}",
+        uuid::Uuid::new_v4().as_simple()
+    ));
+    let result = write_synced(&temp_path, serde_json::to_string_pretty(&meta)?.as_bytes())
+        .and_then(|()| std::fs::rename(&temp_path, &meta_path))
+        .and_then(|()| sync_dir(project_path));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp_path);
+    }
+    result?;
+    Ok(true)
 }
 
 // ---------------------------------------------------------------------------
@@ -403,17 +471,111 @@ fn entries_filename(relative_path: &str) -> String {
         .to_string()
 }
 
-/// Generate a default `.fairtl` path from a game directory path.
-/// E.g. `C:\Games\MyRPG` -> `C:\Games\MyRPG.fairtl`
-pub fn default_project_path(game_dir: &Path) -> PathBuf {
-    let mut path = game_dir.to_path_buf();
-    let name = game_dir
+/// Default location of a new project: `<projects_dir>\<name>.fairtl` (the
+/// app passes `Documents\FairTranslator`), never inside the game folder. The
+/// name is made safe for file names, and " (2)", " (3)"... avoid clobbering
+/// an existing project.
+pub fn default_project_path(projects_dir: &Path, project_name: &str) -> PathBuf {
+    let stem = file_stem_for(project_name);
+    let mut candidate = projects_dir.join(format!("{stem}.fairtl"));
+    let mut counter = 2;
+    while candidate.exists() || project_backup_path(&candidate).is_ok_and(|backup| backup.exists())
+    {
+        candidate = projects_dir.join(format!("{stem} ({counter}).fairtl"));
+        counter += 1;
+    }
+    candidate
+}
+
+fn file_stem_for(name: &str) -> String {
+    let cleaned = name
+        .chars()
+        .map(|ch| match ch {
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
+            ch if ch.is_control() => '_',
+            ch => ch,
+        })
+        .take(80)
+        .collect::<String>();
+    let cleaned = cleaned.trim().trim_end_matches(['.', ' ']);
+    if cleaned.is_empty() {
+        "project".to_string()
+    } else {
+        cleaned.to_string()
+    }
+}
+
+/// The folder the user sees as "the game": the resolved root, or its parent
+/// for MV's deployed `www` layout.
+fn game_folder(game_dir: &Path) -> PathBuf {
+    let is_www = game_dir
         .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("project");
-    path.pop();
-    path.push(format!("{name}.fairtl"));
-    path
+        .is_some_and(|name| name.eq_ignore_ascii_case("www"));
+    match game_dir.parent() {
+        Some(parent) if is_www => parent.to_path_buf(),
+        _ => game_dir.to_path_buf(),
+    }
+}
+
+fn comparable_path(path: &Path) -> PathBuf {
+    if let Ok(canonical) = std::fs::canonicalize(path) {
+        return canonical;
+    }
+    // A target that does not exist yet: resolve its parent.
+    match (path.parent(), path.file_name()) {
+        (Some(parent), Some(name)) => std::fs::canonicalize(parent)
+            .map(|parent| parent.join(name))
+            .unwrap_or_else(|_| path.to_path_buf()),
+        _ => path.to_path_buf(),
+    }
+}
+
+/// Validates a "Save as" target and returns the path to save to: absolute,
+/// named `*.fairtl` (added when missing), outside the game folder, and either
+/// new or an existing FairTranslator project. Any other existing folder or
+/// file is refused, because the save swap replaces whatever is at the path.
+pub fn save_as_target(requested: &Path, game_dir: &Path) -> Result<PathBuf, AppError> {
+    if !requested.is_absolute() {
+        return Err(AppError::Project(format!(
+            "La ruta de «Guardar como» debe ser absoluta: {}",
+            requested.display()
+        )));
+    }
+    let has_extension = requested
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("fairtl"));
+    let target = if has_extension {
+        requested.to_path_buf()
+    } else {
+        let mut name = requested
+            .file_name()
+            .ok_or_else(|| {
+                AppError::Project(format!(
+                    "La ruta de «Guardar como» no tiene nombre: {}",
+                    requested.display()
+                ))
+            })?
+            .to_os_string();
+        name.push(".fairtl");
+        requested.with_file_name(name)
+    };
+
+    let game_folder = game_folder(game_dir);
+    if !game_dir.as_os_str().is_empty()
+        && comparable_path(&target).starts_with(comparable_path(&game_folder))
+    {
+        return Err(AppError::Project(format!(
+            "Guarda el proyecto fuera de la carpeta del juego ({}).",
+            game_folder.display()
+        )));
+    }
+    if target.exists() && !target.join("project.json").is_file() {
+        return Err(AppError::Project(format!(
+            "«{}» ya existe y no es un proyecto de FairTranslator; elige otro nombre.",
+            target.display()
+        )));
+    }
+    Ok(target)
 }
 
 /// Get the current timestamp as an ISO 8601 string.
@@ -622,17 +784,97 @@ mod tests {
         assert_eq!(entries_filename("data/sub/Actors.json"), "Actors.json");
     }
 
+    /// New projects default to a projects folder (never the game folder),
+    /// with a file-safe, non-clobbering name; "Save as" only accepts absolute
+    /// `.fairtl` targets outside the game folder (MV's `www` parent included)
+    /// that are new or already a project, because the save swap replaces
+    /// whatever is at the target.
     #[test]
-    fn test_default_project_path() {
-        let game_dir = Path::new("C:\\Games\\MyRPG");
-        let result = default_project_path(game_dir);
-        assert_eq!(result, PathBuf::from("C:\\Games\\MyRPG.fairtl"));
+    fn default_and_save_as_paths_stay_out_of_game_folders() {
+        let root =
+            std::env::temp_dir().join(format!("fairtl_paths_{}", uuid::Uuid::new_v4().as_simple()));
+        let projects = root.join("Documents").join("FairTranslator");
+        let game = root.join("Games").join("MyRPG");
+        let www = game.join("www");
+        fs::create_dir_all(www.join("data")).unwrap();
+        fs::create_dir_all(&projects).unwrap();
+
+        let first = default_project_path(&projects, "  My: RPG?  ");
+        assert_eq!(first, projects.join("My_ RPG_.fairtl"));
+        fs::create_dir_all(&first).unwrap();
+        assert_eq!(
+            default_project_path(&projects, "My: RPG?"),
+            projects.join("My_ RPG_ (2).fairtl")
+        );
+        assert_eq!(
+            default_project_path(&projects, " .. "),
+            projects.join("project.fairtl")
+        );
+
+        let error = |target: &Path| save_as_target(target, &www).unwrap_err().to_string();
+        assert!(error(Path::new("relative.fairtl")).contains("absoluta"));
+        assert!(error(&game.join("Traduccion.fairtl")).contains("fuera de la carpeta del juego"));
+        assert!(error(&www.join("data").join("x")).contains("fuera de la carpeta del juego"));
+        // An existing folder is never the target itself: `.fairtl` is added.
+        assert_eq!(
+            save_as_target(&root.join("Documents"), &www).unwrap(),
+            root.join("Documents.fairtl")
+        );
+        let stray = root.join("Stray.fairtl");
+        fs::create_dir_all(stray.join("keep")).unwrap();
+        assert!(error(&stray).contains("no es un proyecto"));
+        let file = root.join("notes.fairtl");
+        fs::write(&file, "keep").unwrap();
+        assert!(error(&file).contains("no es un proyecto"));
+
+        assert_eq!(
+            save_as_target(&root.join("Games").join("MyRPG ES"), &www).unwrap(),
+            root.join("Games").join("MyRPG ES.fairtl")
+        );
+        let project = make_test_project();
+        save_project(&project, &first).unwrap();
+        assert_eq!(save_as_target(&first, &www).unwrap(), first);
+
+        let _ = fs::remove_dir_all(&root);
     }
 
+    /// Changing the style guide of a saved project rewrites only its
+    /// `project.json`; pending entry edits reach the disk with the next save.
+    /// A project that was never saved is left for that first save.
     #[test]
-    fn test_load_nonexistent() {
-        let result = load_project(Path::new("C:\\nonexistent\\path.fairtl"));
-        assert!(result.is_err());
+    fn style_guide_save_leaves_pending_entry_edits_unsaved() {
+        let path = std::env::temp_dir().join(format!(
+            "fairtl_style_guide_{}.fairtl",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        let mut project = make_test_project();
+        save_project(&project, &path).unwrap();
+
+        project.files[0].entries[1].translation = "Teresa".into();
+        let guide = vec!["Usa tú".to_string()];
+        assert!(save_style_guide(&path, &guide, "2026-09-30T00:00:00Z").unwrap());
+
+        let on_disk = load_project(&path).unwrap();
+        assert_eq!(on_disk.style_guide, guide);
+        assert_eq!(on_disk.updated_at, "2026-09-30T00:00:00Z");
+        assert_eq!(on_disk.files[0].entries[1].translation, "");
+        assert_eq!(
+            serde_json::to_value(&on_disk.files).unwrap(),
+            serde_json::to_value(make_test_project().files).unwrap()
+        );
+        assert!(fs::read_dir(&path)
+            .unwrap()
+            .flatten()
+            .all(|entry| !entry.file_name().to_string_lossy().contains(".tmp")));
+
+        let unsaved = path.with_file_name(format!(
+            "fairtl_style_guide_unsaved_{}.fairtl",
+            uuid::Uuid::new_v4().as_simple()
+        ));
+        assert!(!save_style_guide(&unsaved, &guide, "2026-09-30T00:00:00Z").unwrap());
+        assert!(!unsaved.exists());
+
+        let _ = fs::remove_dir_all(&path);
     }
 
     #[test]

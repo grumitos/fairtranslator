@@ -1,5 +1,7 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+
+use tauri::Manager;
 
 use crate::error::AppError;
 use crate::models::{EntryStatus, Project};
@@ -23,13 +25,60 @@ impl AppState {
     }
 }
 
+/// Read-only look at a game folder before creating a project: engine,
+/// resolved root, packed archive, counts, or why it cannot be used.
+#[tauri::command]
+pub async fn game_inspect(game_dir: String) -> Result<parser::GameInspection, AppError> {
+    let selected = PathBuf::from(game_dir);
+    tauri::async_runtime::spawn_blocking(move || parser::inspect_game(&selected))
+        .await
+        .map_err(|error| AppError::Project(format!("Background task failed: {error}")))?
+}
+
+/// Where the open project is (or will be) saved.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectLocation {
+    pub path: String,
+    /// False for a new project that was never saved (`path` is where a
+    /// plain save will write it).
+    pub saved: bool,
+}
+
+/// Location of the open project; `None` when no project is open or a new
+/// project has no default location (then "Save as" is required).
+#[tauri::command]
+pub fn project_location(
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<ProjectLocation>, AppError> {
+    if state
+        .project
+        .lock()
+        .map_err(|e| AppError::Project(format!("Lock error: {e}")))?
+        .is_none()
+    {
+        return Ok(None);
+    }
+    let path = state
+        .project_path
+        .lock()
+        .map_err(|e| AppError::Project(format!("Lock error: {e}")))?
+        .clone();
+    Ok(path.map(|path| ProjectLocation {
+        saved: path.join("project.json").is_file(),
+        path: path.to_string_lossy().into_owned(),
+    }))
+}
+
 /// Create a new translation project from a supported game directory.
 ///
 /// Resolves the engine-specific game root, extracts supported translatable
 /// entries, and returns the new Project. The project is NOT saved to disk yet;
-/// call `project_save` to persist it.
+/// call `project_save` to persist it. Its default location is
+/// `Documents\FairTranslator\<name>.fairtl`, outside the game folder.
 #[tauri::command]
 pub async fn project_create(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     game_dir: String,
     name: String,
@@ -69,7 +118,9 @@ pub async fn project_create(
     };
 
     {
-        let default_path = persistence::default_project_path(&game_path);
+        let default_path = app.path().document_dir().ok().map(|documents| {
+            persistence::default_project_path(&documents.join("FairTranslator"), &project.name)
+        });
         let mut proj = state
             .project
             .lock()
@@ -79,7 +130,7 @@ pub async fn project_create(
             .lock()
             .map_err(|e| AppError::Project(format!("Lock error: {e}")))?;
         *proj = Some(project.clone());
-        *path = Some(default_path);
+        *path = default_path;
     }
 
     Ok(project)
@@ -93,7 +144,24 @@ pub async fn project_open(
 ) -> Result<Project, AppError> {
     let project_path = PathBuf::from(&path);
 
-    let project = persistence::load_project(&project_path)?;
+    // Loading also adds entries the parser now extracts from the source game
+    // (e.g. XP's first message lines); existing entries are never changed.
+    let load_path = project_path.clone();
+    let opened = tauri::async_runtime::spawn_blocking(move || {
+        crate::services::project_refresh::open_project(&load_path)
+    })
+    .await
+    .map_err(|error| AppError::Project(format!("Background task failed: {error}")))??;
+    if opened.added_entries > 0 {
+        log::info!(
+            "Opened project with {} newly extractable entries from the source game",
+            opened.added_entries
+        );
+    }
+    if let Some(reason) = &opened.refresh_skipped {
+        log::warn!("Project opened without a source refresh: {reason}");
+    }
+    let project = opened.project;
 
     {
         let mut proj = state
@@ -113,7 +181,9 @@ pub async fn project_open(
 
 /// Save the current project to its `.fairtl` directory.
 ///
-/// If `path` is provided, saves to that location (Save As).
+/// If `path` is provided, saves to that location (Save As) and makes it the
+/// project's location: it must be absolute and outside the game folder, gets
+/// `.fairtl` appended when missing, and may only replace another project.
 /// Otherwise saves to the existing project path.
 #[tauri::command]
 pub async fn project_save(
@@ -129,7 +199,7 @@ pub async fn project_save(
         .ok_or_else(|| AppError::Project("No hay ningún proyecto abierto".into()))?;
 
     let save_path = if let Some(p) = path {
-        PathBuf::from(p)
+        persistence::save_as_target(Path::new(&p), Path::new(&project.game_dir))?
     } else {
         let stored = state
             .project_path
