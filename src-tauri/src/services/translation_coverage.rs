@@ -384,7 +384,8 @@ fn is_contextual_proper_name(entry: &TranslationEntry, value: &str) -> bool {
 }
 
 fn is_variable_text_proper_name(entry: &TranslationEntry, value: &str) -> bool {
-    if !entry.id.to_ascii_lowercase().contains(":variabletext:") {
+    let id = entry.id.to_ascii_lowercase();
+    if !(id.contains(":variabletext:") || id.contains(":scripttext:")) {
         return false;
     }
 

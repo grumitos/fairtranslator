@@ -24,6 +24,17 @@ and this project follows [Semantic Versioning](https://semver.org/).
 - Added background updates of the standard Codex CLI install at startup
   ("Update on startup" in Settings, on by default) and Codex model discovery
   through `codex debug models`.
+- Extracted and exported MV/MZ text the games keep in scripts and plugin
+  commands: `$gameVariables.setValue(id, "text")` in Script commands (355/655,
+  entries `…:scriptText:{command}:{n}`) and the text-like arguments of MZ plugin
+  commands (357, entries `…:pluginArg:{command}:{plugin}:{key}`). Script
+  literals are decoded and re-encoded with their own quote, so control codes
+  such as `\c[2]` and quotes in the translation stay valid JavaScript. A text
+  that any script in the maps, common events or troops compares or looks up, or
+  that appears in `js/plugins/*.js`, is left alone, because translating it
+  would break that comparison. Plugin command arguments are taken only from
+  text-like keys (`text`, `message`, `title`, …); a bare `name` is skipped
+  since commands often use it for picture or asset names.
 
 ### Changed
 - Redesigned the interface on the shared `@nosky/design-kit` (vendored in

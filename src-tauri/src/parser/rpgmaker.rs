@@ -1,7 +1,9 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
+use super::script_strings;
 use crate::error::AppError;
 use crate::models::{Engine, EntryStatus, TranslationEntry, TranslationFile};
 
@@ -45,6 +47,11 @@ pub const CODE_CHANGE_NAME: i64 = 320;
 pub const CODE_CHANGE_NICKNAME: i64 = 324;
 pub const CODE_CHANGE_PROFILE: i64 = 325;
 pub const CODE_CONTROL_VARIABLES: i64 = 122;
+pub const CODE_CONDITIONAL_BRANCH: i64 = 111;
+pub const CODE_SCRIPT: i64 = 355;
+pub const CODE_SCRIPT_CONTINUATION: i64 = 655;
+/// MZ plugin command: `[plugin, command, display name, {arguments}]`.
+pub const CODE_PLUGIN_COMMAND_MZ: i64 = 357;
 
 // ---------------------------------------------------------------------------
 // FileKind — classify a /data/ JSON file
@@ -284,6 +291,7 @@ fn scan_data_dir(data_dir: &Path) -> Result<Vec<PathBuf>, AppError> {
 /// Parse MV/MZ JSON files into translatable entries.
 pub fn parse_mv_mz_game(game_dir: &Path) -> Result<Vec<TranslationFile>, AppError> {
     let json_files = scan_game_dir(game_dir)?;
+    let kept_literals = literals_kept_by_scripts(game_dir, &json_files)?;
 
     let mut translation_files = Vec::new();
 
@@ -311,7 +319,7 @@ pub fn parse_mv_mz_game(game_dir: &Path) -> Result<Vec<TranslationFile>, AppErro
             inject_plugin_source_defaults(&mut json, game_dir)?;
         }
 
-        let entries = extract_entries(&stem, &kind, &json)?;
+        let entries = extract_entries(&stem, &kind, &json, &kept_literals)?;
 
         if !entries.is_empty() {
             translation_files.push(TranslationFile {
@@ -332,12 +340,13 @@ fn extract_entries(
     stem: &str,
     kind: &FileKind,
     json: &Value,
+    kept_literals: &HashSet<String>,
 ) -> Result<Vec<TranslationEntry>, AppError> {
     match kind {
         FileKind::Database => extract_database_entries(stem, json),
-        FileKind::Map => extract_map_entries(stem, json),
-        FileKind::CommonEvents => extract_common_events_entries(json),
-        FileKind::Troops => extract_troops_entries(json),
+        FileKind::Map => extract_map_entries(stem, json, kept_literals),
+        FileKind::CommonEvents => extract_common_events_entries(json, kept_literals),
+        FileKind::Troops => extract_troops_entries(json, kept_literals),
         FileKind::System => extract_system_entries(json),
         FileKind::Plugins => extract_plugins_entries(json),
         FileKind::Html => extract_index_html_entries(stem, json),
@@ -410,7 +419,11 @@ fn extract_database_entries(stem: &str, json: &Value) -> Result<Vec<TranslationE
 // Map entries — displayName + event commands
 // ---------------------------------------------------------------------------
 
-fn extract_map_entries(stem: &str, json: &Value) -> Result<Vec<TranslationEntry>, AppError> {
+fn extract_map_entries(
+    stem: &str,
+    json: &Value,
+    kept_literals: &HashSet<String>,
+) -> Result<Vec<TranslationEntry>, AppError> {
     let obj = json
         .as_object()
         .ok_or_else(|| AppError::Parse(format!("{stem}: expected JSON object")))?;
@@ -455,7 +468,12 @@ fn extract_map_entries(stem: &str, json: &Value) -> Result<Vec<TranslationEntry>
                     if let Some(Value::Array(list)) = page.get("list") {
                         let context_prefix = format!("{stem} > {ev_label} > Page {}", page_idx + 1);
                         let id_prefix = format!("{stem}:{ev_id}:{page_idx}");
-                        let cmds = extract_event_commands(list, &id_prefix, &context_prefix);
+                        let cmds = extract_event_commands(
+                            list,
+                            &id_prefix,
+                            &context_prefix,
+                            kept_literals,
+                        );
                         entries.extend(cmds);
                     }
                 }
@@ -470,7 +488,10 @@ fn extract_map_entries(stem: &str, json: &Value) -> Result<Vec<TranslationEntry>
 // CommonEvents — event commands from each common event
 // ---------------------------------------------------------------------------
 
-fn extract_common_events_entries(json: &Value) -> Result<Vec<TranslationEntry>, AppError> {
+fn extract_common_events_entries(
+    json: &Value,
+    kept_literals: &HashSet<String>,
+) -> Result<Vec<TranslationEntry>, AppError> {
     let arr = json
         .as_array()
         .ok_or_else(|| AppError::Parse("CommonEvents: expected JSON array".into()))?;
@@ -496,7 +517,7 @@ fn extract_common_events_entries(json: &Value) -> Result<Vec<TranslationEntry>, 
         if let Some(Value::Array(list)) = obj.get("list") {
             let id_prefix = format!("CommonEvents:{ce_id}");
             let context_prefix = format!("CommonEvents > {ce_label}");
-            let cmds = extract_event_commands(list, &id_prefix, &context_prefix);
+            let cmds = extract_event_commands(list, &id_prefix, &context_prefix, kept_literals);
             entries.extend(cmds);
         }
     }
@@ -508,7 +529,10 @@ fn extract_common_events_entries(json: &Value) -> Result<Vec<TranslationEntry>, 
 // Troops — troop names + battle event commands
 // ---------------------------------------------------------------------------
 
-fn extract_troops_entries(json: &Value) -> Result<Vec<TranslationEntry>, AppError> {
+fn extract_troops_entries(
+    json: &Value,
+    kept_literals: &HashSet<String>,
+) -> Result<Vec<TranslationEntry>, AppError> {
     let arr = json
         .as_array()
         .ok_or_else(|| AppError::Parse("Troops: expected JSON array".into()))?;
@@ -544,7 +568,8 @@ fn extract_troops_entries(json: &Value) -> Result<Vec<TranslationEntry>, AppErro
                         page_idx + 1
                     );
                     let id_prefix = format!("Troops:{troop_id}:{page_idx}");
-                    let cmds = extract_event_commands(list, &id_prefix, &context_prefix);
+                    let cmds =
+                        extract_event_commands(list, &id_prefix, &context_prefix, kept_literals);
                     entries.extend(cmds);
                 }
             }
@@ -986,10 +1011,14 @@ fn extract_terms_recursive(
 /// - 324: Change Actor Nickname
 /// - 325: Change Actor Profile
 /// - 122: Control Variables with an exact quoted string literal
+/// - 355/655: `$gameVariables.setValue(id, "text")` in Script commands, unless
+///   the same event compares or looks up that literal elsewhere
+/// - 357: MZ plugin command arguments under text-like keys
 fn extract_event_commands(
     list: &[Value],
     id_prefix: &str,
     context_prefix: &str,
+    kept_literals: &HashSet<String>,
 ) -> Vec<TranslationEntry> {
     let mut entries = Vec::new();
     let mut text_accumulator: Vec<String> = Vec::new();
@@ -1150,6 +1179,49 @@ fn extract_event_commands(
                     }
                 }
             }
+            CODE_SCRIPT | CODE_SCRIPT_CONTINUATION => {
+                if let Some(script) = command_script(params) {
+                    for assignment in script_strings::variable_assignments(script) {
+                        if assignment.value.trim().is_empty()
+                            || kept_literals.contains(&assignment.value)
+                        {
+                            continue;
+                        }
+                        entries.push(make_entry(
+                            &format!("{id_prefix}:scriptText:{cmd_idx}:{}", assignment.occurrence),
+                            &format!(
+                                "{context_prefix} > script variable #{}",
+                                assignment.variable_id
+                            ),
+                            assignment.value,
+                        ));
+                    }
+                }
+            }
+            CODE_PLUGIN_COMMAND_MZ => {
+                if let Some(Value::Array(p)) = params {
+                    let plugin = p.first().and_then(Value::as_str).unwrap_or_default();
+                    let command = p.get(1).and_then(Value::as_str).unwrap_or_default();
+                    if let (false, Some(Value::Object(arguments))) = (plugin.is_empty(), p.get(3)) {
+                        for (key, value) in arguments {
+                            let Some(text) = value.as_str() else {
+                                continue;
+                            };
+                            if !plugin_command_key_is_text(key)
+                                || !plugin_string_is_translatable_candidate(text)
+                                || parse_embedded_plugin_json(text).is_some()
+                            {
+                                continue;
+                            }
+                            entries.push(make_entry(
+                                &format!("{id_prefix}:pluginArg:{cmd_idx}:{plugin}:{key}"),
+                                &format!("{context_prefix} > {plugin} {command} [{key}]"),
+                                text.to_string(),
+                            ));
+                        }
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -1182,6 +1254,159 @@ fn parse_quoted_string_literal(value: &str) -> Option<String> {
     serde_json::from_str::<String>(value).ok()
 }
 
+/// The script line of a Script command (355/655).
+pub(crate) fn command_script(params: Option<&Value>) -> Option<&str> {
+    params?.as_array()?.first()?.as_str()
+}
+
+/// Text that scripts of the whole game compare or look up, such as
+/// `$gameVariables.value(18) == "ビール"`. Translating a variable assignment
+/// with that text would break the comparison, so extraction leaves those
+/// assignments alone. Looks at every script in the maps, common events and
+/// troops (conditions, script lines, variable operands, move routes) and, for
+/// each assigned text, at the source of `js/plugins/*.js`.
+fn literals_kept_by_scripts(
+    game_dir: &Path,
+    json_files: &[PathBuf],
+) -> Result<HashSet<String>, AppError> {
+    let mut kept = HashSet::new();
+    let mut assigned = HashSet::new();
+    for path in json_files {
+        let relative = path
+            .strip_prefix(game_dir)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        if !matches!(
+            classify_relative_path(&relative),
+            FileKind::Map | FileKind::CommonEvents | FileKind::Troops
+        ) {
+            continue;
+        }
+        let json: Value = serde_json::from_str(&std::fs::read_to_string(path)?)?;
+        collect_script_literals(&json, &mut kept, &mut assigned);
+    }
+
+    if !assigned.is_empty() {
+        let plugin_sources = plugin_sources_text(game_dir);
+        for value in assigned {
+            if plugin_sources.contains(&value)
+                || plugin_sources.contains(&script_strings::encode_literal(&value, '"'))
+                || plugin_sources.contains(&script_strings::encode_literal(&value, '\''))
+            {
+                kept.insert(value);
+            }
+        }
+    }
+    Ok(kept)
+}
+
+/// Move Route > Script commands live inside the parameters of 205/505.
+const MOVE_ROUTE_SCRIPT: i64 = 45;
+
+fn collect_script_literals(
+    value: &Value,
+    kept: &mut HashSet<String>,
+    assigned: &mut HashSet<String>,
+) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                collect_script_literals(item, kept, assigned);
+            }
+        }
+        Value::Object(map) => {
+            let code = map.get("code").and_then(Value::as_i64);
+            if let (Some(code), Some(Value::Array(p))) = (code, map.get("parameters")) {
+                let text = |index: usize| p.get(index).and_then(Value::as_str);
+                match code {
+                    CODE_SCRIPT | CODE_SCRIPT_CONTINUATION => {
+                        if let Some(script) = text(0) {
+                            script_strings::other_literals(script, kept);
+                            assigned.extend(
+                                script_strings::variable_assignments(script)
+                                    .into_iter()
+                                    .map(|assignment| assignment.value),
+                            );
+                        }
+                    }
+                    // Conditional Branch > Script: [12, "expression"]
+                    CODE_CONDITIONAL_BRANCH if p.first().and_then(Value::as_i64) == Some(12) => {
+                        if let Some(script) = text(1) {
+                            script_strings::other_literals(script, kept);
+                        }
+                    }
+                    // Control Variables > Script: a bare quoted literal is the
+                    // text itself (`variableText`), anything else is code.
+                    CODE_CONTROL_VARIABLES if p.get(3).and_then(Value::as_i64) == Some(4) => {
+                        if let Some(script) =
+                            text(4).filter(|script| parse_quoted_string_literal(script).is_none())
+                        {
+                            script_strings::other_literals(script, kept);
+                        }
+                    }
+                    MOVE_ROUTE_SCRIPT => {
+                        if let Some(script) = text(0) {
+                            script_strings::other_literals(script, kept);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            for child in map.values() {
+                collect_script_literals(child, kept, assigned);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Text of every `js/plugins/*.js` (invalid UTF-8 replaced), for substring
+/// checks only.
+fn plugin_sources_text(game_dir: &Path) -> String {
+    let mut text = String::new();
+    let Ok(entries) = std::fs::read_dir(game_dir.join("js").join("plugins")) else {
+        return text;
+    };
+    for path in entries.flatten().map(|entry| entry.path()) {
+        let is_script = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("js"));
+        if let (true, Ok(bytes)) = (is_script, std::fs::read(&path)) {
+            text.push_str(&String::from_utf8_lossy(&bytes));
+            text.push('\n');
+        }
+    }
+    text
+}
+
+/// Argument names of MZ plugin commands that carry text. Bare `name` and
+/// file-like keys are left out: commands often take picture or asset names
+/// there, and translating one makes the game fail to load the file.
+fn plugin_command_key_is_text(key: &str) -> bool {
+    let compact = key
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    if ["file", "image", "picture", "sound", "audio"]
+        .iter()
+        .any(|term| compact.contains(term))
+    {
+        return false;
+    }
+    matches!(
+        compact.as_str(),
+        "text" | "message" | "title" | "description" | "header" | "prompt" | "label" | "caption"
+    ) || ["text", "message", "title", "label", "caption", "help"]
+        .iter()
+        .any(|suffix| compact.ends_with(suffix))
+        || ["テキスト", "メッセージ", "タイトル", "ヘルプ"]
+            .iter()
+            .any(|term| key.contains(term))
+}
+
 // ---------------------------------------------------------------------------
 // Helper
 // ---------------------------------------------------------------------------
@@ -1205,6 +1430,15 @@ fn make_entry(id: &str, file_context: &str, original: String) -> TranslationEntr
 mod tests {
     use super::*;
     use std::fs;
+
+    /// Extraction with no script literals kept aside.
+    fn extract_event_commands(
+        list: &[Value],
+        id_prefix: &str,
+        context_prefix: &str,
+    ) -> Vec<TranslationEntry> {
+        super::extract_event_commands(list, id_prefix, context_prefix, &HashSet::new())
+    }
 
     #[test]
     fn test_classify_file() {
@@ -1252,7 +1486,7 @@ mod tests {
         )
         .unwrap();
 
-        let entries = extract_map_entries("Map001", &json).unwrap();
+        let entries = extract_map_entries("Map001", &json, &HashSet::new()).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].id, "Map001:displayName");
         assert_eq!(entries[0].original, "Forest of Trials");

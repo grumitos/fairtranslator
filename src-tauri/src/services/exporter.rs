@@ -12,9 +12,10 @@ use crate::parser;
 use crate::parser::rpgmaker::{
     classify_file, classify_relative_path, parse_mv_mz_game, parse_plugins_js, render_plugins_js,
     FileKind, CODE_CHANGE_NAME, CODE_CHANGE_NICKNAME, CODE_CHANGE_PROFILE, CODE_CONTROL_VARIABLES,
-    CODE_SCROLL_TEXT, CODE_SHOW_CHOICES, CODE_SHOW_TEXT, CODE_SHOW_TEXT_HEADER, DB_TEXT_FIELDS,
-    SYSTEM_TEXT_FIELDS,
+    CODE_PLUGIN_COMMAND_MZ, CODE_SCRIPT, CODE_SCRIPT_CONTINUATION, CODE_SCROLL_TEXT,
+    CODE_SHOW_CHOICES, CODE_SHOW_TEXT, CODE_SHOW_TEXT_HEADER, DB_TEXT_FIELDS, SYSTEM_TEXT_FIELDS,
 };
+use crate::parser::script_strings;
 use crate::services::persistence::write_synced;
 use crate::services::text_fit::{self, FittedText, TextFitContext, TextFitReport, TextSlotKind};
 use crate::services::translation_integrity;
@@ -40,8 +41,6 @@ const SAFE_WEB_FONT_FALLBACKS: &[&str] = &[
 ];
 const CODE_SHOW_PICTURE: i64 = 231;
 const CODE_CHANGE_ACTOR_IMAGES: i64 = 322;
-const CODE_SCRIPT: i64 = 355;
-const CODE_SCRIPT_CONTINUATION: i64 = 655;
 const MOVEMENT_CODE_CHANGE_IMAGE: i64 = 41;
 const CODE_CHANGE_BATTLE_BGM: i64 = 132;
 const CODE_CHANGE_VICTORY_ME: i64 = 133;
@@ -3032,12 +3031,78 @@ fn apply_event_commands(
                     }
                 }
             }
+            CODE_SCRIPT | CODE_SCRIPT_CONTINUATION => {
+                applied += apply_script_strings(list, i, id_prefix, context);
+            }
+            CODE_PLUGIN_COMMAND_MZ => {
+                applied += apply_plugin_command_arguments(list, i, id_prefix, context);
+            }
             _ => {}
         }
         i += 1;
     }
 
     apply_splices(list, splices);
+    applied
+}
+
+/// Writes translated `$gameVariables.setValue(id, "text")` literals into a
+/// Script command line, replacing each literal by its byte range so identical
+/// literals elsewhere in the line stay untouched.
+fn apply_script_strings(
+    list: &mut [Value],
+    cmd_idx: usize,
+    id_prefix: &str,
+    context: &ApplyContext<'_>,
+) -> usize {
+    let Some(script) = parser::rpgmaker::command_script(list[cmd_idx].get("parameters")) else {
+        return 0;
+    };
+    let mut updated = script.to_string();
+    let mut applied = 0;
+    for assignment in script_strings::variable_assignments(script).iter().rev() {
+        let entry_id = format!("{id_prefix}:scriptText:{cmd_idx}:{}", assignment.occurrence);
+        if let Some(translation) = context.translation(&entry_id) {
+            let literal = script_strings::encode_literal(translation, assignment.quote);
+            updated.replace_range(assignment.start..assignment.end, &literal);
+            applied += 1;
+        }
+    }
+    if applied > 0 {
+        set_parameter(list, cmd_idx, 0, &updated);
+    }
+    applied
+}
+
+/// Writes translated arguments of an MZ plugin command (code 357).
+fn apply_plugin_command_arguments(
+    list: &mut [Value],
+    cmd_idx: usize,
+    id_prefix: &str,
+    context: &ApplyContext<'_>,
+) -> usize {
+    let Some(parameters) = list[cmd_idx]
+        .get_mut("parameters")
+        .and_then(Value::as_array_mut)
+    else {
+        return 0;
+    };
+    let plugin = parameters
+        .first()
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let Some(Value::Object(arguments)) = parameters.get_mut(3) else {
+        return 0;
+    };
+    let mut applied = 0;
+    for (key, value) in arguments.iter_mut() {
+        let entry_id = format!("{id_prefix}:pluginArg:{cmd_idx}:{plugin}:{key}");
+        if let (true, Some(translation)) = (value.is_string(), context.translation(&entry_id)) {
+            *value = Value::String(translation.clone());
+            applied += 1;
+        }
+    }
     applied
 }
 
@@ -3276,8 +3341,15 @@ mod tests {
         let _ = fs::remove_dir_all(&output_dir);
     }
 
+    /// Text a game keeps in variables and plugin arguments: Control Variables
+    /// (122) literals, `setValue` literals in Script commands (355/655) and MZ
+    /// plugin command arguments (357). Script literals are decoded to what the
+    /// game shows and re-encoded with their own quote; texts that another
+    /// event or a plugin compares, an asset reference and non-text arguments
+    /// (asset names included) stay untouched; an export with no translations
+    /// leaves the data as it was.
     #[test]
-    fn test_export_project_applies_quoted_variable_text() {
+    fn test_export_project_applies_variable_script_and_plugin_command_text() {
         let temp_dir =
             std::env::temp_dir().join(format!("fairtl_export_variable_{}", uuid::Uuid::new_v4()));
         let data_dir = temp_dir.join("data");
@@ -3285,50 +3357,101 @@ mod tests {
         fs::create_dir_all(&data_dir).unwrap();
         fs::create_dir_all(&js_dir).unwrap();
         fs::write(js_dir.join("rpg_core.js"), "").unwrap();
+        let source = r#"[null,{"id":1,"list":[{"code":122,"parameters":[10,10,0,4,"\"Waste Plant\""]},{"code":355,"indent":0,"parameters":["$gameVariables.setValue(18, \"ビール\"); $gameVariables.setValue(19, \"ビール\")"]},{"code":655,"indent":0,"parameters":["$gameVariables.setValue(20, '\\\\c[2]ワイン\\\\c[0]')"]},{"code":355,"indent":0,"parameters":["$gameVariables.setValue(21, \"酒\")"]},{"code":355,"indent":0,"parameters":["$gameVariables.setValue(22, \"ラム\")"]},{"code":355,"indent":0,"parameters":["$gameActors.actor(5).setCharacterImage(\"主人公 男１\", 0)"]},{"code":357,"indent":0,"parameters":["TextPicture","set","",{"text":"決定キー","name":"Picture_01","fontSize":"28","message":"{\"a\":1}"}]},{"code":0,"parameters":[]}]}]"#;
+        fs::write(data_dir.join("CommonEvents.json"), source).unwrap();
+        // The texts of variables 21 and 22 are compared elsewhere: in a map
+        // event condition and in a plugin.
         fs::write(
-            data_dir.join("CommonEvents.json"),
-            r#"[null,{"id":1,"list":[{"code":122,"parameters":[10,10,0,4,"\"Waste Plant\""]},{"code":0,"parameters":[]}]}]"#,
+            data_dir.join("Map001.json"),
+            r#"{"displayName":"","events":[null,{"id":1,"name":"EV001","pages":[{"list":[{"code":111,"indent":0,"parameters":[12,"$gameVariables.value(21) === \"酒\""]},{"code":0,"parameters":[]}]}]}]}"#,
+        )
+        .unwrap();
+        fs::create_dir_all(js_dir.join("plugins")).unwrap();
+        fs::write(
+            js_dir.join("plugins").join("Custom.js"),
+            "if ($gameVariables.value(22) === \"ラム\") {}\n",
         )
         .unwrap();
 
-        let project = Project {
-            id: "test".into(),
-            name: "Variable Text".into(),
-            source_lang: "en".into(),
-            target_lang: "es".into(),
-            engine: Engine::Mv,
-            game_dir: temp_dir.to_string_lossy().into(),
-            files: vec![TranslationFile {
-                relative_path: "data/CommonEvents.json".into(),
-                entries: vec![make_entry(
-                    "CommonEvents:1:variableText:0",
-                    "Waste Plant",
-                    "Planta de tratamiento de residuos",
-                    EntryStatus::Draft,
-                )],
-            }],
-            glossary: vec![],
-            style_guide: vec![],
-            created_at: String::new(),
-            updated_at: String::new(),
-        };
+        let unchanged = fit_project(&temp_dir, Engine::Mv, &[]);
+        let ids = unchanged.files[0]
+            .entries
+            .iter()
+            .map(|entry| entry.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ids,
+            [
+                "CommonEvents:1:variableText:0",
+                "CommonEvents:1:scriptText:1:0",
+                "CommonEvents:1:scriptText:1:1",
+                "CommonEvents:1:scriptText:2:0",
+                "CommonEvents:1:pluginArg:6:TextPicture:text",
+            ]
+        );
+        assert_eq!(unchanged.files[0].entries[3].original, "\\c[2]ワイン\\c[0]");
 
+        let untouched_dir = std::env::temp_dir().join(format!(
+            "fairtl_export_variable_none_{}",
+            uuid::Uuid::new_v4()
+        ));
+        export_project(&unchanged, &untouched_dir).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(
+                &fs::read_to_string(untouched_dir.join("data").join("CommonEvents.json")).unwrap()
+            )
+            .unwrap(),
+            serde_json::from_str::<Value>(source).unwrap()
+        );
+
+        let wine = "\\c[2]Vino \"tinto\" d'la casa\\c[0]";
+        let translations = [
+            (
+                "CommonEvents:1:variableText:0",
+                "Planta de tratamiento de residuos",
+            ),
+            ("CommonEvents:1:scriptText:1:0", "Cerveza"),
+            ("CommonEvents:1:scriptText:2:0", wine),
+            ("CommonEvents:1:pluginArg:6:TextPicture:text", "Aceptar"),
+        ];
+        let project = fit_project(&temp_dir, Engine::Mv, &translations);
         let output_dir = std::env::temp_dir().join(format!(
             "fairtl_export_variable_out_{}",
             uuid::Uuid::new_v4()
         ));
-        export_project(&project, &output_dir).unwrap();
+        let result = export_project(&project, &output_dir).unwrap();
+        assert_eq!(result.entries_applied, translations.len());
         let exported: Value = serde_json::from_str(
             &fs::read_to_string(output_dir.join("data").join("CommonEvents.json")).unwrap(),
         )
         .unwrap();
+        let list = exported[1]["list"].as_array().unwrap();
+        let parameter = |index: usize| list[index]["parameters"][0].as_str().unwrap();
 
         assert_eq!(
-            exported[1]["list"][0]["parameters"][4],
+            list[0]["parameters"][4],
             Value::String("\"Planta de tratamiento de residuos\"".into())
+        );
+        // Only the first of two identical literals is translated.
+        assert_eq!(
+            parameter(1),
+            "$gameVariables.setValue(18, \"Cerveza\"); $gameVariables.setValue(19, \"ビール\")"
+        );
+        assert_eq!(
+            parameter(2),
+            "$gameVariables.setValue(20, '\\\\c[2]Vino \"tinto\" d\\'la casa\\\\c[0]')"
+        );
+        let source_list = serde_json::from_str::<Value>(source).unwrap();
+        for index in [3, 4, 5] {
+            assert_eq!(list[index], source_list[1]["list"][index]);
+        }
+        assert_eq!(
+            list[6]["parameters"][3],
+            json!({"text": "Aceptar", "name": "Picture_01", "fontSize": "28", "message": "{\"a\":1}"})
         );
 
         let _ = fs::remove_dir_all(&temp_dir);
+        let _ = fs::remove_dir_all(&untouched_dir);
         let _ = fs::remove_dir_all(&output_dir);
     }
 

@@ -8,6 +8,7 @@ use crate::models::{Engine, TranslationFile};
 
 pub mod rpgmaker;
 pub mod rpgmaker_vxace;
+pub(crate) mod script_strings;
 pub mod unity;
 
 /// Unified output for parser strategies.
