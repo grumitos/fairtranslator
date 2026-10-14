@@ -6,7 +6,7 @@ authors = ["FairTranslator contributors"]
 license-file = "../LICENSE"
 repository = "https://github.com/nesquikgrumitos/fairtranslator"
 edition = "2021"
-rust-version = "1.88"
+rust-version = "1.90"
 publish = false
 
 [lib]
@@ -14,7 +14,7 @@ name = "app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "=2.6.3", features = [] }
+tauri-build = { version = "=2.7.1", features = [] }
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
@@ -24,10 +24,10 @@ log = "0.4"
 uuid = { version = "1", features = ["v4", "serde"] }
 tokio = { version = "1", features = ["fs", "sync", "time"] }
 reqwest = { version = "0.12", features = ["json"] }
-tauri = { version = "=2.11.6", features = [] }
-tauri-plugin-log = "=2.9.2"
-tauri-plugin-dialog = "=2.7.3"
-tauri-plugin-store = "=2.4.5"
+tauri = { version = "=2.12.1", features = [] }
+tauri-plugin-log = "=2.10.0"
+tauri-plugin-dialog = "=2.8.1"
+tauri-plugin-store = "=2.5.0"
 chrono = { version = "0.4", features = ["serde"] }
 async-trait = "0.1"
 rpgtool-common = "0.2.0"

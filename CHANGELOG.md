@@ -45,9 +45,13 @@ and this project follows [Semantic Versioning](https://semver.org/).
 - Find and replace now counts and replaces only the rows the grid shows.
 - Editing the style guide now writes only `project.json` and keeps unsaved entry
   edits pending.
-- Aligned Tauri at 2.11 on both sides (`tauri` 2.11.6, `@tauri-apps/api`
-  2.11.1, `@tauri-apps/cli` 2.11.5, dialog plugin 2.7.3); 2.12 waits for the
-  7-day npm release-age rule.
+- Updated Tauri to 2.12.1 together with ChronoRift, pinned exactly: `tauri`
+  2.12.1, `tauri-build` 2.7.1, `@tauri-apps/api` and `@tauri-apps/cli` 2.12.1,
+  dialog plugin 2.8.1 (crate and npm), log plugin 2.10.0 and store plugin 2.5.0.
+  `rust-version` is now 1.90, the highest value declared by the locked
+  dependency graph. The lockfile was refreshed with targeted
+  `cargo update -p … --precise` steps so that no new crate is younger than 7
+  days; newer Tauri patches wait for the same rule.
 - Made OpenCode provider chunks adaptive up to 128 entries, with independent
   prompt and estimated-response token budgets instead of a fixed 16-entry cap.
 - Made the headless OpenCode runner reuse the credential saved by FairTranslator
@@ -104,6 +108,8 @@ and this project follows [Semantic Versioning](https://semver.org/).
 - Removed webview permissions the interface does not use (`store:default`, which
   let page scripts read the legacy `api-keys.json`, plus unused dialog
   permissions) and `https:` from the `connect-src` content security policy.
+- Updated the development dependency `source-map-js` to 1.2.2 (lockfile only),
+  which fixes an event-loop denial of service reported by `npm audit`.
 
 ## [0.9.2] - 2026-05-04
 
