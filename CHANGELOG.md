@@ -57,6 +57,12 @@ and this project follows [Semantic Versioning](https://semver.org/).
   `too_many_arguments` allowed) instead of `cargo check`.
 
 ### Fixed
+- Stopped leaving a half-empty line before a line that had to wrap: when a
+  message has a line that does not fit, the consecutive prose lines around it
+  are re-joined and wrapped again, even when no page is saved; blank lines and
+  code-only lines still separate paragraphs and keep the translator's breaks.
+  Across the pseudo-translated corpus this removes 4-15 % of the message lines
+  without changing the pages added or the overflow counts.
 - Extracted and exported the first line of every RPG Maker XP message (show-text
   command 101); existing XP projects gain the missing entries when opened.
 - Stopped squeezing MV/MZ text that did not fit the original lines into one

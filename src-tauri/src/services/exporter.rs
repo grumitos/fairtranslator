@@ -5627,12 +5627,18 @@ mod tests {
                 {"code":404,"indent":0,"parameters":[]},
                 {"code":105,"indent":0,"parameters":[2,false]},
                 {"code":405,"indent":0,"parameters":["Scroll line."]},
+                {"code":101,"indent":0,"parameters":["",0,0,2,""]},
+                {"code":401,"indent":0,"parameters":["Hi, mom."]},
+                {"code":401,"indent":0,"parameters":["Today I wanted to tell you all I learned."]},
                 {"code":0,"indent":0,"parameters":[]}
             ]}]}]}"#,
         )
         .unwrap();
         let source_snapshot = snapshot_file_tree(&temp_dir);
 
+        // A short line followed by one that must wrap: the wrapped remainder
+        // joins the short line instead of leaving it half empty.
+        let short_then_long = "Hola, mamá.\nHoy quería contarte todo lo que aprendí sobre el Día de la Madre y las recetas.";
         let long_message = "\\C[2]Alicia\\C[0] mira el \\I[5] mapa y dice: \\C[3]el camino hacia la montaña es largo, peligroso y lleno de criaturas que despiertan cuando cae la noche sobre el valle, así que debemos preparar provisiones, antorchas y mucho valor antes de partir mañana temprano con \\N[1].\\C[0]";
         let long_scroll = "En un reino muy lejano, más allá de las montañas nevadas y los ríos helados, vivía un héroe olvidado por todos.";
         let long_choice =
@@ -5645,6 +5651,7 @@ mod tests {
             ("Map001:1:0:choice:3:1", "No"),
             ("Map001:1:0:text:6", "Bien."),
             ("Map001:1:0:scroll:12", long_scroll),
+            ("Map001:1:0:text:14", short_then_long),
             ("Items:description:1", long_description),
         ];
         let project = fit_project(&temp_dir, Engine::Mz, &translations);
@@ -5683,7 +5690,21 @@ mod tests {
             .take_while(|code| **code == 405)
             .count();
         assert!(scroll_lines >= 2, "long scrolling text must wrap");
-        assert_eq!(after_message[9 + scroll_lines..], [0]);
+        assert_eq!(after_message[9 + scroll_lines..], [101, 401, 401, 0]);
+        let tail = &list[list.len() - 3..list.len() - 1];
+        let tail_lines = tail
+            .iter()
+            .map(|line| line["parameters"][0].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert!(
+            tail_lines[0].starts_with("Hola, mamá. Hoy quería"),
+            "the short line must absorb the first words: {tail_lines:?}"
+        );
+        assert_eq!(
+            tail_lines.join(" "),
+            short_then_long.replace('\n', " "),
+            "re-joining must not add or lose words"
+        );
 
         // Same message: header, face and speaker name untouched; the choice
         // and branch commands keep their parameters and indentation.

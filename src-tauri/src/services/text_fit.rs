@@ -1138,48 +1138,92 @@ fn ends_sentence(line: &str) -> bool {
 }
 
 /// Joins consecutive prose lines into paragraphs (keeping labels, blank and
-/// code-only lines on their own) and wraps them to `max_width`.
+/// code-only lines on their own) and wraps them to `max_width`. With
+/// `only_overflowing`, a paragraph none of whose lines needs wrapping keeps the
+/// translator's line breaks.
 fn reflow(
     lines: &[String],
     keep_first: bool,
     max_width: f32,
     context: &TextFitContext,
+    only_overflowing: bool,
 ) -> Vec<String> {
     let mut output = Vec::new();
-    let mut paragraph = String::new();
+    let mut paragraph: Vec<&str> = Vec::new();
     let mut state = FontState::new(context);
-    let flush = |paragraph: &mut String, output: &mut Vec<String>, state: &mut FontState| {
-        if !paragraph.is_empty() {
-            output.extend(wrap_line(paragraph, max_width, context, state));
-            paragraph.clear();
-        }
-    };
 
     for (index, line) in lines.iter().enumerate() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            flush(&mut paragraph, &mut output, &mut state);
+        if line.trim().is_empty() {
+            flush_paragraph(
+                &mut paragraph,
+                &mut output,
+                &mut state,
+                max_width,
+                context,
+                only_overflowing,
+            );
             output.push(String::new());
-            continue;
-        }
-        if (index == 0 && keep_first) || is_structural_line(line, context) {
-            flush(&mut paragraph, &mut output, &mut state);
+        } else if (index == 0 && keep_first) || is_structural_line(line, context) {
+            flush_paragraph(
+                &mut paragraph,
+                &mut output,
+                &mut state,
+                max_width,
+                context,
+                only_overflowing,
+            );
             output.extend(wrap_line(line, max_width, context, &mut state));
-            continue;
-        }
-        if paragraph.is_empty() {
-            paragraph.push_str(trimmed);
         } else {
-            let joins_cjk = paragraph.chars().last().is_some_and(is_fullwidth)
-                && trimmed.chars().next().is_some_and(is_fullwidth);
-            if !joins_cjk {
-                paragraph.push(' ');
-            }
-            paragraph.push_str(trimmed);
+            paragraph.push(line);
         }
     }
-    flush(&mut paragraph, &mut output, &mut state);
+    flush_paragraph(
+        &mut paragraph,
+        &mut output,
+        &mut state,
+        max_width,
+        context,
+        only_overflowing,
+    );
     output
+}
+
+fn flush_paragraph(
+    paragraph: &mut Vec<&str>,
+    output: &mut Vec<String>,
+    state: &mut FontState,
+    max_width: f32,
+    context: &TextFitContext,
+    only_overflowing: bool,
+) {
+    if paragraph.is_empty() {
+        return;
+    }
+    let keeps_breaks = only_overflowing && {
+        let mut probe = state.clone();
+        paragraph
+            .iter()
+            .all(|line| wrap_line(line, max_width, context, &mut probe).len() <= 1)
+    };
+    if keeps_breaks {
+        for line in paragraph.iter() {
+            output.extend(wrap_line(line, max_width, context, state));
+        }
+    } else {
+        let mut joined = String::new();
+        for line in paragraph.iter().map(|line| line.trim()) {
+            if !joined.is_empty() {
+                let joins_cjk = joined.chars().last().is_some_and(is_fullwidth)
+                    && line.chars().next().is_some_and(is_fullwidth);
+                if !joins_cjk {
+                    joined.push(' ');
+                }
+            }
+            joined.push_str(line);
+        }
+        output.extend(wrap_line(&joined, max_width, context, state));
+    }
+    paragraph.clear();
 }
 
 fn wrap_each(lines: &[String], max_width: f32, context: &TextFitContext) -> Vec<String> {
@@ -1293,18 +1337,25 @@ pub fn fit_message(
     let label_rows = usize::from(label_line.is_some());
     let body_rows = rows.saturating_sub(label_rows).max(1);
 
+    let keep_first_line = keep_first && label_line.is_none();
     let wrapped = wrap_each(&body_lines, max_width, context);
-    let reflowed = reflow(
-        &body_lines,
-        keep_first && label_line.is_none(),
-        max_width,
-        context,
-    );
-    let body = if page_count(reflowed.len(), body_rows) < page_count(wrapped.len(), body_rows) {
-        reflowed
-    } else {
-        wrapped
-    };
+    // Wrapping alone leaves a half-empty line before every line it had to
+    // split. When something was split, re-join just those paragraphs: it can
+    // save lines or a page and leaves the translator's other breaks alone.
+    let local = (wrapped.len() > body_lines.len())
+        .then(|| reflow(&body_lines, keep_first_line, max_width, context, true));
+    let mut body = wrapped;
+    if let Some(local) = local {
+        let pages = page_count(body.len(), body_rows);
+        let local_pages = page_count(local.len(), body_rows);
+        if local_pages < pages || (local_pages == pages && local.len() < body.len()) {
+            body = local;
+        }
+    }
+    let reflowed = reflow(&body_lines, keep_first_line, max_width, context, false);
+    if page_count(reflowed.len(), body_rows) < page_count(body.len(), body_rows) {
+        body = reflowed;
+    }
 
     let mut lines = Vec::new();
     if let Some(label) = &label_line {
@@ -1376,7 +1427,7 @@ pub fn fit_description(translation: &str, context: &TextFitContext) -> FittedTex
 
     let wrapped = wrap_each(&source_lines, max_width, context);
     let lines = if wrapped.len() > metrics.help_rows {
-        let reflowed = reflow(&source_lines, false, max_width, context);
+        let reflowed = reflow(&source_lines, false, max_width, context, false);
         if reflowed.len() < wrapped.len() {
             reflowed
         } else {
