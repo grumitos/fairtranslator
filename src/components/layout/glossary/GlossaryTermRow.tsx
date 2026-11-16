@@ -45,7 +45,7 @@ export function GlossaryTermRow({
             value={editTarget}
             onChange={(e) => onEditTargetChange(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") onUpdate();
+              if (e.key === "Enter" && !e.nativeEvent.isComposing) onUpdate();
               if (e.key === "Escape") onCancelEdit();
             }}
             autoFocus
