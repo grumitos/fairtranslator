@@ -16,11 +16,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # No `cache: npm`: setup-node probes the cache with Node 22's bundled npm 10,
+      # which devEngines (npm >= 11.10) rejects before the next step upgrades npm.
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
 
       - name: Setup npm with release-age support
         run: npm install --global npm@11.16.0
